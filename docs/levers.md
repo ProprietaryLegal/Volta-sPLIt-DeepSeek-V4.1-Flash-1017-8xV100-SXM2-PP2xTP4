@@ -18,17 +18,18 @@ accepted drafts per round).
 - **`DMV_X=1`, ours** (a Volta dense mat-vec `dmv13_x` with double-buffered loads, built on #1277's `dmv13`). −0.42 ms,
   6 of 6 pairs faster, bitwise-equal kernel. The isolated micro-benchmark predicted 0.03-0.07 ms.
 - **`COUPLED_DRAFTS=1`, `COUPLED_DRAFT_TEMP=1.0`.** Source: TensorFold's coupled sampled drafts
-  ([Elevatormusic/TensorFold#25](https://github.com/Elevatormusic/TensorFold/pull/25)), ported first in our DGX sPLIce
-  work. The drafter and the verifier share keyed Gumbel draws, so drafts agree with the target far more often at T>0.
+  ([Elevatormusic/TensorFold#25](https://github.com/Elevatormusic/TensorFold/pull/25), merged; the idea also appears in
+  [0rand/deepseek-v41-tensorfold-spark](https://github.com/0rand/deepseek-v41-tensorfold-spark)). The code reached this
+  build through our Sparks research lane; on the Sparks the idea lost its A/B twice and is not used there. The drafter and the verifier share keyed Gumbel draws, so drafts agree with the target far more often at T>0.
   T=1 acceptance 1.85 → 2.25 per round, +14 % tok/s, about 0.3 ms of overhead, no T=0 cost. Exact.
-- **`MARKOV_SHARD=1`** (ours), **`COUPLED_SHARD=1`, `COUPLED_LOCAL=1`** (DGX sPLIce ports): the draft head and the
+- **`MARKOV_SHARD=1`** (ours), **`COUPLED_SHARD=1`, `COUPLED_LOCAL=1`** (code from our Sparks research lane): the draft head and the
   coupled sampler work on vocabulary shards, inside a captured graph. −0.2 ms at T=0; −0.23 ms and −0.12..−0.24 ms at
   T=1 (11 of 11 prompts).
 - The six levers above together: T=0 29.55 ms (~105.8 tok/s, +6.7 %); T=1 30.0 ms (~108.4 tok/s, +23 %).
 
 ### Kernels and host path
 
-- **`PLAN_FUSE=1`** (DGX sPLIce port): the expert routing plan is built inside the q8 quantize launch. T=0 −0.37/−0.36
+- **`PLAN_FUSE=1`** (code from our Sparks research lane): the expert routing plan is built inside the q8 quantize launch. T=0 −0.37/−0.36
   (3/3, 3/3 pairs), T=1 −0.12/−0.42; texts and greedy output identical (bitwise). The micro-benchmark saw no gain.
 - **`PP_KEEP_BATCH=1`**, a V1-runner port of 1Cat [#1263](https://github.com/1CatAI/1Cat-vLLM/pull/1263): the request
   stays in the persistent batch and the scheduler record across PP2's empty steps, so the token history is not resent
@@ -47,7 +48,7 @@ accepted drafts per round).
   (decode about 7 instructions per weight byte, 0.46 issued per cycle). ABBA average **−0.871 ms** (T=0 −0.74/−1.02,
   T=1 −0.79/−0.93). T1 texts 11 of 11 the same; greedy 7 of 8 plus one known near-tie; compute-sanitizer memcheck,
   racecheck and synccheck 0 errors.
-- **`ROUTE_FAST=1`, `ROUTE_WARPS=4`** (router floor, DGX sPLIce port): average −0.165 ms (T=0 −0.18/−0.60, T=1
+- **`ROUTE_FAST=1`, `ROUTE_WARPS=4`** (router floor, code from our Sparks research lane): average −0.165 ms (T=0 −0.18/−0.60, T=1
   +0.28/−0.15). That is inside the session's measured drift, so it is **not** a significant win. Greedy output bitwise,
   no errors. Kept on under our rule for upstream-backed changes that are correct and inconclusive.
 

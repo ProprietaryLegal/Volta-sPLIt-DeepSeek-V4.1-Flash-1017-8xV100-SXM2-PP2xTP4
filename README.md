@@ -142,15 +142,15 @@ ABBA averages, 2026-11-03.
 |---|---|---|---|
 | Indexer top-k reduce on the device (`INDEX_REDUCE`) | ours | −0.85 ms; also makes T=1 output identical across restarts | exact |
 | Double-buffered Volta dense mat-vec (`DMV_X`) | ours, on #1277's `dmv13` | −0.42 ms (6/6 pairs) | bitwise |
-| Coupled sampled drafts (`COUPLED_DRAFTS`) | [TensorFold #25](https://github.com/Elevatormusic/TensorFold/pull/25), via our DGX sPLIce port | T=1 acceptance 1.85 → 2.25 per round, +14 % tok/s | exact (keyed draws) |
-| Draft-head and sampler sharding (`MARKOV_SHARD`, `COUPLED_SHARD`, `COUPLED_LOCAL`) | ours and our DGX sPLIce ports | −0.2 ms (T=0); −0.23 and −0.12..−0.24 ms (T=1) | exact |
-| Expert plan fused into the q8 quantize launch (`PLAN_FUSE`) | our DGX sPLIce port | −0.36 (T=0), −0.27 (T=1) | bitwise |
+| Coupled sampled drafts (`COUPLED_DRAFTS`) | [TensorFold #25](https://github.com/Elevatormusic/TensorFold/pull/25) (merged); our port | T=1 acceptance 1.85 → 2.25 per round, +14 % tok/s | exact (keyed draws) |
+| Draft-head and sampler sharding (`MARKOV_SHARD`, `COUPLED_SHARD`, `COUPLED_LOCAL`) | ours; the coupled shards reuse code from our Sparks research lane | −0.2 ms (T=0); −0.23 and −0.12..−0.24 ms (T=1) | exact |
+| Expert plan fused into the q8 quantize launch (`PLAN_FUSE`) | ours, code from our Sparks research lane | −0.36 (T=0), −0.27 (T=1) | bitwise |
 | Keep the request in the batch across empty pipeline steps (`PP_KEEP_BATCH`) | our V1-runner port of 1Cat [#1263](https://github.com/1CatAI/1Cat-vLLM/pull/1263) | 128K −24.8 % (84 → 111 tok/s), 64K −17.4 %, 32K −9.7 % | texts identical |
 | Fast routed-expert kernels, down and gate/up (`EXPERT_FAST`) | ours | down −0.68..−0.84; gate/up a further −0.53..−0.82 (T=0) | bitwise, sanitizers clean |
 | Fused attention prologue and epilogue (`FUSE_ATTN_PREP`, `_POST`) | ours | −0.19 ms | bitwise |
 | Hot-ring refill after a prefix-cache hit (`HOT_REFILL`) | our port of 1Cat issue [#1341](https://github.com/1CatAI/1Cat-vLLM/issues/1341) | correctness fix; fired on all 8 workers | – |
 | Expert-kernel instruction diet (`EXPERT_DIET=3`) | ours | **−0.871 ms** (T=0 −0.74/−1.02, T=1 −0.79/−0.93) | T=1 texts 11/11; greedy 7/8 + one known near-tie; memcheck, racecheck, synccheck 0 errors |
-| Router floor (`ROUTE_FAST`, 4 warps) | our DGX sPLIce port | −0.165 ms, inside the session's drift: not a significant win | greedy bitwise; kept on as upstream-backed |
+| Router floor (`ROUTE_FAST`, 4 warps) | ours, code from our Sparks research lane | −0.165 ms, inside the session's drift: not a significant win | greedy bitwise; kept on as upstream-backed |
 
 Two lessons: two of the winners were predicted near zero by isolated kernel benchmarks, so only the full A/B decides; and
 the slope with context depth was host work, not GPU work. Detail: [docs/levers.md](docs/levers.md#adopted).

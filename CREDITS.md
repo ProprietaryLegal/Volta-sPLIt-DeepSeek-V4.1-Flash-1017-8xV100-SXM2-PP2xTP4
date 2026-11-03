@@ -36,8 +36,8 @@ or misdescribed anyone's contribution, please open an issue and we will correct 
 ## Ideas we ported
 
 - **TensorFold** ([Elevatormusic/TensorFold](https://github.com/Elevatormusic/TensorFold), Apache-2.0):
-  [#25](https://github.com/Elevatormusic/TensorFold/pull/25), coupled sampled DSpark drafts, first ported in our DGX
-  sPLIce work and adopted here; and the expert top-p pruning (0rand) we tested and did not adopt.
+  [#25](https://github.com/Elevatormusic/TensorFold/pull/25), coupled sampled DSpark drafts (merged), adopted here
+  through our port (the idea also appears in [0rand/deepseek-v41-tensorfold-spark](https://github.com/0rand/deepseek-v41-tensorfold-spark)); and the expert top-p pruning (0rand) we tested and did not adopt.
 - **Phil Tompkins** ([philbert440/deepseek-v4.1-v100](https://github.com/philbert440/deepseek-v4.1-v100), Apache-2.0):
   the replay-rows design behind the prefill skip in testing; and the engine and EXL3 pack
   ([philbert440/DeepSeek-V4.1-Flash-1017-EXL3-franken-v100](https://huggingface.co/philbert440/DeepSeek-V4.1-Flash-1017-EXL3-franken-v100))
@@ -45,6 +45,7 @@ or misdescribed anyone's contribution, please open an issue and we will correct 
   [#1243](https://github.com/1CatAI/1Cat-vLLM/pull/1243) (rivetphilbot) stacks on our #1031.
 - **Dennis Vertzyas** ([dnv2003/v100-skinny](https://github.com/dnv2003/v100-skinny)): Volta kernel and bandwidth
   findings (the ~879 GB/s read ceiling). Cited and linked; no code copied.
-- **DGX sPLIce** ([our sister build](https://github.com/ProprietaryLegal/DGX-sPLIce-DeepSeek-V4.1-Flash-2xDGX-Spark-2xRTX3090-drafter-x86-offload)):
-  the plan fusion, router floor, coupled-draft sharding, gate set and benchmark tools.
+- **Our Sparks research lane** (the work behind [DGX sPLIce](https://github.com/ProprietaryLegal/DGX-sPLIce-DeepSeek-V4.1-Flash-2xDGX-Spark-2xRTX3090-drafter-x86-offload)):
+  the code of the plan fusion, router floor and coupled-draft sharding levers (research code, not DGX sPLIce production
+  levers), and the long-context benchmark tools ([dsv41-longctx-bench-tools](https://github.com/ProprietaryLegal/dsv41-longctx-bench-tools)).
 - **NVIDIA**: compute-sanitizer (memcheck, racecheck, synccheck), run on every kernel change before its A/B.
