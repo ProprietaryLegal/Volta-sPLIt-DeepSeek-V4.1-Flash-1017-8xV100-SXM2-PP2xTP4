@@ -318,3 +318,182 @@ determinism ON10 vs ON10b: T1 COMPARE 12 vs 12 prompts: DIFFER ['t1-05', 't1-06'
 2026-11-03T17:18:51Z QUEUE-D35 D35 SK-ON guard: GUARD L=150000 prompt 150017 abort_after 20 s early False hits_abort 0 hits_resend 0 sha c2a41f6f0f0d 91.26 s
 2026-11-03T17:29:34Z QUEUE-D35 D35 SK-ON mc_prefix rc=0: "n": 36000 "verdict": "PASS" "hit_a_equals_cold": true "elapsed_s": 23.04 "elapsed_s": 0.68 "elapsed_s": 22.93 "elapsed_s": 0.65 "n": 64000 "verdict": "PASS" "hit_a_equals_cold": true "elapsed_s": 37.22 "elapsed_s": 0.78 "elapsed_s": 37.01 "elapsed_s": 0.78 "n": 150000 "verdict": "PASS" "hit_a_equals_cold": true "elapsed_s": 88.98 "elapsed_s": 1.04 "elapsed_s": 88.73 "elapsed_s": 1.04 "n": 250000 "verdict": "PASS" "hit_a_equals_cold": true "elapsed_s": 148.94 "elapsed_s": 1.39 "elapsed_s": 148.5 SUMMARY PASS 4 FLAG 0 FAIL 0
 2026-11-03T17:29:34Z QUEUE-D35 D35 SK-ON activation: boot_line 1 first_skip_line 1 per_request_lines 12 all_knob_lines 16
+2026-11-03T17:32:11Z QUEUE-D35 D35 SK-ON2 up + warm in 157 s
+2026-11-03T17:37:10Z QUEUE-D35 D35 SK-ON2 depth: L=32768 rep 0: prompt 32718 TTFT 20.743 s sha 0f978a2a2be1 L=150000 rep 0: prompt 150038 TTFT 88.462 s sha 4abc59ca4487 L=300000 rep 0: prompt 299227 TTFT 180.86 s sha bc9678598a26
+2026-11-03T17:37:10Z QUEUE-D35 D35 SK-ON2 activation: boot_line 1 first_skip_line 1 per_request_lines 3 all_knob_lines 6
+2026-11-03T17:39:50Z QUEUE-D35 D35 SK-OFF2 up + warm in 160 s
+2026-11-03T17:46:38Z QUEUE-D35 D35 SK-OFF2 depth: L=32768 rep 0: prompt 32718 TTFT 22.776 s sha 0f978a2a2be1 L=150000 rep 0: prompt 150038 TTFT 111.855 s sha 4abc59ca4487 L=300000 rep 0: prompt 299227 TTFT 265.04 s sha bc9678598a26
+2026-11-03T17:48:35Z QUEUE-D35 D35 SK-OFF2 guard reference: PLAIN L=150000 prompt 150017 sha c2a41f6f0f0d 115.58 s
+2026-11-03T17:48:35Z QUEUE-D35 D35 guard resend (ON) vs whole (OFF2): sha c2a41f6f0f0d / sha c2a41f6f0f0d IDENTICAL
+2026-11-03T17:48:35Z QUEUE-D35 D35 SK-OFF2 activation: boot_line 0 first_skip_line 0 per_request_lines 0 all_knob_lines 0
+2026-11-03T17:48:35Z QUEUE-D35 D35 DEPTH-AB L=32768 ttft OFF 22.634/22.776 ON 20.678/20.743 s delta -8.8 % sha OFF 0f978a2a2be1/0f978a2a2be1 ON 0f978a2a2be1/0f978a2a2be1 off==off2 True on==on2 True on==off True
+2026-11-03T17:48:35Z QUEUE-D35 D35 DEPTH-AB L=150000 ttft OFF 111.054/111.855 ON 88.453/88.462 s delta -20.6 % sha OFF 4abc59ca4487/4abc59ca4487 ON 4abc59ca4487/4abc59ca4487 off==off2 True on==on2 True on==off True
+2026-11-03T17:48:35Z QUEUE-D35 D35 DEPTH-AB L=300000 ttft OFF 263.925/265.04 ON 181.321/180.86 s delta -31.5 % sha OFF bc9678598a26/bc9678598a26 ON bc9678598a26/bc9678598a26 off==off2 True on==on2 True on==off True
+2026-11-03T17:48:35Z QUEUE-D35 D35 DEPTH-AB IDENTICAL
+2026-11-03T17:48:35Z QUEUE-D35 D35 done in 50 min; checks failed: 0; files in /path/to/scratch/d35-20261103T165821Z
+2026-11-03T17:48:35Z QUEUE-D35 d35 rc=0 (out /path/to/scratch/d35-20261103T165821Z)
+2026-11-03T17:48:35Z QUEUE-D35 mean TTFT delta 150K/300K: -26.05 %
+2026-11-03T17:48:35Z QUEUE-D35 keep: checks clean, TTFT delta -26.05 %
+2026-11-03T17:52:09Z QUEUE-D35 server up: REC + VLLM_V41_PREFILL_SKIP_ROWS=3072
+2026-11-03T17:52:09Z QUEUE-D35 done (kit files stay deployed, inert at PREFILL_SKIP_ROWS=0; rollback copies in ${BENCH_DIR}/backup-d35)
+2026-11-03T17:52:33Z QUEUE-D36 start: TP8 probe window (tp8probe1103 4f6b68904); final env extras: EXPERT_DIET=3,ROUTE_FAST=1,PREFILL_SKIP_ROWS=3072
+2026-11-03T17:55:11Z QUEUE-D36 TP8 window rc=0 (0 ok,1 check fail,2 preflight refused,3 hang): 
+2026-11-03T17:57:57Z QUEUE-D36 server up: REC (final stack)
+2026-11-03T17:57:57Z QUEUE-D36 done (out /path/to/out)
+2026-11-03T17:58:03Z QUEUE-D37 start: prefill profile + ABBA (base extras: EXPERT_DIET=3,ROUTE_FAST=1,PREFILL_SKIP_ROWS=3072)
+2026-11-03T17:58:03Z QUEUE-D37 D37 start (out /path/to/scratch/d37-20261103T175803Z); base profile serve-v41pkg-pp2.yaml; base env: VLLM_V41_COUPLED_DRAFTS=1 VLLM_V41_COUPLED_DRAFT_TEMP=1.0 VLLM_V41_COUPLED_LOCAL=1 VLLM_V41_COUPLED_SHARD=1 VLLM_V41_DMV_X=1 VLLM_V41_EXPERT_DIET=3 VLLM_V41_EXPERT_FAST=1 VLLM_V41_FUSE_ATTN_POST=1 VLLM_V41_FUSE_ATTN_PREP=1 VLLM_V41_INDEX_REDUCE=1 VLLM_V41_MARKOV_SHARD=1 VLLM_V41_PLAN_FUSE=1 VLLM_V41_PP_KEEP_BATCH=1 VLLM_V41_PREFILL_SKIP_ROWS=3072 VLLM_V41_ROUTE_FAST=1 VLLM_V41_ROUTE_WARPS=4
+2026-11-03T18:01:14Z QUEUE-D37 D37 PROF L=32768 stage 1 attn-timing steps 4 (8192-token 0) sum 12.80 s: ffn(moe+shared)=5.76s(45%) a.attend=2.91s(23%) a.out_proj=1.47s(11%) a.proj=0.82s(6%) hc_mid=0.53s(4%) hc_post=0.47s(4%) a.indexer=0.35s(3%) engram=0.21s(2%) a.compressor=0.20s(2%) hc_pre=0.06s(0%) a.window_insert=0.00s(0%)
+2026-11-03T18:01:14Z QUEUE-D37 D37 PROF L=32768 stage 1 prefill-timing steps 4 span 12.20 s non-MoE 7.40 s MoE 4.80 s = wait 0.00 + transcode 0.55 + gemm 4.20 (copy busy 0.00)
+2026-11-03T18:01:14Z QUEUE-D37 D37 PROF L=32768 stage 1 prefill-gemm gu=2.10s act=0.14s barrier=0.28s dn=1.61s accumulate=0.08s
+2026-11-03T18:01:14Z QUEUE-D37 D37 PROF L=32768 stage 2 attn-timing steps 4 (8192-token 0) sum 13.54 s: ffn(moe+shared)=5.94s(44%) a.attend=3.05s(23%) a.out_proj=1.48s(11%) a.indexer=1.14s(8%) a.proj=0.80s(6%) hc_mid=0.56s(4%) hc_post=0.52s(4%) hc_pre=0.04s(0%) a.compressor=0.02s(0%) a.window_insert=0.00s(0%) engram=0.00s(0%)
+2026-11-03T18:01:14Z QUEUE-D37 D37 PROF L=32768 stage 2 prefill-timing steps 4 span 12.71 s non-MoE 7.72 s MoE 4.98 s = wait 0.00 + transcode 0.45 + gemm 4.50 (copy busy 0.00)
+2026-11-03T18:01:14Z QUEUE-D37 D37 PROF L=32768 stage 2 prefill-gemm gu=2.23s act=0.14s barrier=0.26s dn=1.78s accumulate=0.08s
+2026-11-03T18:03:12Z QUEUE-D37 D37 PROF L=150000 stage 1 attn-timing steps 19 (8192-token 0) sum 64.22 s: ffn(moe+shared)=26.65s(41%) a.attend=13.33s(21%) a.indexer=6.86s(11%) a.out_proj=6.56s(10%) a.proj=3.93s(6%) hc_mid=2.45s(4%) hc_post=2.19s(3%) a.compressor=1.00s(2%) engram=0.98s(2%) hc_pre=0.28s(0%) a.window_insert=0.00s(0%)
+2026-11-03T18:03:12Z QUEUE-D37 D37 PROF L=150000 stage 1 prefill-timing steps 19 span 61.68 s non-MoE 39.46 s MoE 22.22 s = wait 0.00 + transcode 2.63 + gemm 19.41 (copy busy 0.00)
+2026-11-03T18:03:12Z QUEUE-D37 D37 PROF L=150000 stage 1 prefill-gemm gu=9.73s act=0.62s barrier=1.25s dn=7.43s accumulate=0.35s
+2026-11-03T18:03:12Z QUEUE-D37 D37 PROF L=150000 stage 2 attn-timing steps 19 (8192-token 0) sum 80.65 s: ffn(moe+shared)=27.67s(34%) a.indexer=23.38s(29%) a.attend=14.18s(18%) a.out_proj=6.23s(8%) a.proj=3.86s(5%) hc_mid=2.57s(3%) hc_post=2.43s(3%) hc_pre=0.20s(0%) a.compressor=0.13s(0%) a.window_insert=0.00s(0%) engram=0.00s(0%)
+2026-11-03T18:03:12Z QUEUE-D37 D37 PROF L=150000 stage 2 prefill-timing steps 19 span 73.67 s non-MoE 50.42 s MoE 23.25 s = wait 0.00 + transcode 2.17 + gemm 20.90 (copy busy 0.00)
+2026-11-03T18:03:12Z QUEUE-D37 D37 PROF L=150000 stage 2 prefill-gemm gu=10.61s act=0.63s barrier=0.83s dn=8.43s accumulate=0.37s
+2026-11-03T18:03:12Z QUEUE-D37 D37 PROF done in 309 s
+2026-11-03T18:10:44Z QUEUE-D37 D37 B0 (452 s): L=32768 TTFT 20.681 s sha 0f978a2a2be1 L=150000 TTFT 88.775 s sha 4abc59ca4487 L=300000 TTFT 182.034 s sha bc9678598a26
+2026-11-03T18:19:46Z QUEUE-D37 D37 a1 (542 s): L=32768 TTFT 20.671 s sha 0f978a2a2be1 L=150000 TTFT 88.966 s sha 4abc59ca4487 L=300000 TTFT 181.413 s sha bc9678598a26
+2026-11-03T18:27:27Z QUEUE-D37 D37 a2 (461 s): L=32768 TTFT 20.684 s sha 0f978a2a2be1 L=150000 TTFT 88.683 s sha 4abc59ca4487 L=300000 TTFT 181.406 s sha bc9678598a26
+2026-11-03T18:35:00Z QUEUE-D37 D37 B1 (453 s): L=32768 TTFT 20.71 s sha 0f978a2a2be1 L=150000 TTFT 88.321 s sha 4abc59ca4487 L=300000 TTFT 181.258 s sha bc9678598a26
+2026-11-03T18:35:00Z QUEUE-D37 D37 AB a L=32768 ttft base 20.681/20.71 a 20.671/20.684 s delta -0.1 % sha base 0f978a2a2be1/0f978a2a2be1 a 0f978a2a2be1/0f978a2a2be1 identical True
+2026-11-03T18:35:00Z QUEUE-D37 D37 AB a L=150000 ttft base 88.775/88.321 a 88.966/88.683 s delta +0.3 % sha base 4abc59ca4487/4abc59ca4487 a 4abc59ca4487/4abc59ca4487 identical True
+2026-11-03T18:35:00Z QUEUE-D37 D37 AB a L=300000 ttft base 182.034/181.258 a 181.413/181.406 s delta -0.1 % sha base bc9678598a26/bc9678598a26 a bc9678598a26/bc9678598a26 identical True
+2026-11-03T18:35:00Z QUEUE-D37 D37 AB a mode bitwise identical True base_self_identical True gate NONE mean 150K/300K +0.1 % 32K -0.1 % -> KEEP yes
+2026-11-03T18:42:50Z QUEUE-D37 D37 b1 (470 s): L=32768 TTFT 24.295 s sha 306e24c9ce6c L=150000 TTFT 93.262 s sha 4230d87a7d89 L=300000 TTFT 179.188 s sha bc9678598a26
+2026-11-03T18:42:50Z QUEUE-D37 D37 (b) sha vs B1: differs at 32768,150000: near-tie gate in b2/B2
+2026-11-03T18:52:09Z QUEUE-D37 D37 b2 (559 s): L=32768 TTFT 24.281 s sha 306e24c9ce6c L=150000 TTFT 93.313 s sha 4230d87a7d89 L=300000 TTFT 179.26 s sha bc9678598a26
+2026-11-03T18:54:12Z QUEUE-D37 D37 b2 gate run: GATE-RUN L=32768 sha 306e24c9ce6c steps 256 26.33 s GATE-RUN L=150000 sha 4230d87a7d89 steps 256 96.61 s
+2026-11-03T19:02:24Z QUEUE-D37 D37 B2 (492 s): L=32768 TTFT 20.648 s sha 0f978a2a2be1 L=150000 TTFT 88.438 s sha 4abc59ca4487 L=300000 TTFT 181.472 s sha bc9678598a26
+2026-11-03T19:04:18Z QUEUE-D37 D37 B2 gate run: GATE-RUN L=32768 sha 0f978a2a2be1 steps 256 22.35 s GATE-RUN L=150000 sha 4abc59ca4487 steps 256 91.67 s
+2026-11-03T19:04:19Z QUEUE-D37 D37 (b) near-tie gate (B2 base vs b2): GATE L=32768 DIFF sha 0f978a2a2be1 / 306e24c9ce6c GATE L=150000 DIFF sha 4abc59ca4487 / 4230d87a7d89 GATE FAIL 2
+2026-11-03T19:04:19Z QUEUE-D37 D37 CHECK FAIL: (b) mbt16384 failed the near-tie gate (or arms missing)
+2026-11-03T19:04:19Z QUEUE-D37 D37 AB b L=32768 ttft base 20.71/20.648 b 24.295/24.281 s delta +17.5 % sha base 0f978a2a2be1/0f978a2a2be1 b 306e24c9ce6c/306e24c9ce6c identical False
+2026-11-03T19:04:19Z QUEUE-D37 D37 AB b L=150000 ttft base 88.321/88.438 b 93.262/93.313 s delta +5.6 % sha base 4abc59ca4487/4abc59ca4487 b 4230d87a7d89/4230d87a7d89 identical False
+2026-11-03T19:04:19Z QUEUE-D37 D37 AB b L=300000 ttft base 181.258/181.472 b 179.188/179.26 s delta -1.2 % sha base bc9678598a26/bc9678598a26 b bc9678598a26/bc9678598a26 identical True
+2026-11-03T19:04:19Z QUEUE-D37 D37 AB b mode near identical False base_self_identical True gate FAIL mean 150K/300K +2.2 % 32K +17.5 % -> KEEP no
+2026-11-03T19:04:19Z QUEUE-D37 D37 (c) dropped: elapsed 66 min + 3 x 8 min arms = 90 min > 75
+2026-11-03T19:04:19Z QUEUE-D37 D37 done in 66 min; checks failed: 1; server up on the base env; files in /path/to/scratch/d37-20261103T175803Z
+2026-11-03T19:04:19Z QUEUE-D37 d37 rc=1
+2026-11-03T19:06:53Z QUEUE-D37 server up: REC profile serve-v41pkg-pp2.yaml
+2026-11-03T19:06:53Z QUEUE-D37 done
+2026-11-03T19:07:06Z QUEUE-D38 start: hot-ring adoption boot (stack extras: EXPERT_DIET=3,ROUTE_FAST=1,PREFILL_SKIP_ROWS=3072; profile serve-v41pkg-pp2.yaml)
+2026-11-03T19:09:35Z QUEUE-D38 hot boot up: KV pool 2076870 tokens; packed KV lines:       4 hot 144 MiB       4 hot 216 MiB 
+2026-11-03T19:15:05Z QUEUE-D38 mc_prefix HOT38: SUMMARY PASS 3 FLAG 0 FAIL 0; tracebacks 0
+2026-11-03T19:15:05Z QUEUE-D38 server up: REC + VLLM_V41_KV_HOT_POSITIONS=524288 (adopted)
+2026-11-03T19:15:05Z QUEUE-D38 done
+2026-11-03T19:15:23Z QUEUE-D39 start: H1 re-record + H2 validation on REC (EXPERT_DIET=3,ROUTE_FAST=1,PREFILL_SKIP_ROWS=3072,KV_HOT_POSITIONS=524288; serve-v41pkg-pp2.yaml)
+2026-11-03T19:15:23Z REREC-V2 start REFV2: stack VLLM_V41_INDEX_REDUCE=1 VLLM_V41_DMV_X=1 VLLM_V41_COUPLED_DRAFTS=1 VLLM_V41_COUPLED_DRAFT_TEMP=1.0 VLLM_V41_MARKOV_SHARD=1 VLLM_V41_COUPLED_SHARD=1 VLLM_V41_COUPLED_LOCAL=1 VLLM_V41_PLAN_FUSE=1 VLLM_V41_PP_KEEP_BATCH=1 VLLM_V41_EXPERT_FAST=1 VLLM_V41_FUSE_ATTN_PREP=1 VLLM_V41_FUSE_ATTN_POST=1 VLLM_V41_EXPERT_DIET=3 VLLM_V41_ROUTE_FAST=1 VLLM_V41_ROUTE_WARPS=4 VLLM_V41_PREFILL_SKIP_ROWS=3072 VLLM_V41_KV_HOT_POSITIONS=524288 profile serve-v41pkg-pp2.yaml
+2026-11-03T19:17:57Z REREC-V2 server up
+2026-11-03T19:17:57Z AB REFV2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=2e644bc9fa1f2559 harness=d666c0a867c8be31
+2026-11-03T19:19:44Z REREC-V2 greedy record rc=0: GREEDY RECORD REFV2: runs identical=True; references ${ENGINE_HOME}/run-pp2/quality-runs/20261103T191759Z-greedy-REFV2/references.jsonl 
+2026-11-03T19:20:55Z REREC-V2 neartie record rc=0: NEARTIE RECORD NTREFV2: 2 run(s) reproduce Q0b byte for byte; logprobs identical across runs True; acceptance 1.8807 per draft -> ${ENGINE_HOME}/run-pp2/quality-runs/20261103T191944Z-neartie-NTREFV2/lp-reference.jsonl 
+2026-11-03T19:21:30Z REREC-V2 validate strict rc=0: GREEDY CHECK REFV2-VS: PASS identical 8/8 near-tie 0 (nats 0.9, strict) -> ${ENGINE_HOME}/run-pp2/quality-runs/20261103T192055Z-greedy-REFV2-VS/greedy.json
+2026-11-03T19:22:06Z REREC-V2 validate neartie rc=0: NEARTIE CHECK REFV2-VN: PASS identical 8/8 near-tie 0 fail 0 (gap 0.1 nats); KL panel mean 0.0 over 1215 positions (ceiling 0.02, coverage 1.0)
+2026-11-03T19:22:56Z REREC-V2 info: old IDX=0 reference at 0.9 nats rc=0: run 1 row 7 NEAR-TIE 33 0.1094  GREEDY CHECK REFV2-OLD: PASS identical 7/8 near-tie 1 (nats 0.9) -> ${ENGINE_HOME}/run-pp2/quality-runs/20261103T192206Z-greedy-REFV2-OLD/greedy.json 
+2026-11-03T19:22:56Z REREC-V2 PUBLISHED ${BENCH_DIR}/greedy-ref-v2.env (REF_V2 ${ENGINE_HOME}/run-pp2/quality-runs/20261103T191759Z-greedy-REFV2/references.jsonl, LP_V2 ${ENGINE_HOME}/run-pp2/quality-runs/20261103T191944Z-neartie-NTREFV2/lp-reference.jsonl); v2 arms with GATE=auto now use the approved gate
+2026-11-03T19:22:56Z REREC-V2 done
+2026-11-03T19:22:56Z QUEUE-D39 H1 rc=0: 2026-11-03T19:22:06Z REREC-V2 validate neartie rc=0: NEARTIE CHECK REFV2-VN: PASS identical 8/8 near-tie 0 fail 0 (gap 0.1 nats); KL panel mean 0.0 over 1215 positions (ceiling 0.02, coverage 1.0);2026-11-03T19:22:56Z REREC-V2 info: old IDX=0 reference at 0.9 nats rc=0: run 1 row 7 NEAR-TIE 33 0.1094  GREEDY CHECK REFV2-OLD: PASS identical 7/8 near-tie 1 (nats 0.9) -> ${ENGINE_HOME}/run-pp2/quality-runs/20261103T192206Z-greedy-REFV2-OLD/greedy.json ;2026-11-03T19:22:56Z REREC-V2 PUBL; greedy-ref-v2.env present
+2026-11-03T19:25:30Z AB DM-OFF PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=2e644bc9fa1f2559 harness=d666c0a867c8be31
+2026-11-03T19:26:35Z AB DM-OFF GATE approved PASS rc=0
+2026-11-03T19:27:45Z QUEUE-D39 DM-OFF rc=0
+2026-11-03T19:30:14Z AB DM-DEPTH PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=2e644bc9fa1f2559 harness=d666c0a867c8be31
+2026-11-03T19:30:29Z QUEUE-D39 DM-DEPTH rc=0: DEPTH DM-DEPTH L=2048 rep 0: prompt 2061 TTFT 2.402 s decode 153.05 tok/s rounds 129 tok/round 3.97 ms/round 25.88 sha 6cc78b1b5119;DEPTH DM-DEPTH L=2048 rep 1: prompt 2062 TTFT 2.421 s decode 138.35 tok/s rounds 143 tok/round 3.58 ms/round 25.83 sha b2720e31b919;
+2026-11-03T19:34:01Z AB DM-OFF2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=2e644bc9fa1f2559 harness=d666c0a867c8be31
+2026-11-03T19:35:41Z QUEUE-D39 DM-OFF2 rc=0
+2026-11-03T19:35:41Z QUEUE-D39 A/A dec: T0 DM-OFF2 - DM-OFF: mean -0.096 ms/round-dec, negative 2/3;T1 DM-OFF2 - DM-OFF: mean -0.077 ms/round-dec, negative 10/11 texts same 11/11;
+2026-11-03T19:35:41Z QUEUE-D39 A/A legacy: T0 DM-OFF2 - DM-OFF: mean -0.079 ms/round, negative 2/3;T1 DM-OFF2 - DM-OFF: mean -0.169 ms/round, negative 9/11 texts same 11/11;
+2026-11-03T19:35:41Z QUEUE-D39 aa_spread dec: no ABBA batch with T0+T1 logs found;
+2026-11-03T19:35:41Z QUEUE-D39 server: up
+2026-11-03T19:35:41Z QUEUE-D39 done
+2026-11-03T19:36:07Z QUEUE-D33B start: MIX_STREAM kit-v2 checks + ABBA (REC keeps: EXPERT_DIET=3,ROUTE_FAST=1,PREFILL_SKIP_ROWS=3072,KV_HOT_POSITIONS=524288; serve-v41pkg-pp2.yaml)
+2026-11-03T19:36:25Z QUEUE-D33B base case B (A = pre-D35 site, B = prefill kit/ on site; fused 41273d0f145fa9eb envs 38a81b43fc16d7c9 model 5c6bca5834e74d88)
+2026-11-03T19:36:31Z QUEUE-D33B single-GPU check rc=1:   File "/usr/lib/python3.12/pathlib.py", line 1015, in open;    return io.open(self, mode, buffering, encoding, errors, newline);           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^;FileNotFoundError: [Errno 2] No such file or directory: '/path/to/scratch/graphs/chain_M1_prod.dot';
+2026-11-03T19:36:35Z QUEUE-D33B blocking re-run rc=1; last step: mix_stream_check: begin topology M1 on=False
+2026-11-03T19:36:35Z QUEUE-D33B checks not clean: no deploy, no ABBA
+2026-11-03T19:40:01Z QUEUE-D33B server up: REC
+2026-11-03T19:40:01Z QUEUE-D33B done
+2026-11-03T19:40:01Z QUEUE-D33B D33C rerun: graphs dump dir was missing (FileNotFoundError chain_M1_prod.dot)
+2026-11-03T19:40:01Z QUEUE-D33B start: MIX_STREAM kit-v2 checks + ABBA (REC keeps: EXPERT_DIET=3,ROUTE_FAST=1,PREFILL_SKIP_ROWS=3072,KV_HOT_POSITIONS=524288; serve-v41pkg-pp2.yaml)
+2026-11-03T19:40:19Z QUEUE-D33B base case B (A = pre-D35 site, B = prefill kit/ on site; fused 41273d0f145fa9eb envs 38a81b43fc16d7c9 model 5c6bca5834e74d88)
+2026-11-03T19:40:27Z QUEUE-D33B single-GPU check rc=1:  },; "timing_note": "CUDA graph of one 40-transition chain (residual copy-in + transition + stand-in sublayer per layer), median of 7 x 10 replays, ABBA; round = saved x 76",; "ok": false;};
+2026-11-03T19:40:30Z QUEUE-D33B blocking re-run rc=1; last step: mix_stream_check: begin topology M6 on=True
+2026-11-03T19:40:30Z QUEUE-D33B checks not clean: no deploy, no ABBA
+2026-11-03T19:44:46Z QUEUE-D33B server up: REC
+2026-11-03T19:44:46Z QUEUE-D33B done (rerun D33C)
+2026-11-03T19:44:46Z QUEUE-D33C done
+2026-11-03T19:45:01Z QUEUE-D41 start: v1async1103 d_async.sh (FULL keeps: EXPERT_DIET=3,ROUTE_FAST=1,KV_HOT_POSITIONS=524288; prefill skip stripped)
+2026-11-03T19:45:01Z V1ASYNC1103 start: V1 async + VLLM_V41_ASYNC_EOR_GUARD ABBA (kit 4ea8cbe5aa41a9b2, branch v41pkg/v1async1103 01ad18871); FULL=VLLM_V41_INDEX_REDUCE=1 VLLM_V41_DMV_X=1 VLLM_V41_COUPLED_DRAFTS=1 VLLM_V41_COUPLED_DRAFT_TEMP=1.0 VLLM_V41_MARKOV_SHARD=1 VLLM_V41_COUPLED_SHARD=1 VLLM_V41_COUPLED_LOCAL=1 VLLM_V41_PLAN_FUSE=1 VLLM_V41_PP_KEEP_BATCH=1 VLLM_V41_EXPERT_FAST=1 VLLM_V41_FUSE_ATTN_PREP=1 VLLM_V41_FUSE_ATTN_POST=1 VLLM_V41_EXPERT_DIET=3 VLLM_V41_ROUTE_FAST=1 VLLM_V41_ROUTE_WARPS=4 VLLM_V41_KV_HOT_POSITIONS=524288
+2026-11-03T19:45:01Z V1ASYNC1103 ASY-ON/ON2 force VLLM_V41_PREFILL_SKIP_ROWS=0 (async + prefill skip unverified, needs its own check); ASY-OFF/OFF2 keep the inherited setting (FULL has none; inherited env unset)
+2026-11-03T19:45:02Z V1ASYNC1103 KITDEPLOY ok=1 kit=4ea8cbe5aa41a9b2 site-packages:envs.py=78a8827cd29d0529(patched) site-packages:gpu_model_runner.py=5e169519d307c319(patched) src-pp2:envs.py=78a8827cd29d0529(patched) src-pp2:gpu_model_runner.py=5e169519d307c319(patched)
+2026-11-03T19:48:06Z AB ASY-OFF PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=39c95adcbd848711 harness=d666c0a867c8be31
+2026-11-03T19:49:13Z AB ASY-OFF GATE approved PASS rc=0
+2026-11-03T19:50:23Z AB ASY-OFF ACT n=0 pat=c2939273 expect=off
+2026-11-03T19:50:23Z V1ASYNC1103 ASY-OFF lines: activation 0, tolerated-lines 0, 'Asynchronous scheduling is disabled', tracebacks 0, invalid-sampled 0, prefill-skip-active 0
+2026-11-03T19:51:28Z V1ASYNC1103 ASY-OFF depth rc=0: DEPTH ASY-OFF L=2048 rep 0: prompt 2061 TTFT 2.435 s decode 153.07 tok/s rounds 129 tok/round 3.97 ms/round 25.88;DEPTH ASY-OFF L=2048 rep 1: prompt 2062 TTFT 2.424 s decode 136.17 tok/s rounds 143 tok/round 3.58 ms/round 26.24;DEPTH ASY-OFF L=32768 rep 0: prompt 32718 TTFT 22.929 s decode 149.08 tok/s rounds 125 tok/round 4.10 ms/round 27.42;DEPTH ASY-OFF L=32768 rep 1: prompt 32716 TTFT 22.982 s decode 149.49 tok/s rounds 124 tok/round 4.13 ms/round 27.57;
+2026-11-03T19:53:58Z AB ASY-ON PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=39c95adcbd848711 harness=d666c0a867c8be31
+2026-11-03T19:55:07Z AB ASY-ON GATE approved PASS rc=0
+2026-11-03T19:56:22Z AB ASY-ON ACT n=8 pat=c2939273 expect=on
+2026-11-03T19:56:23Z V1ASYNC1103 ASY-ON lines: activation 8, tolerated-lines 8, 'Asynchronous scheduling is enabled', tracebacks 0, invalid-sampled 0, prefill-skip-active 0
+2026-11-03T19:56:34Z V1ASYNC1103 ASY-ON-soak lines: activation 8, tolerated-lines 16, 'Asynchronous scheduling is enabled', tracebacks 0, invalid-sampled 0, prefill-skip-active 0
+2026-11-03T19:56:34Z V1ASYNC1103 crash regression (a): SOAK OK n=20 length=15 stop=3 abort=2 bad=0 alive=1 rc=0; serve tracebacks 0, invalid-sampled 0
+2026-11-03T19:57:39Z V1ASYNC1103 ASY-ON depth rc=0: DEPTH ASY-ON L=2048 rep 0: prompt 2061 TTFT 2.444 s decode 141.97 tok/s rounds 129 tok/round 3.97 ms/round 27.9;DEPTH ASY-ON L=2048 rep 1: prompt 2062 TTFT 2.428 s decode 128.06 tok/s rounds 143 tok/round 3.58 ms/round 27.9;DEPTH ASY-ON L=32768 rep 0: prompt 32718 TTFT 22.916 s decode 142.71 tok/s rounds 125 tok/round 4.10 ms/round 28.65;DEPTH ASY-ON L=32768 rep 1: prompt 32716 TTFT 22.883 s decode 144.05 tok/s rounds 124 tok/round 4.13 ms/round 28.61;
+2026-11-03T20:00:13Z AB ASY-ON2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=39c95adcbd848711 harness=d666c0a867c8be31
+2026-11-03T20:02:00Z AB ASY-ON2 ACT n=8 pat=c2939273 expect=on
+2026-11-03T20:02:00Z V1ASYNC1103 ASY-ON2 lines: activation 8, tolerated-lines 8, 'Asynchronous scheduling is enabled', tracebacks 0, invalid-sampled 0, prefill-skip-active 0
+2026-11-03T20:03:06Z V1ASYNC1103 ASY-ON2 depth rc=0: DEPTH ASY-ON2 L=2048 rep 0: prompt 2061 TTFT 2.423 s decode 141.73 tok/s rounds 129 tok/round 3.97 ms/round 27.95;DEPTH ASY-ON2 L=2048 rep 1: prompt 2062 TTFT 2.453 s decode 129.74 tok/s rounds 144 tok/round 3.56 ms/round 27.35;DEPTH ASY-ON2 L=32768 rep 0: prompt 32718 TTFT 22.954 s decode 140.37 tok/s rounds 125 tok/round 4.10 ms/round 29.12;DEPTH ASY-ON2 L=32768 rep 1: prompt 32716 TTFT 23.053 s decode 143.52 tok/s rounds 124 tok/round 4.13 ms/round 28.71;
+2026-11-03T20:03:06Z V1ASYNC1103 ASY-ON2-depth lines: activation 8, tolerated-lines 8, 'Asynchronous scheduling is enabled', tracebacks 0, invalid-sampled 0, prefill-skip-active 0
+2026-11-03T20:05:45Z AB ASY-OFF2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=39c95adcbd848711 harness=d666c0a867c8be31
+2026-11-03T20:07:25Z AB ASY-OFF2 ACT n=0 pat=c2939273 expect=off
+2026-11-03T20:07:25Z V1ASYNC1103 ASY-OFF2 lines: activation 0, tolerated-lines 0, 'Asynchronous scheduling is disabled', tracebacks 0, invalid-sampled 0, prefill-skip-active 0
+2026-11-03T20:08:31Z V1ASYNC1103 ASY-OFF2 depth rc=0: DEPTH ASY-OFF2 L=2048 rep 0: prompt 2061 TTFT 2.418 s decode 150.31 tok/s rounds 129 tok/round 3.97 ms/round 26.35;DEPTH ASY-OFF2 L=2048 rep 1: prompt 2062 TTFT 2.422 s decode 136.68 tok/s rounds 143 tok/round 3.58 ms/round 26.14;DEPTH ASY-OFF2 L=32768 rep 0: prompt 32718 TTFT 23.011 s decode 149.13 tok/s rounds 125 tok/round 4.10 ms/round 27.41;DEPTH ASY-OFF2 L=32768 rep 1: prompt 32716 TTFT 23.11 s decode 147.43 tok/s rounds 124 tok/round 4.13 ms/round 27.95;
+2026-11-03T20:08:31Z V1ASYNC1103 texts ASY-ON vs ASY-OFF: T0 T1 COMPARE (token ids) 3 vs 3 prompts: MATCH; T1 T1 COMPARE (token ids) 12 vs 12 prompts: MATCH
+2026-11-03T20:08:31Z V1ASYNC1103 texts ASY-ON2 vs ASY-OFF2: T0 T1 COMPARE (token ids) 3 vs 3 prompts: MATCH; T1 T1 COMPARE (token ids) 12 vs 12 prompts: MATCH
+2026-11-03T20:08:31Z V1ASYNC1103 ASY-OFF gate: 2026-11-03T19:49:13Z AB ASY-OFF GATE approved PASS rc=0;
+2026-11-03T20:08:31Z V1ASYNC1103 ASY-ON gate: 2026-11-03T19:55:07Z AB ASY-ON GATE approved PASS rc=0;
+2026-11-03T20:08:31Z V1ASYNC1103 T0/T1 dec pairs: T0 ASY-ON - ASY-OFF: mean +1.586 ms/round-dec, negative 0/3;T1 ASY-ON - ASY-OFF: mean +1.940 ms/round-dec, negative 0/11 texts same 11/11;T0 ASY-ON2 - ASY-OFF2: mean +1.565 ms/round-dec, negative 0/3;T1 ASY-ON2 - ASY-OFF2: mean +1.622 ms/round-dec, negative 0/11 texts same 11/11;T0 ASY-OFF2 - ASY-OFF: mean +0.240 ms/round-dec, negative 0/3;T1 ASY-OFF2 - ASY-OFF: mean +0.236 ms/round-dec, negative 1/11 texts same 11/11;
+2026-11-03T20:08:31Z V1ASYNC1103 T0/T1 verdict (win3): LOSE means [1.586, 1.94, 1.565, 1.622] avg +1.678 max +1.940 t1-texts-same True design abba metric dec;ACTION REJECT (detectably slower);NOISE sd(avg) 0.071 (aa-sd 0.126, rho 0.264, legacy A/A used for dec); 95% interval of avg [+1.539, +1.817];POWER (pair rule) P(WIN) at true +0.00: 2%, -0.10: 23%, -0.15: 48%, -0.20: 74%, -0.25: 91%;A/A T0 ASY-OFF2 - ASY-OFF: mean +0.240 ms/round-dec, negative 0/3;A/A T1 ASY-OFF2 - ASY-OFF: mean +0.236 ms/round-dec, negative 1/11 texts same 11/11;
+2026-11-03T20:08:31Z V1ASYNC1103 depth ABBA: DEPTHABBA L=2048 OFF 26.06 ON 27.90 ON2 27.65 OFF2 26.25 pairs +1.84 +1.40 avg +1.62 ms/round A/A +0.19 n=2;DEPTHABBA L=32768 OFF 27.50 ON 28.63 ON2 28.91 OFF2 27.68 pairs +1.13 +1.23 avg +1.18 ms/round A/A +0.18 n=2;
+2026-11-03T20:08:31Z V1ASYNC1103 ON tracebacks + invalid-sampled total 0; server: 2026-11-03T20:05:45Z group 1307550 port 18042 ids 0,4,1,5,6,2,3,7 profile serve-v41pkg-pp2.yaml
+2026-11-03T20:08:31Z V1ASYNC1103 done (kit stays deployed, inert with VLLM_V41_ASYNC_EOR_GUARD unset; rollback: bash /path/to/scratch/kit/rollback.sh /path/to/scratch/backup-20261103T194501Z)
+2026-11-03T20:08:31Z QUEUE-D41 d_async rc=0: 2026-11-03T20:08:31Z V1ASYNC1103 ASY-ON gate: 2026-11-03T19:55:07Z AB ASY-ON GATE approved PASS rc=0;;2026-11-03T20:08:31Z V1ASYNC1103 T0/T1 dec pairs: T0 ASY-ON - ASY-OFF: mean +1.586 ms/round-dec, negative 0/3;T1 ASY-ON - ASY-OFF: mean +1.940 ms/round-dec, negative 0/11 texts same 11/11;T0 ASY-ON2 - ASY-OFF2: mean +1.565 ms/round-dec, negative 0/3;T1 ASY-ON2 - ASY-OFF2: mean +1.622 ms/round-dec, negative 0/11 texts same 11/11;T0 ASY-OFF2 - ASY-OFF: mean +0.240 ms/round-dec, negative 0/3;T1 ASY-OFF2 - ASY-OFF: mean +0.236 ms/round-dec, negative 1/11 texts same 11/11;;2026-11-03T20:08:31Z V1ASYNC1103 T0/T1 verdict (win3): LOSE means [1.586, 1.94, 1.565, 1.622] avg +1.678 max +1.940 t1-texts-
+2026-11-03T20:11:05Z QUEUE-D41 server up: REC (sync; keeps EXPERT_DIET=3,ROUTE_FAST=1,PREFILL_SKIP_ROWS=3072,KV_HOT_POSITIONS=524288; serve-v41pkg-pp2.yaml)
+2026-11-03T20:11:05Z QUEUE-D41 done
+2026-11-03T20:11:28Z QUEUE-D42 start: conc1103 d_conc (REC.json keys 17; profile serve-v41pkg-pp2.yaml)
+2026-11-03T20:11:28Z QUEUE-D42 dry rc=0:   "window_minutes": "120-200, including ten boots; actual prefill time may vary",;  "gpu_check": "after overlay apply, before arm b; server down, Board B";};
+2026-11-03T20:22:46Z QUEUE-D42 d_conc rc=1:   File "/path/to/out", line 71, in gate_arm;    run(['bash', str(BENCH/'ab-arm-t1-v2.sh'), label,;  File "/path/to/out", line 38, in run;    return subprocess.run(cmd, env=env, text=True, check=True, stdout=stdout);           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^;  File "/usr/lib/python3.12/subprocess.py", line 571, in run;    raise CalledProcessError(retcode, process.args,;subprocess.CalledProcessError: Command '['bash', '${BENCH_DIR}/ab-arm-t1-v2.sh', 'CONC-ON', 'VLLM_V41_MULTI_SEQ=1', 'GATE=approved', 'ACT_GREP=VLLM_V41_MULTI_SEQ=1 active', 'ACT_EXPECT=on']' returned non-zero exit status 1.;
+2026-11-03T20:25:15Z QUEUE-D42 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-03T20:25:15Z QUEUE-D42 done
+2026-11-03T20:25:28Z QUEUE-D43 start lever tiling (serve-v41pkg-pp2.yaml)
+2026-11-03T20:32:46Z QUEUE-D43 tiling rc=1:   File "/path/to/out", line 265, in rollback;    require(server_activation(rec, topology.smt, 8192)['workers'] == 8, 'REC rollback activation failed');            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^;  File "/path/to/out", line 203, in server_activation;    require(environment.get(key.encode(), b'').decode() == expected.get(key, ''),;  File "/path/to/out", line 77, in require;    raise RuntimeError(message);RuntimeError: worker 1766771 failed VLLM_V41_DMV_X activation;
+2026-11-03T20:32:46Z QUEUE-D43 start lever cpupin (serve-v41pkg-pp2.yaml)
+2026-11-03T20:40:00Z QUEUE-D43 cpupin rc=1:     def rollback(rec: dict[str, str], profile: str, output: Path, topology: Host) -> None:;                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^;  File "/path/to/out", line 203, in server_activation;    # the knob check reads the group leader (API server), whose environment they inherit.;        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^;  File "/path/to/out", line 77, in require;    raise RuntimeError(message);RuntimeError: worker 1893435 failed VLLM_V41_DMV_X activation;
+2026-11-03T20:40:00Z QUEUE-D43 start lever chunk (serve-v41pkg-pp2.yaml)
+2026-11-03T20:54:02Z QUEUE-D43 chunk rc=1:     execute(args, topology);  File "/path/to/out", line 321, in execute;    check_gate(output, label);  File "/path/to/out", line 229, in check_gate;    require(f'AB {label} GATE approved PASS rc=0' in text, f'{label}: approved gate did not PASS');  File "/path/to/out", line 77, in require;    raise RuntimeError(message);RuntimeError: ENV2-chunk-20261103T204000Z-ON: approved gate did not PASS;
+2026-11-03T20:56:36Z QUEUE-D43 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-03T20:56:36Z QUEUE-D43 done
+2026-11-03T20:56:46Z QUEUE-D43R start lever tiling (serve-v41pkg-pp2.yaml)
+2026-11-03T21:08:39Z QUEUE-D43R tiling rc=1:     execute(args, topology);  File "/path/to/out", line 321, in execute;    check_gate(output, label);  File "/path/to/out", line 229, in check_gate;    require(f'AB {label} GATE approved PASS rc=0' in text, f'{label}: approved gate did not PASS');  File "/path/to/out", line 77, in require;    raise RuntimeError(message);RuntimeError: ENV2-tiling-20261103T205646Z-ON: approved gate did not PASS;
+2026-11-03T21:08:39Z QUEUE-D43R start lever cpupin (serve-v41pkg-pp2.yaml)
+2026-11-03T22:14:14Z QUEUE-D43R cpupin rc=0: COMPLETE: /path/to/out; REC restored; see verdict.out (no automatic adoption);
+2026-11-03T22:23:53Z QUEUE-D43R boot FAILED
+2026-11-03T22:23:53Z QUEUE-D43R done
+2026-11-03T22:37:33Z QUEUE-PB1103 start: post-PEX-move baseline, REC 17 keys, serve-v41pkg-pp2.yaml
+2026-11-03T22:45:28Z AB PB1103-REC PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=39c95adcbd848711 harness=d666c0a867c8be31
+2026-11-03T22:46:32Z AB PB1103-REC GATE approved PASS rc=0
+2026-11-03T22:47:43Z QUEUE-PB1103 T0/T1 arm rc=0
+2026-11-03T22:53:06Z QUEUE-PB1103 depth rc=0: DEPTH PB1103-D L=2048 rep 0: prompt 2061 TTFT 2.408 s decode 153.96 tok/s rounds 129 tok/round 3.97 ms/round 25.73 sha 6cc78b1b5119;DEPTH PB1103-D L=2048 rep 1: prompt 2062 TTFT 2.395 s decode 136.92 tok/s rounds 144 tok/round 3.56 ms/round 25.92 sha b2720e31b919;DEPTH PB1103-D L=32768 rep 0: prompt 32718 TTFT 20.11 s decode 151.62 tok/s rounds 125 tok/round 4.10 ms/round 26.96 sha cdf3cf45c3cf;DEPTH PB1103-D L=32768 rep 1: prompt 32716 TTFT 20.375 s decode 152.84 tok/s rounds 124 tok/round 4.13 ms/round 26.96 sha 0bb63e7748a8;DEPTH PB1103-D L=65536 rep 0: prompt 65589 TTFT 37.739 s decode 165.89 tok/s rounds 112 tok/round 4.57 ms/round 27.5 sha 06fd9f79953a;DEPTH PB1103-D L=65536 rep 1: prompt 65595 TTFT 37.583 s decode 173.31 tok/s rounds 107 tok/round 4.79 ms/round 27.56 sha e491afdd2b8e;DEPTH PB1103-D L=150000 rep 0: prompt 150038 TTFT 86.934 s decode 122.45 tok/s rounds 139 tok/round 3.68 ms/round 30.02 sha 847272616b85;DEPTH PB1103-D L=150000 rep 1: prompt 150045 TTFT 87.001 s decode 136.0 tok/s rounds 127 tok/round 4.03 ms/round 29.58 sha 33db0364f014
+2026-11-03T22:56:10Z QUEUE-PB1103 depth300 rc=0: DEPTH PB1103-D300 L=300000 rep 0: prompt 299227 TTFT 177.977 s decode 166.65 tok/s rounds 89 tok/round 5.75 ms/round 34.45 sha 4053a2742490
+2026-11-03T22:56:10Z QUEUE-PB1103 done (server up on REC)
+2026-11-03T22:56:28Z QUEUE-PB1103 chain relaunched: d42r d44-d52 bench d40
+2026-11-03T22:56:28Z QUEUE-D42R start conc boot diagnostic
+2026-11-03T22:56:41Z QUEUE-D42R conc overlay deploy rc=0: p1-m0-a1;DEPLOYED: p1-m0-a1; both roots byte-verified; backup=/path/to/out;
+2026-11-03T23:00:36Z QUEUE-D42R conc boot rc=1; engine log ${BENCH_DIR}/d42r-engine.log; first error: 162:(Worker_PP1_TP1 pid=135050) INFO 11-03 23:00:20 [acceleration.py:1033] SM70 acceleration status: {'profile': None, 'sm70': True, 'scope': 'internal_draft_config', 'expected_acceleration': [], 'paths': {'profile_hardware': {'enabled': False, 'reason': 'not_applicable', 'tp': 4}, 'dflash2_verifier
+2026-11-03T23:00:36Z QUEUE-D42R last engine lines: (APIServer pid=133498)     raise RuntimeError(;(APIServer pid=133498) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {};/usr/lib/python3.12/multiprocessing/resource_tracker.py:254: UserWarning: resource_tracker: There appear to be 8 leaked shared_memory objects to clean up at shutdown;  warnings.warn('resource_tracker: There appear to be %d ';
+2026-11-03T23:00:46Z QUEUE-D42R rollback rc=0: RESTORED: p1-m0-a1; both roots byte-verified;
+2026-11-03T23:04:50Z QUEUE-D42R server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-03T23:04:50Z QUEUE-D42R done
+2026-11-03T23:05:02Z QUEUE-D44 start SUM2P window (serve-v41pkg-pp2.yaml)

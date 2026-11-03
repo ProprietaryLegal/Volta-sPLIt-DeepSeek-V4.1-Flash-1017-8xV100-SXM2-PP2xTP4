@@ -23,7 +23,23 @@ two sets.
 | PP2 x TP4 port, no levers | 99.2 | 31.1 | 88.0 | 31.7 | MEASURED |
 | + six token-path and draft levers | ~105.8 | 29.55 | ~108.4 | 30.0 | MEASURED, ABBA averages |
 | + plan fusion, keep-batch, fast expert kernels, attention fusions | ~114 | ~27.1 | ~117 | ~27.7 | MEASURED |
-| + expert-kernel instruction diet | ~118 | ~26.2 | ~121 | ~26.8 | ESTIMATED (−0.871 ms ABBA) |
+| + expert-kernel instruction diet | ~118 | ~26.2 | ~121 | ~26.8 | ESTIMATED then (−0.871 ms ABBA) |
+| + prefill skip, larger hot ring (all 17 switches; D39, 2 arms) | 118.3-118.5 | 26.4-26.5 | 119.9-120.5 | 27.0-27.1 | MEASURED |
+| **production after the PCIe-switch move (PB1103)** | **119.0** | **26.3** | **120.8** | **26.9** | MEASURED, one boot |
+
+ms per round above includes the first token. Decode-only (harness v2): all 17 switches before the move 25.34-25.54 (T=0,
+four arms) and 25.27-25.35 (T=1); after the move 25.30 (T=0) and 25.20 (T=1), 2.25 accepted drafts per round at T=1.
+Per prompt after the move, T=0: 82.9 / 139.8 / 166.8 tok/s at 1.14 / 2.72 / 3.49 accepted drafts per round; T=1: 98.3-146.0
+tok/s across the 12 prompts. Greedy gate PASS (8 of 8 identical, KL 0 over 1,215 positions).
+
+## The PCIe-switch move (2026-11-03)
+
+We moved one PCIe switch card. Before, the switch carrying two of board C's GPUs hung off an x8 link on a CPU root
+complex shared with board B's GPUs. Now each of the four switches has its own root complex at Gen3 x16 (MEASURED from
+the PCIe link status: four switch upstream links at x16, 8 GT/s, under four root complexes; eight GPU links at x8,
+8 GT/s). Same GPUs, same NVLink boards. Decode did not change beyond noise (25.30 vs 25.34-25.54 ms per round). The
+first token on long prompts came about 2 % sooner (next section); one or two runs per length, so treat that as
+indicative. Host-to-device bandwidth has not been re-measured since the move.
 
 ## DGX sPLIce's benchmark (2026-11-03, before the instruction diet)
 
@@ -41,9 +57,23 @@ same tools and conditions (MEASURED 2026-10-23, a different quantization of the 
 first token at 150K. So this build decodes about 1.5x as fast per request (+31 % to +70 % across runs) and reads
 prompts about 35-40 % more slowly. A head-to-head rerun of both builds on the same day is in progress.
 
-## Decode by depth (A/B harness, T=0, 512 tokens, 2026-11-03)
+## Decode and first token by depth, production stack (A/B harness, T=0, 512 tokens)
 
-Measured before the gate/up expert kernels and the attention fusions:
+MEASURED 2026-11-03 after the PCIe-switch move, all 17 switches (prefill skip and 524,288-position hot ring on):
+
+| prompt | first token | ms per round | before the move, same stack (first token) |
+|---|---:|---:|---:|
+| 2,061 / 2,062 tokens | 2.408 / 2.395 s | 25.73 / 25.92 | 2.402 / 2.421 s |
+| 32,718 / 32,716 | 20.11 / 20.375 s | 26.96 / 26.96 | 20.681 / 20.71 / 20.648 s |
+| 65,589 / 65,595 | 37.739 / 37.583 s | 27.50 / 27.56 | – |
+| 150,038 / 150,045 | 86.934 / 87.001 s | 30.02 / 29.58 | 88.775 / 88.321 / 88.438 s |
+| 299,227 | 177.977 s | 34.45 | 182.034 / 181.258 / 181.472 s |
+
+"Before the move" is D39's 2K arm and the three base arms of D37 (same afternoon). Mean first-token change across the
+move, ESTIMATED arithmetic: 32K 20.24 vs 20.68 s (−2.1 %), 150K 86.97 vs 88.51 s (−1.7 %), 300K 177.98 vs 181.59 s
+(−2.0 %). Without the prefill skip the same lengths took 22.6-22.8, 111.1-111.9 and 263.9-265.0 s (D35).
+
+Earlier, before the gate/up expert kernels and the attention fusions:
 
 | prompt length | ms per round |
 |---|---:|
@@ -75,19 +105,18 @@ Keep-batch (`PP_KEEP_BATCH`) by depth, OFF → ON: 32K 32.69 → 29.51 ms (−9.
   hit took 0.67-0.75 s against 24.7-44.2 s cold. With the fix the refill ran on both stages (49,152 hot rows on stage 1,
   32,768 on stage 2 for a hit at 35,584 tokens).
 
-## Prefill skip (in testing, 2026-11-03)
+## Prefill skip (adopted 2026-11-03)
 
-`VLLM_V41_PREFILL_SKIP_ROWS=3072`, one repetition per arm, same production stack otherwise:
+`VLLM_V41_PREFILL_SKIP_ROWS=3072`, arms OFF ON ON2 OFF2 (D35), same production stack otherwise:
 
-| prompt | first token OFF | first token ON | change | output |
+| prompt | first token OFF / OFF2 | first token ON / ON2 | change | output |
 |---|---:|---:|---:|---|
-| 32,718 tokens | 22.634 s | 20.678 s | −8.6 % | identical (sha) |
-| 150,038 tokens | 111.054 s | 88.453 s | −20.4 % | identical |
-| 299,227 tokens | 263.925 s | 181.321 s | −31.3 % | identical |
+| 32,718 tokens | 22.634 / 22.776 s | 20.678 / 20.743 s | −8.8 % | identical (sha), all arms |
+| 150,038 tokens | 111.054 / 111.855 s | 88.453 / 88.462 s | −20.6 % | identical |
+| 299,227 tokens | 263.925 / 265.040 s | 181.321 / 180.860 s | −31.5 % | identical |
 
-Its guard run (abort and resend during a 150K prefill) completed with no early abort, and the prefix-cache test
-passed (36K and 64K hits identical to cold). A second repetition was
-running when this page was written.
+Its guard run (abort and resend during a 150K prefill) returned the same text as a whole run, and the prefix-cache test
+passed (36K, 64K and 150K hits identical to cold).
 
 ## Capacity
 

@@ -7,7 +7,7 @@ What serves on our host as of 2026-11-03, and how to reproduce it.
 | part | what it is | role |
 |---|---|---|
 | GPUs | 8x NVIDIA V100-SXM2-32GB on two 4-GPU SXM2 boards; NVLink inside each board | board B: pipeline stage 1 (layers 0-19, Engram tables and hash state), TP4. Board C: stage 2 (layers 20-39, the head and the drafter), TP4 |
-| PCIe | four PLX switches, two GPUs each, Gen3 x8 per GPU; one switch in an x8 slot | the stage hand-off and host traffic. MEASURED 2026-11-02 (512 MiB pinned host-to-device): board B 25.5 GB/s for all four cards together; board C 13.1 GB/s |
+| PCIe | four PLX switches, two GPUs each, Gen3 x8 per GPU; since 2026-11-03 each switch on its own CPU root complex at Gen3 x16 (before: one switch on an x8 link sharing a root complex with board B) | the stage hand-off and host traffic. MEASURED 2026-11-02, before the move (512 MiB pinned host-to-device): board B 25.5 GB/s for all four cards together; board C 13.1 GB/s. Not re-measured since |
 | host | AMD Threadripper PRO 3945WX (12 cores), one NUMA node, 251 GB RAM, Linux, Python 3.12, NVIDIA driver 580 | scheduler, tokenizer, the packed-KV host arena |
 | power | 150 W cap per GPU, graphics clock capped at 1522 MHz | MEASURED: 200 W neutral (−0.06 ms per round) |
 
@@ -27,7 +27,10 @@ The files we serve are byte-identical to those revisions. 1Cat #1277's README li
 1. [forks/1cat-4xv100-tp4/](../forks/1cat-4xv100-tp4/): `tools/apply_series.sh` applies 49 patches to 1Cat-vLLM #1277
    (merge `899e9ed33`): our PP2 x TP4 port (0001), 1Cat main `6db9c81` (0002), 25 open 1Cat PRs (0003-0027), our lever
    stack and fixes (0028-0048), and a CPU test (0049). Result: tree `b0d692425297`.
-2. [engine/production/0050-expert-diet.patch](../engine/production/0050-expert-diet.patch): our expert-kernel
+2. [engine/production/0050-expert-diet.patch](../engine/production/0050-expert-diet.patch), then
+   [engine/production/0051-prefill-skip.patch](../engine/production/0051-prefill-skip.patch) (our prefill skip; result
+   tree `32d4a9d9b0c1`, MEASURED with `git apply --check` on tree `4447483248bb`; its new `prefill_skip.py` is
+   byte-identical to the deployed file). 0050 is our expert-kernel
    instruction diet. Result: tree `4447483248bb`. Its `v41k` files are byte-identical to the source of the deployed
    `v41k.so` (MEASURED 2026-11-03: `build.py`, `v41k.cu`, `v41k_diet.cuh`, `v41k_fast.cuh`, `v41k_fast_gu.cuh`). The
    patch also carries the L1 evict-first weight-load hints of the kernel-variant sweep, because the diet was built on
@@ -42,11 +45,13 @@ The files we serve are byte-identical to those revisions. 1Cat #1277's README li
 placeholders (substitute them, e.g. with `envsubst`, before use):
 
 - `tensor-parallel-size: 4`, `pipeline-parallel-size: 2`; split at layer 20, the only admissible split;
-- `max-model-len: 524288`, `max-num-seqs: 1`, `max-num-batched-tokens: 8192`;
+- `max-model-len: 524288`, `max-num-seqs: 1`, `max-num-batched-tokens: 8192` (4,096 and 16,384 failed the near-tie
+  gate);
 - `kv-cache-memory-bytes: 268435456` (0.25 GiB per GPU) gives a KV pool of 2,076,870 tokens (MEASURED, engine log):
   3.96 full-length requests; the target is 2M tokens in total, so spare memory goes to speed, not more KV;
 - FULL CUDA graphs for 1-6 tokens per step, synchronous scheduling, chunked prefill, prefix caching;
-- every expert resident (`expert_cache_offload_fraction: 0`);
+- every expert resident (`expert_cache_offload_fraction: 0`); packed-KV GPU hot ring of 524,288 positions
+  (`VLLM_V41_KV_HOT_POSITIONS`, in `rec.env`);
 - DSpark, FP8, 5 drafts per round;
 - thinking on by default (`default-chat-template-kwargs: {"thinking": true}`), DeepSeek V4 reasoning parser, tool calls;
 - loopback only, no API key: put your own authenticating proxy in front.
@@ -63,8 +68,12 @@ placeholders (substitute them, e.g. with `envsubst`, before use):
 INDEX_REDUCE DMV_X COUPLED_DRAFTS (COUPLED_DRAFT_TEMP=1.0) MARKOV_SHARD COUPLED_SHARD COUPLED_LOCAL
 PLAN_FUSE PP_KEEP_BATCH EXPERT_FAST FUSE_ATTN_PREP FUSE_ATTN_POST     each VLLM_V41_*=1
 VLLM_V41_EXPERT_DIET=3 VLLM_V41_ROUTE_FAST=1 VLLM_V41_ROUTE_WARPS=4
+VLLM_V41_PREFILL_SKIP_ROWS=3072 VLLM_V41_KV_HOT_POSITIONS=524288
 HOT_REFILL on by default
 ```
+
+17 keys in all (the production boot's recorded set, 2026-11-03). MEASURED on that set after the PCIe-switch move: T=0
+119.0 tok/s, T=1 120.8 tok/s, decode-only 25.30 / 25.20 ms per round.
 
 ## Start
 

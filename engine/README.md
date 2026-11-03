@@ -2,7 +2,8 @@
 
 | path | what it is |
 |---|---|
-| [production/0050-expert-diet.patch](production/0050-expert-diet.patch) | our expert-kernel instruction diet (`VLLM_V41_EXPERT_DIET`), the one production change on top of the 49-patch series |
+| [production/0050-expert-diet.patch](production/0050-expert-diet.patch) | our expert-kernel instruction diet (`VLLM_V41_EXPERT_DIET`), on top of the 49-patch series |
+| [production/0051-prefill-skip.patch](production/0051-prefill-skip.patch) | our prefill skip (`VLLM_V41_PREFILL_SKIP_ROWS`), on top of 0050; adopted 2026-11-03 |
 | [in-testing/](in-testing/) | patches for the changes in the test queue; not production |
 | [configs/](configs/) | serving profile, engine environment, start script, production lever set (`rec.env`) |
 
@@ -13,6 +14,7 @@ git clone https://github.com/1CatAI/1Cat-vLLM src-pp2 && cd src-pp2
 git checkout 899e9ed33                      # the #1277 merge
 bash ../forks/1cat-4xv100-tp4/tools/apply_series.sh .     # 49 patches; checks tree b0d692425297
 git apply ../engine/production/0050-expert-diet.patch     # tree 4447483248bb (git write-tree after git add -A)
+git apply ../engine/production/0051-prefill-skip.patch    # tree 32d4a9d9b0c1
 # vLLM: build into a venv with the pins in forks/1cat-4xv100-tp4/configs/requirements-venv.txt
 # v41k: on the serving machine, against that venv's torch
 cd benchmarks/deepseek_v41/v41k && TORCH_CUDA_ARCH_LIST=7.0 python build.py

@@ -1,6 +1,6 @@
 > **Previous build.** This is the record of our first build on the same eight V100s (2026-11-01): philbert440's EXL3
 > pack on his SM70 engine, 71.2-71.6 ms per verify round, 42-46 tok/s single stream with thinking off. It is kept here as
-> history. The current build, [Volta sPLIt](../README.md), runs about 2.6x faster per round (~118 tok/s decode).
+> history. The current build, [Volta sPLIt](../README.md), runs about 2.7x faster per round (119.0 tok/s decode, MEASURED 2026-11-03).
 > Paths below are relative to this folder.
 
 # Volta sPLIce: DeepSeek-V4.1-Flash on 8x V100, PP2 x TP4 on two NVLink quads, Engram resident in host RAM

@@ -52,12 +52,46 @@ accepted drafts per round).
   +0.28/−0.15). That is inside the session's measured drift, so it is **not** a significant win. Greedy output bitwise,
   no errors. Kept on under our rule for upstream-backed changes that are correct and inconclusive.
 
+### Long context (adopted 2026-11-03)
+
+- **`PREFILL_SKIP_ROWS=3072`, ours** ([engine/production/0051-prefill-skip.patch](../engine/production/0051-prefill-skip.patch);
+  design reference: philbert440/deepseek-v4.1-v100's replay rows): early prefill chunks skip the stage-2 layers that
+  hold only 128-wide window rings, for rows those rings can never reach. Test D35, arms OFF ON ON2 OFF2, one prompt per
+  length each, MEASURED 2026-11-03:
+
+  | prompt | first token OFF / OFF2 | first token ON / ON2 | change | output |
+  |---|---:|---:|---:|---|
+  | 32,718 tokens | 22.634 / 22.776 s | 20.678 / 20.743 s | −8.8 % | identical (sha), all four arms |
+  | 150,038 tokens | 111.054 / 111.855 s | 88.453 / 88.462 s | −20.6 % | identical |
+  | 299,227 tokens | 263.925 / 265.040 s | 181.321 / 180.860 s | −31.5 % | identical |
+
+  Its guard run (abort during a 150K prefill, then resend) returned the same text as a whole run, and the prefix-cache
+  test passed (36K, 64K and 150K hits identical to cold). Decode is untouched: the skip acts only in prefill.
+- **`KV_HOT_POSITIONS=524288`**, our setting of #1277's packed-KV hot ring (default 32,768 positions): more KV rows stay
+  on the GPU. Depth ABBA (test D31, one prompt per length per arm): 300K 36.92 / 37.12 → 35.99 / 35.88 ms per round
+  (−1.09), 150K 31.91 / 32.10 → 31.70 / 31.81 (−0.25), identical output. Adoption boot (D38): KV pool still 2,076,870
+  tokens, prefix-cache test 3 of 3 PASS, no tracebacks.
+- With all 17 switches, two arms before the PCIe-switch move (D39): T=0 118.3 / 118.5 tok/s, T=1 119.9 / 120.5 tok/s;
+  decode-only 25.45 / 25.34 and 25.35 / 25.27 ms per round. After the move, one production boot (2026-11-03): **T=0
+  119.0 tok/s, T=1 120.8 tok/s**, decode-only 25.30 / 25.20 ms per round, greedy gate PASS. MEASURED.
+- **Harness v2** (D39): greedy references re-recorded on the deterministic stack (three identical runs), a decode-only
+  round metric, and a measured A/A spread under 0.1 ms per round (T=0 −0.096, T=1 −0.077 ms per round decode-only).
+
 ## Did not work
 
 | change | result | why |
 |---|---|---|
 | Expert top-p pruning (0rand TensorFold `TF_DSV41_EXPERT_TOPP`, 0.85) | 78 tok/s, greedy FAIL | the divergence is inherent: it drops experts the target would use |
-| Async scheduling under PP2 + speculative decoding | 90.5 tok/s, 34.1 ms on the first try; later runs crashed at request end (invalid sampled token ids) | the crash stands; parked until 1Cat's newer model runner is ported |
+| Async scheduling under PP2 + speculative decoding | 90.5 tok/s, 34.1 ms on the first try; later runs crashed at request end (invalid sampled token ids) | the request-end guard below fixes the crash |
+| V1 async with a request-end guard (D41) | ABBA decode-only, 2 pairs each at T=0 and T=1: +1.586, +1.940, +1.565, +1.622 ms per round, average **+1.678** (95 % interval +1.539..+1.817); depth +1.62 ms at 2K, +1.18 at 32K; texts identical; 20-request soak with aborts: 0 crashes | rejected: detectably slower. The re-port of 1Cat's newer model runner (MRV2) is the next attempt |
+| TP8: one 8-way tensor-parallel group across both boards (D36 probe) | no-go: best modeled round 24.65 ms against the 22.0 ms bar | the 8-way all-reduce across the boards measured 30.8 µs against 5.28 µs for 4-way inside one board |
+| Indexer overlap in prefill (D37 a) | first token −0.1 / +0.3 / −0.1 % at 32K / 150K / 300K, bitwise | neutral |
+| 16,384-token prefill chunks (D37 b) | first token +17.5 % at 32K, +5.6 % at 150K, −1.2 % at 300K; near-tie gate FAIL at 32K and 150K | slower and changes numerics |
+| Prefill chunk 4,096, re-gated on the v2 reference (D43) | near-tie gate FAIL: 6 of 8 identical; the 7K and 22K prompts moved a confident token (top-2 gaps 0.31 and 0.78 nats, bar 0.1) | the chunk size changes long-prompt numerics |
+| Suggested dense-kernel tiling config, re-run (D43R) | near-tie gate FAIL: 2 of 8 identical, 1 near-tie, 5 fail (gaps up to 1.56 nats) | matches the earlier 2 of 8; closed |
+| CPU pinning to physical cores (D43R) | ABBAABBA decode-only, 8 pairs: average +0.079 ms per round (95 % interval −0.020..+0.177); texts identical | not adopted: rules out a gain of ~0.05 ms or more |
+| Side stream for the hyper-connection mixing step (`MIX_STREAM`, D33C) | numerics passed; GPU micro-benchmark below the win bar at 1 and 6 tokens per step, smaller stand-ins lost 0.19-0.73 ms; graph-topology check failed (7 mix-to-sublayer edges) | not a real fork and join in the captured graph; parked until a new design |
+| Engram rows cached in spare GPU memory ("hot Engram in HBM") | not built | sized from 52 profiled rounds: all host Engram work costs ~0.12 ms per round; a partial cache removes nothing because a round needs all 288 rows; fully resident is 103 GiB against ~44 GiB free on the stage-1 board |
 | Gate-column router variant (`GATE_COLS`) | slower at 2+ tokens per step (6 tokens: 18.12 vs 14.82 µs) | — |
 | Fused layer transition, v1 and v2 | v1 slower; v2 26.8 vs 16.53 µs for the pair it replaces | the hyper-connection mixing step is ~11.4 of the 16.5 µs; a side-stream version is in testing |
 | L1 activation prefetch + evict-first weights | neutral (−0.04 ms) | the expert kernels run at 24 % occupancy and stall on long scoreboard, not on memory |
@@ -68,11 +102,12 @@ accepted drafts per round).
 | Spin-loop wait in the broadcast queue | +0.04..+0.09 ms | — |
 | 200 W instead of 150 W per card | −0.06 ms, neutral | the clamp acts mostly outside decode; an older 200 W gain came from the higher clock ceiling |
 | 3 or 4 drafts per round | refused at boot | the DSpark checkpoint's block size is 5 |
-| Suggested tiling config for the dense kernel | no gain; greedy 2 of 8 plus near-ties | — |
+| Suggested tiling config for the dense kernel | no gain; greedy 2 of 8 plus near-ties | re-run on the v2 gate above |
 | FP8 tuning set | neutral | — |
 
 Prefill chunk: 8,192 kept. 4,096 saved 5.6 % of first-token time at 32K, 1.8 % at 64K and nothing at 128K (greedy 6 of 8
-plus 2 near-ties); 2,048 and 16,384 were slower; above 16,384 the model refuses.
+plus 2 near-ties), then failed the approved near-tie gate on its re-test (above); 2,048 and 16,384 were slower; above
+16,384 the model refuses.
 
 On 2026-11-03 every lever that was not adopted was re-reviewed for a build or deploy defect that could void its result.
 None was found. Two verdicts were reopened instead: the router floor (its old result was one unpaired arm on a
@@ -80,7 +115,4 @@ different base; re-tested and kept, above) and the all-reduce push path (a port 
 
 ## In testing
 
-The prefill skip (D35) measured −8.6 / −20.4 / −31.3 % first-token time at 32K / 150K / 300K with identical output in its
-first repetition ([measurements](measurements.md#prefill-skip-in-testing-2026-11-03)). The larger GPU hot ring won its A/B
-(300K −1.09 ms per round, 150K −0.25) and awaits its adoption check. The side-stream mixing step failed its single-GPU
-check and was not deployed. The rest of the queue, D36-D47: [roadmap.md](roadmap.md).
+The rest of the queue, D42R and D44-D55: [roadmap.md](roadmap.md).

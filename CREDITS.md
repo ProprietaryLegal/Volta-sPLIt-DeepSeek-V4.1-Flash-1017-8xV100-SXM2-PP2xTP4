@@ -39,7 +39,7 @@ or misdescribed anyone's contribution, please open an issue and we will correct 
   [#25](https://github.com/Elevatormusic/TensorFold/pull/25), coupled sampled DSpark drafts (merged), adopted here
   through our port (the idea also appears in [0rand/deepseek-v41-tensorfold-spark](https://github.com/0rand/deepseek-v41-tensorfold-spark)); and the expert top-p pruning (0rand) we tested and did not adopt.
 - **Phil Tompkins** ([philbert440/deepseek-v4.1-v100](https://github.com/philbert440/deepseek-v4.1-v100), Apache-2.0):
-  the replay-rows design behind the prefill skip in testing; and the engine and EXL3 pack
+  the replay-rows design behind our prefill skip (adopted 2026-11-03); and the engine and EXL3 pack
   ([philbert440/DeepSeek-V4.1-Flash-1017-EXL3-franken-v100](https://huggingface.co/philbert440/DeepSeek-V4.1-Flash-1017-EXL3-franken-v100))
   our previous build ran on ([previous-build/](previous-build/)). Its 1Cat pull request
   [#1243](https://github.com/1CatAI/1Cat-vLLM/pull/1243) (rivetphilbot) stacks on our #1031.
