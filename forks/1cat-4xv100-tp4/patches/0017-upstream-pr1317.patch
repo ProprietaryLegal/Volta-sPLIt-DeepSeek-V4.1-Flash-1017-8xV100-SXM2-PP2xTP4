@@ -1,0 +1,1225 @@
+diff --git a/tests/entrypoints/openai/chat_completion/test_completion_with_function_calling.py b/tests/entrypoints/openai/chat_completion/test_completion_with_function_calling.py
+index 839793fde..e207cd9b8 100644
+--- a/tests/entrypoints/openai/chat_completion/test_completion_with_function_calling.py
++++ b/tests/entrypoints/openai/chat_completion/test_completion_with_function_calling.py
+@@ -539,8 +539,8 @@ async def test_max_tokens_with_tool_choice_required(
+         tool_choice=tool_choice,
+     )
+     # When `tool_choice="required"` and the tokens of `tools` exceed `max_tokens`,
+-    # both `tool_calls` and `content` should be empty.
++    # `tool_calls` should be absent and `content` should be empty.
+     # This behavior should be consistent with OpenAI.
+     choice = chat_completion.choices[0]
+     assert choice.finish_reason == "length"
+-    assert len(choice.message.tool_calls) == 0
++    assert choice.message.tool_calls is None
+diff --git a/tests/entrypoints/openai/chat_completion/test_output_correctness.py b/tests/entrypoints/openai/chat_completion/test_output_correctness.py
+new file mode 100644
+index 000000000..8bf6d2a97
+--- /dev/null
++++ b/tests/entrypoints/openai/chat_completion/test_output_correctness.py
+@@ -0,0 +1,271 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++import asyncio
++import json
++from unittest.mock import MagicMock
++
++import pytest
++
++from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
++from vllm.entrypoints.openai.chat_completion.serving import OpenAIServingChat
++from vllm.entrypoints.openai.engine.protocol import (
++    DeltaMessage,
++    RequestResponseMetadata,
++)
++from vllm.logprobs import Logprob
++from vllm.outputs import CompletionOutput, RequestOutput
++from vllm.parser.abstract_parser import _WrappedParser
++from vllm.reasoning.qwen3_reasoning_parser import Qwen3ReasoningParser
++from vllm.tool_parsers.qwen3coder_tool_parser import Qwen3CoderToolParser
++
++
++def _serving(parser_factory=None):
++    serving = OpenAIServingChat.__new__(OpenAIServingChat)
++    serving.use_harmony = False
++    serving.enable_auto_tools = True
++    serving.tool_parser = Qwen3CoderToolParser
++    serving.response_role = "assistant"
++    serving.tool_call_id_type = "random"
++    serving.parser_cls = parser_factory
++    serving.enable_force_include_usage = False
++    serving.enable_log_outputs = False
++    serving.enable_prompt_tokens_details = True
++    serving.system_fingerprint = None
++    serving.return_tokens_as_token_ids = False
++    return serving
++
++
++def _output(text, ids, finish=None, logprobs=False, index=0):
++    return RequestOutput(
++        request_id="test",
++        prompt="x",
++        prompt_token_ids=[1],
++        prompt_logprobs=None,
++        outputs=[
++            CompletionOutput(
++                index=index,
++                text=text,
++                token_ids=ids,
++                cumulative_logprob=-0.5 * len(ids),
++                logprobs=[{tid: Logprob(-0.5, 1, text)} for tid in ids]
++                if logprobs
++                else None,
++                finish_reason=finish,
++            )
++        ],
++        finished=finish is not None,
++    )
++
++
++async def _generate(outputs):
++    for output in outputs:
++        yield output
++
++
++def _request(**kwargs):
++    return ChatCompletionRequest(
++        model="test",
++        messages=[{"role": "user", "content": "call f"}],
++        tools=[
++            {
++                "type": "function",
++                "function": {
++                    "name": "f",
++                    "parameters": {
++                        "type": "object",
++                        "properties": {"x": {"type": "string"}},
++                    },
++                },
++            }
++        ],
++        **kwargs,
++    )
++
++
++def _tokenizer():
++    tokenizer = MagicMock()
++    tokenizer.get_vocab.return_value = {
++        "<think>": 10,
++        "</think>": 11,
++        "<tool_call>": 12,
++        "</tool_call>": 13,
++    }
++    return tokenizer
++
++
++def _stream(serving, request, outputs, tokenizer=None):
++    async def collect():
++        lines = [
++            line
++            async for line in serving.chat_completion_stream_generator(
++                request,
++                _generate(outputs),
++                "test",
++                "test",
++                [],
++                tokenizer or _tokenizer(),
++                RequestResponseMetadata(request_id="test"),
++            )
++        ]
++        assert lines[-1] == "data: [DONE]\n\n"
++        chunks = [json.loads(line.removeprefix("data: ")) for line in lines[:-1]]
++        assert not any("error" in chunk for chunk in chunks), chunks
++        return chunks
++
++    return asyncio.run(collect())
++
++
++@pytest.mark.parametrize("stream", [False, True])
++@pytest.mark.parametrize("choice", ["auto", "required", "named"])
++@pytest.mark.parametrize("finish", ["stop", "length", "repetition"])
++def test_tool_finish_reason_preserves_truncation(stream, choice, finish, monkeypatch):
++    # Exercise the real qwen3_coder parser and the required/named bypasses.
++    monkeypatch.setattr(_WrappedParser, "tool_parser_cls", Qwen3CoderToolParser)
++    monkeypatch.setattr(_WrappedParser, "reasoning_parser_cls", None)
++    serving = _serving(_WrappedParser)
++    tool_choice = (
++        {"type": "function", "function": {"name": "f"}} if choice == "named" else choice
++    )
++    request = _request(stream=stream, tool_choice=tool_choice)
++    if choice == "auto":
++        text = "<tool_call>\n<function=f>\n<parameter=x>value"
++        if finish == "stop":
++            text += "</parameter>\n</function>\n</tool_call>"
++    elif choice == "required":
++        text = '[{"name":"f","parameters":{"x":"value'
++        if finish == "stop":
++            text += '"}}]'
++    else:
++        text = '{"x":"value' + ('"}' if finish == "stop" else "")
++    output = _output(text, [30, 31], finish)
++    if stream:
++        if choice == "auto":
++            pieces = ["<tool_call>\n", "<function=f>\n", "<parameter=x>value"]
++            if finish == "stop":
++                pieces.append("</parameter>\n</function>\n</tool_call>")
++            outputs = [
++                _output(
++                    piece,
++                    [12] if i == 0 else [30 + i],
++                    finish if i == len(pieces) - 1 else None,
++                )
++                for i, piece in enumerate(pieces)
++            ]
++        else:
++            outputs = [output]
++        chunks = _stream(serving, request, outputs)
++        reasons = [
++            c["finish_reason"]
++            for chunk in chunks
++            for c in chunk["choices"]
++            if c.get("finish_reason")
++        ]
++        assert any(
++            c["delta"].get("tool_calls") for chunk in chunks for c in chunk["choices"]
++        )
++        actual = reasons[0]
++    else:
++        response = asyncio.run(
++            serving.chat_completion_full_generator(
++                request,
++                _generate([output]),
++                "test",
++                "test",
++                [],
++                _tokenizer(),
++                RequestResponseMetadata(request_id="test"),
++            )
++        )
++        if choice != "required" or finish == "stop":
++            assert response.choices[0].message.tool_calls
++        actual = response.choices[0].finish_reason
++    expected = "tool_calls" if finish == "stop" and choice != "named" else finish
++    assert actual == expected
++
++
++@pytest.mark.parametrize("return_token_ids", [False, True])
++@pytest.mark.parametrize("include_reasoning", [False, True])
++def test_parser_suppressed_logprobs_are_preserved(return_token_ids, include_reasoning):
++    parser = MagicMock()
++    parser.tool_parser = None
++    parser.parse_delta.side_effect = [None, None, DeltaMessage(content="answer")]
++    serving = _serving(MagicMock(return_value=parser))
++    chunks = _stream(
++        serving,
++        _request(
++            stream=True,
++            logprobs=True,
++            return_token_ids=return_token_ids,
++            include_reasoning=include_reasoning,
++        ),
++        [
++            _output("<think>", [10], logprobs=True),
++            _output("</think>", [11], logprobs=True),
++            _output("answer", [20], "stop", logprobs=True),
++        ],
++    )
++    tokens = [
++        lp["token"]
++        for chunk in chunks
++        for c in chunk["choices"]
++        if c.get("logprobs")
++        for lp in c["logprobs"]["content"]
++    ]
++    assert tokens == ["<think>", "</think>", "answer"]
++
++
++@pytest.mark.parametrize("parser_kind", ["reasoning", "tool", "both"])
++def test_real_qwen_parser_control_token_logprobs(parser_kind, monkeypatch):
++    monkeypatch.setattr(
++        _WrappedParser,
++        "tool_parser_cls",
++        Qwen3CoderToolParser if parser_kind in ("tool", "both") else None,
++    )
++    monkeypatch.setattr(
++        _WrappedParser,
++        "reasoning_parser_cls",
++        Qwen3ReasoningParser if parser_kind in ("reasoning", "both") else None,
++    )
++    marker, token_id = ("<tool_call>", 12) if parser_kind == "tool" else ("<think>", 10)
++    parser = _WrappedParser(_tokenizer())
++    request = _request(stream=True, logprobs=True, tool_choice="auto")
++    assert parser.parse_delta(marker, [token_id], request, prompt_token_ids=[1]) is None
++    serving = _serving(_WrappedParser)
++    chunks = _stream(
++        serving,
++        request,
++        [
++            _output(marker, [token_id], logprobs=True),
++            _output("", [], "length", logprobs=True),
++        ],
++    )
++    tokens = [
++        lp["token"]
++        for chunk in chunks
++        for c in chunk["choices"]
++        if c.get("logprobs")
++        for lp in c["logprobs"]["content"]
++    ]
++    assert tokens == [marker]
++
++
++def test_suppressed_logprobs_are_isolated_per_choice():
++    parsers = [MagicMock(), MagicMock()]
++    for index, parser in enumerate(parsers):
++        parser.tool_parser = None
++        parser.parse_delta.side_effect = [None, DeltaMessage(content=f"answer{index}")]
++    serving = _serving(MagicMock(side_effect=parsers))
++    first = _output("marker0", [10], logprobs=True)
++    first.outputs += _output("marker1", [11], logprobs=True, index=1).outputs
++    last = _output("answer0", [20], "stop", logprobs=True)
++    last.outputs += _output("answer1", [21], "stop", logprobs=True, index=1).outputs
++    chunks = _stream(serving, _request(stream=True, n=2, logprobs=True), [first, last])
++    tokens: dict[int, list[str]] = {0: [], 1: []}
++    for chunk in chunks:
++        for choice in chunk["choices"]:
++            if choice.get("logprobs"):
++                tokens[choice["index"]].extend(
++                    lp["token"] for lp in choice["logprobs"]["content"]
++                )
++    assert tokens == {0: ["marker0", "answer0"], 1: ["marker1", "answer1"]}
+diff --git a/tests/entrypoints/openai/chat_completion/test_serving_chat.py b/tests/entrypoints/openai/chat_completion/test_serving_chat.py
+index 45fae821a..bca2fd685 100644
+--- a/tests/entrypoints/openai/chat_completion/test_serving_chat.py
++++ b/tests/entrypoints/openai/chat_completion/test_serving_chat.py
+@@ -460,7 +460,7 @@ class TestGPTOSSChat:
+         )
+ 
+         msg = tool_choice_none.choices[0].message
+-        assert len(msg.tool_calls) == 0
++        assert msg.tool_calls is None
+ 
+ 
+ class TestGPTOSSSpeculativeChat:
+diff --git a/tests/entrypoints/openai/test_empty_tool_calls_serialization.py b/tests/entrypoints/openai/test_empty_tool_calls_serialization.py
+new file mode 100644
+index 000000000..0fe9b09b9
+--- /dev/null
++++ b/tests/entrypoints/openai/test_empty_tool_calls_serialization.py
+@@ -0,0 +1,43 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++import json
++
++import pytest
++
++from vllm.entrypoints.openai.chat_completion.protocol import ChatMessage
++from vllm.entrypoints.openai.engine.protocol import (
++    DeltaFunctionCall,
++    DeltaMessage,
++    DeltaToolCall,
++    FunctionCall,
++    ToolCall,
++)
++
++
++@pytest.mark.parametrize("exclude_unset", [False, True])
++@pytest.mark.parametrize("exclude_none", [False, True])
++@pytest.mark.parametrize("stream", [False, True])
++def test_explicit_empty_tool_calls_are_omitted(stream, exclude_unset, exclude_none):
++    cls = DeltaMessage if stream else ChatMessage
++    message = cls(role="assistant", content="answer", tool_calls=[])
++    options = dict(exclude_unset=exclude_unset, exclude_none=exclude_none)
++    assert "tool_calls" not in message.model_dump(**options)
++    assert "tool_calls" not in json.loads(message.model_dump_json(**options))
++
++
++@pytest.mark.parametrize("stream", [False, True])
++def test_nonempty_tool_calls_are_preserved(stream):
++    call = (
++        DeltaToolCall(
++            index=0,
++            id="call_1",
++            type="function",
++            function=DeltaFunctionCall(name="f", arguments="{}"),
++        )
++        if stream
++        else ToolCall(id="call_1", function=FunctionCall(name="f", arguments="{}"))
++    )
++    cls = DeltaMessage if stream else ChatMessage
++    message = cls(role="assistant", tool_calls=[call])
++    assert message.model_dump()["tool_calls"][0]["id"] == "call_1"
+diff --git a/tests/entrypoints/openai/test_null_top_logprobs.py b/tests/entrypoints/openai/test_null_top_logprobs.py
+new file mode 100644
+index 000000000..fde75d2b7
+--- /dev/null
++++ b/tests/entrypoints/openai/test_null_top_logprobs.py
+@@ -0,0 +1,93 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++import asyncio
++
++import pytest
++from pydantic import ValidationError
++
++from tests.entrypoints.openai.chat_completion.test_output_correctness import (
++    _generate,
++    _output,
++    _request,
++    _serving,
++    _stream,
++    _tokenizer,
++)
++from vllm.entrypoints.openai.chat_completion.batch_serving import OpenAIServingChatBatch
++from vllm.entrypoints.openai.chat_completion.protocol import BatchChatCompletionRequest
++from vllm.entrypoints.openai.engine.protocol import RequestResponseMetadata
++
++
++@pytest.mark.parametrize("enabled", [False, True])
++@pytest.mark.parametrize("top", [None, 0, 1, -1])
++def test_null_top_logprobs_requests_sampled_token(enabled, top):
++    if not enabled and top not in (None, 0):
++        with pytest.raises(ValidationError, match="logprobs.*must be set to true"):
++            _request(logprobs=enabled, top_logprobs=top)
++        return
++    request = _request(logprobs=enabled, top_logprobs=top)
++    params = request.to_sampling_params(10, {})
++    assert params.logprobs == ((top or 0) if enabled else None)
++
++
++@pytest.mark.parametrize("mode", ["stream", "full", "batch"])
++@pytest.mark.parametrize("top", [None, 0, 1, -1])
++def test_logprobs_rendered_when_top_is_null(mode, top):
++    serving = _serving()
++    request = _request(
++        logprobs=True, top_logprobs=top, tool_choice="none", stream=mode == "stream"
++    )
++    output = _output("answer", [20], "stop", logprobs=True)
++    metadata = RequestResponseMetadata(request_id="test")
++    if mode == "stream":
++        chunks = _stream(serving, request, [output])
++        probs = [
++            choice["logprobs"]
++            for chunk in chunks
++            for choice in chunk["choices"]
++            if choice.get("logprobs")
++        ]
++        assert len(probs) == 1
++        content = probs[0]["content"]
++    else:
++        if mode == "full":
++            response = asyncio.run(
++                serving.chat_completion_full_generator(
++                    request,
++                    _generate([output]),
++                    "test",
++                    "test",
++                    [],
++                    _tokenizer(),
++                    metadata,
++                )
++            )
++        else:
++            batch = OpenAIServingChatBatch.__new__(OpenAIServingChatBatch)
++            batch.__dict__.update(serving.__dict__)
++            batch_request = BatchChatCompletionRequest(
++                model="test",
++                messages=[[{"role": "user", "content": "x"}]],
++                logprobs=True,
++                top_logprobs=top,
++            )
++            single = batch_request.to_chat_completion_request(batch_request.messages[0])
++            assert single.to_sampling_params(10, {}).logprobs == (top or 0)
++            response = asyncio.run(
++                batch.chat_completion_full_generator_batch(
++                    batch_request,
++                    [_generate([output])],
++                    "test",
++                    "test",
++                    [[]],
++                    _tokenizer(),
++                    metadata,
++                )
++            )
++        assert response.choices[0].logprobs is not None
++        content = [item.model_dump() for item in response.choices[0].logprobs.content]
++    assert len(content) == 1
++    assert content[0]["token"] == "answer"
++    assert content[0]["logprob"] == -0.5
++    assert len(content[0]["top_logprobs"]) == (1 if top in (-1, 1) else 0)
+diff --git a/tests/entrypoints/openai/test_pre_token_stream_error.py b/tests/entrypoints/openai/test_pre_token_stream_error.py
+new file mode 100644
+index 000000000..4c9bdb2e7
+--- /dev/null
++++ b/tests/entrypoints/openai/test_pre_token_stream_error.py
+@@ -0,0 +1,72 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++import asyncio
++import json
++
++import pytest
++
++from tests.entrypoints.openai.chat_completion.test_output_correctness import (
++    _generate,
++    _output,
++    _request,
++    _serving,
++    _tokenizer,
++)
++from vllm.entrypoints.openai.completion.protocol import CompletionRequest
++from vllm.entrypoints.openai.completion.serving import OpenAIServingCompletion
++from vllm.entrypoints.openai.engine.protocol import RequestResponseMetadata
++
++
++@pytest.mark.parametrize("api", ["chat", "completion"])
++@pytest.mark.parametrize("has_tokens", [False, True])
++@pytest.mark.parametrize("error", [False, True])
++def test_stream_error_checked_before_empty_prefill(api, has_tokens, error):
++    outputs = [_output("", [], None)]
++    if has_tokens:
++        outputs.append(_output("answer", [20]))
++    outputs.append(_output("", [], "error" if error else "stop"))
++    metadata = RequestResponseMetadata(request_id="test")
++
++    async def collect():
++        if api == "chat":
++            serving = _serving()
++            generator = serving.chat_completion_stream_generator(
++                _request(stream=True, tool_choice="none"),
++                _generate(outputs),
++                "test",
++                "test",
++                [],
++                _tokenizer(),
++                metadata,
++            )
++        else:
++            serving = OpenAIServingCompletion.__new__(OpenAIServingCompletion)
++            serving.enable_force_include_usage = False
++            serving.enable_prompt_tokens_details = False
++            serving.system_fingerprint = None
++
++            async def indexed():
++                for output in outputs:
++                    yield 0, output
++
++            generator = serving.completion_stream_generator(
++                CompletionRequest(model="test", prompt="x", stream=True),
++                [],
++                indexed(),
++                "test",
++                0,
++                "test",
++                1,
++                _tokenizer(),
++                metadata,
++            )
++        return [line async for line in generator]
++
++    lines = asyncio.run(collect())
++    assert lines[-1] == "data: [DONE]\n\n"
++    chunks = [json.loads(line.removeprefix("data: ")) for line in lines[:-1]]
++    errors = [chunk for chunk in chunks if "error" in chunk]
++    assert bool(errors) is error
++    if error:
++        assert errors[0]["error"]["type"] == "InternalServerError"
+diff --git a/tests/tool_parsers/test_required_streaming_boundaries.py b/tests/tool_parsers/test_required_streaming_boundaries.py
+new file mode 100644
+index 000000000..86282979e
+--- /dev/null
++++ b/tests/tool_parsers/test_required_streaming_boundaries.py
+@@ -0,0 +1,118 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++import json
++from unittest.mock import MagicMock
++
++import pytest
++
++from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
++from vllm.parser.abstract_parser import _WrappedParser
++from vllm.tool_parsers.qwen3coder_tool_parser import Qwen3CoderToolParser
++from vllm.tool_parsers.streaming import extract_required_tool_call_streaming
++
++
++def _collect(messages):
++    calls = {}
++    for message in messages:
++        if message is None:
++            continue
++        for call in message.tool_calls:
++            if call.id is not None:
++                assert call.index not in calls, "duplicate call header"
++                assert call.function.name is not None
++                calls[call.index] = {
++                    "id": call.id,
++                    "name": call.function.name,
++                    "arguments": "",
++                }
++            else:
++                assert call.index in calls, "arguments arrived before header"
++                assert call.function.name is None
++            calls[call.index]["arguments"] += call.function.arguments or ""
++    return calls
++
++
++@pytest.mark.parametrize("chunk_size", [1, 2, 3, 4, 5, 19, 10000])
++@pytest.mark.parametrize("id_type", ["random", "kimi_k2"])
++def test_required_multiple_calls_keep_exact_arguments(chunk_size, id_type):
++    arguments = [
++        '{"text": "brace }, bracket ], quote \\" and slash \\\\"}',
++        '{ "nested": [{"parameters": "inside"}], "empty": {} }',
++        "{}",
++    ]
++    # Keep whitespace and escaping: reserializing the arguments is insufficient.
++    text = (
++        "["
++        + ",".join(
++            f'{{"name":"f{i}","parameters":{args}}}' for i, args in enumerate(arguments)
++        )
++        + "]\nDONE"
++    )
++    previous = ""
++    returned = False
++    count = 7
++    messages = []
++    for offset in range(0, len(text), chunk_size):
++        delta = text[offset : offset + chunk_size]
++        current = previous + delta
++        message, returned = extract_required_tool_call_streaming(
++            previous_text=previous,
++            current_text=current,
++            delta_text=delta,
++            function_name_returned=returned,
++            tool_call_idx=count,
++            tool_call_id_type=id_type,
++        )
++        if message:
++            count += sum(call.id is not None for call in message.tool_calls)
++        messages.append(message)
++        previous = current
++    calls = _collect(messages)
++    assert list(calls) == [0, 1, 2]
++    assert count == 10
++    assert len({call["id"] for call in calls.values()}) == 3
++    for i, args in enumerate(arguments):
++        assert calls[i]["name"] == f"f{i}"
++        assert calls[i]["arguments"] == args
++        json.loads(calls[i]["arguments"])
++        if id_type == "kimi_k2":
++            assert calls[i]["id"] == f"functions.f{i}:{i + 7}"
++
++
++@pytest.mark.parametrize("split", [False, True])
++def test_qwen3_coder_required_counts_every_header(monkeypatch, split):
++    monkeypatch.setattr(_WrappedParser, "tool_parser_cls", Qwen3CoderToolParser)
++    monkeypatch.setattr(_WrappedParser, "reasoning_parser_cls", None)
++    tokenizer = MagicMock()
++    tokenizer.get_vocab.return_value = {"<tool_call>": 1, "</tool_call>": 2}
++    parser = _WrappedParser(tokenizer)
++    parser._stream_state.tool_call_id_type = "kimi_k2"
++    parser._stream_state.history_tool_call_cnt = 4
++    other = _WrappedParser(tokenizer)
++    request = ChatCompletionRequest(
++        messages=[{"role": "user", "content": "call tools"}],
++        tool_choice="required",
++        tools=[
++            {"type": "function", "function": {"name": name}} for name in ("a", "b", "c")
++        ],
++    )
++    first = '[{"name":"a","parameters":{}},{"name":"b","parameters":{}}'
++    second = ',{"name":"c","parameters":{"x":1}}]'
++    chunks = [first, second] if split else [first + second]
++    messages = [
++        parser.parse_delta(chunk, [3], request, prompt_token_ids=[]) for chunk in chunks
++    ]
++    calls = _collect(messages)
++    assert [call["id"] for call in calls.values()] == [
++        "functions.a:4",
++        "functions.b:5",
++        "functions.c:6",
++    ]
++    assert [json.loads(call["arguments"]) for call in calls.values()] == [
++        {},
++        {},
++        {"x": 1},
++    ]
++    assert parser._stream_state.history_tool_call_cnt == 7
++    assert other._stream_state.history_tool_call_cnt == 0
+diff --git a/vllm/entrypoints/openai/chat_completion/batch_serving.py b/vllm/entrypoints/openai/chat_completion/batch_serving.py
+index 0dfcdd925..bbcb5d0f9 100644
+--- a/vllm/entrypoints/openai/chat_completion/batch_serving.py
++++ b/vllm/entrypoints/openai/chat_completion/batch_serving.py
+@@ -250,12 +250,12 @@ class OpenAIServingChatBatch(OpenAIServingChat):
+             for output in final_res.outputs:
+                 self._raise_if_error(output.finish_reason, request_id)
+ 
+-                if request.logprobs and request.top_logprobs is not None:
++                if request.logprobs:
+                     assert output.logprobs is not None, "Did not output logprobs"
+                     logprobs = self._create_chat_logprobs(
+                         token_ids=output.token_ids,
+                         top_logprobs=output.logprobs,
+-                        num_output_top_logprobs=request.top_logprobs,
++                        num_output_top_logprobs=request.top_logprobs or 0,
+                         tokenizer=tokenizer,
+                         return_as_token_id=request.return_token_ids,
+                     )
+diff --git a/vllm/entrypoints/openai/chat_completion/protocol.py b/vllm/entrypoints/openai/chat_completion/protocol.py
+index 73ecb3f35..68df46a10 100644
+--- a/vllm/entrypoints/openai/chat_completion/protocol.py
++++ b/vllm/entrypoints/openai/chat_completion/protocol.py
+@@ -64,6 +64,13 @@ class ChatMessage(OpenAIBaseModel):
+     # vLLM-specific fields that are not in OpenAI spec
+     reasoning: str | None = None
+ 
++    @model_serializer(mode="wrap")
++    def _serialize(self, handler):
++        data = handler(self)
++        if not data.get("tool_calls"):
++            data.pop("tool_calls", None)
++        return data
++
+ 
+ class ChatCompletionLogProb(OpenAIBaseModel):
+     token: str
+@@ -624,7 +631,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
+             seed=self.seed,
+             stop=self.stop,
+             stop_token_ids=self.stop_token_ids,
+-            logprobs=self.top_logprobs if self.logprobs else None,
++            logprobs=(self.top_logprobs or 0) if self.logprobs else None,
+             prompt_logprobs=prompt_logprobs,
+             ignore_eos=self.ignore_eos,
+             max_tokens=max_tokens,
+diff --git a/vllm/entrypoints/openai/chat_completion/serving.py b/vllm/entrypoints/openai/chat_completion/serving.py
+index 63a94402d..6804d4b22 100644
+--- a/vllm/entrypoints/openai/chat_completion/serving.py
++++ b/vllm/entrypoints/openai/chat_completion/serving.py
+@@ -742,6 +742,7 @@ class OpenAIServingChat(OpenAIServing):
+ 
+                 for output in res.outputs:
+                     i = output.index
++                    self._raise_if_error(output.finish_reason, request_id)
+                     parser = parsers[i]
+                     tool_parser = parser.tool_parser if parser is not None else None
+ 
+@@ -758,13 +759,13 @@ class OpenAIServingChat(OpenAIServing):
+                     if finish_reason_sent[i]:
+                         continue
+ 
+-                    if request.logprobs and request.top_logprobs is not None:
++                    if request.logprobs:
+                         assert output.logprobs is not None, "Did not output logprobs"
+                         logprobs = self._create_chat_logprobs(
+                             token_ids=output.token_ids,
+                             top_logprobs=output.logprobs,
+                             tokenizer=tokenizer,
+-                            num_output_top_logprobs=request.top_logprobs,
++                            num_output_top_logprobs=request.top_logprobs or 0,
+                             return_as_token_id=request.return_tokens_as_token_ids,
+                         )
+                     else:
+@@ -911,6 +912,7 @@ class OpenAIServingChat(OpenAIServing):
+                         if (
+                             output.finish_reason is None
+                             and not request.return_token_ids
++                            and logprobs is None
+                         ):
+                             continue
+                         delta_message = DeltaMessage()
+@@ -1034,7 +1036,7 @@ class OpenAIServingChat(OpenAIServing):
+                         # finish_reason is:
+                         # "tool_calls" for "auto" or "required" tool calls,
+                         # and "stop" for named tool calls.
+-                        if (
++                        if output.finish_reason == "stop" and (
+                             auto_tools_called
+                             or (tools_streamed[i] and not tool_choice_function_name)
+                             or (self.use_harmony and harmony_tools_streamed[i])
+@@ -1195,12 +1197,12 @@ class OpenAIServingChat(OpenAIServing):
+             out_logprobs = output.logprobs
+             tool_call_info = None
+ 
+-            if request.logprobs and request.top_logprobs is not None:
++            if request.logprobs:
+                 assert out_logprobs is not None, "Did not output logprobs"
+                 logprobs = self._create_chat_logprobs(
+                     token_ids=token_ids,
+                     top_logprobs=out_logprobs,
+-                    num_output_top_logprobs=request.top_logprobs,
++                    num_output_top_logprobs=request.top_logprobs or 0,
+                     tokenizer=tokenizer,
+                     return_as_token_id=request.return_tokens_as_token_ids,
+                 )
+@@ -1257,7 +1259,11 @@ class OpenAIServingChat(OpenAIServing):
+                     logprobs=logprobs,
+                     finish_reason=(
+                         "tool_calls"
+-                        if (tool_call_info is not None and tool_call_info.tools_called)
++                        if (
++                            output.finish_reason == "stop"
++                            and tool_call_info is not None
++                            and tool_call_info.tools_called
++                        )
+                         else output.finish_reason
+                         if output.finish_reason
+                         else "stop"
+@@ -1469,10 +1475,8 @@ class OpenAIServingChat(OpenAIServing):
+             # In OpenAI's API, when a tool is called, the finish_reason is:
+             # "tool_calls" for "auto" or "required" tool calls,
+             # and "stop" for named tool calls.
+-            is_finish_reason_tool_calls = auto_tools_called or (
+-                request.tool_choice
+-                and request.tool_choice == "required"
+-                and output.finish_reason == "stop"
++            is_finish_reason_tool_calls = output.finish_reason == "stop" and (
++                auto_tools_called or request.tool_choice == "required"
+             )
+ 
+             # Encode routed_experts for transport. JSON can't carry raw
+diff --git a/vllm/entrypoints/openai/completion/serving.py b/vllm/entrypoints/openai/completion/serving.py
+index f393954e2..2654df209 100644
+--- a/vllm/entrypoints/openai/completion/serving.py
++++ b/vllm/entrypoints/openai/completion/serving.py
+@@ -323,6 +323,7 @@ class OpenAIServingCompletion(OpenAIServing):
+                 out_logprobs: GenericSequence[dict[int, Logprob] | None] | None
+ 
+                 for output in res.outputs:
++                    self._raise_if_error(output.finish_reason, request_id)
+                     i = output.index + prompt_idx * num_choices
+ 
+                     # Useful when request.return_token_ids is True
+diff --git a/vllm/entrypoints/openai/engine/protocol.py b/vllm/entrypoints/openai/engine/protocol.py
+index 890af0300..19ee3fc2e 100644
+--- a/vllm/entrypoints/openai/engine/protocol.py
++++ b/vllm/entrypoints/openai/engine/protocol.py
+@@ -270,6 +270,13 @@ class DeltaMessage(OpenAIBaseModel):
+     reasoning: str | None = None
+     tool_calls: list[DeltaToolCall] = Field(default_factory=list)
+ 
++    @model_serializer(mode="wrap")
++    def _serialize(self, handler):
++        data = handler(self)
++        if not data.get("tool_calls"):
++            data.pop("tool_calls", None)
++        return data
++
+ 
+ class GenerationError(Exception):
+     """raised when finish_reason indicates internal server error (500)"""
+diff --git a/vllm/parser/abstract_parser.py b/vllm/parser/abstract_parser.py
+index 2a13f1386..852229b12 100644
+--- a/vllm/parser/abstract_parser.py
++++ b/vllm/parser/abstract_parser.py
+@@ -731,9 +731,11 @@ class DelegatingParser(Parser):
+             if (
+                 delta_message
+                 and delta_message.tool_calls
+-                and delta_message.tool_calls[0].id is not None
++                and any(tc.id is not None for tc in delta_message.tool_calls)
+             ):
+-                state.history_tool_call_cnt += 1
++                state.history_tool_call_cnt += sum(
++                    tc.id is not None for tc in delta_message.tool_calls
++                )
+ 
+         # No phase active: pass through as content
+         if (
+diff --git a/vllm/tool_parsers/streaming.py b/vllm/tool_parsers/streaming.py
+index 7f6638dcb..bd0e3db6f 100644
+--- a/vllm/tool_parsers/streaming.py
++++ b/vllm/tool_parsers/streaming.py
+@@ -2,12 +2,9 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
+ import json
++from dataclasses import dataclass
+ from typing import TYPE_CHECKING
+ 
+-import partial_json_parser
+-import regex as re
+-from partial_json_parser.core.options import Allow
+-
+ from vllm.entrypoints.chat_utils import make_tool_call_id
+ from vllm.entrypoints.openai.engine.protocol import (
+     DeltaFunctionCall,
+@@ -15,7 +12,6 @@ from vllm.entrypoints.openai.engine.protocol import (
+     DeltaToolCall,
+ )
+ from vllm.tool_parsers.mistral_tool_parser import MistralToolCall
+-from vllm.tool_parsers.utils import partial_json_loads
+ from vllm.utils.mistral import is_mistral_tokenizer
+ 
+ if TYPE_CHECKING:
+@@ -24,41 +20,6 @@ else:
+     TokenizerLike = object
+ 
+ 
+-def _bracket_level(s: str, opening: str = "{", closing: str = "}") -> int:
+-    """Calculate the current level of nested brackets in a string."""
+-    level = 0
+-    for char in s:
+-        if char == opening:
+-            level += 1
+-        elif char == closing:
+-            level -= 1
+-    return level
+-
+-
+-def filter_delta_text(
+-    delta_text: str,
+-    previous_text: str,
+-) -> tuple[str, bool]:
+-    """Trim trailing tool-list delimiters from required-tool streaming text."""
+-    bracket_level = _bracket_level(previous_text)
+-    updated_delta = ""
+-    passed_zero = False
+-    for char in delta_text:
+-        if char == "{":
+-            bracket_level += 1
+-            passed_zero = bracket_level == 0
+-        elif char == "}":
+-            bracket_level -= 1
+-            passed_zero = bracket_level == 0
+-
+-        if bracket_level != 0:
+-            updated_delta += char
+-        else:
+-            if char == ",":
+-                break
+-    return updated_delta, passed_zero
+-
+-
+ def extract_named_tool_call_streaming(
+     *,
+     delta_text: str,
+@@ -100,96 +61,238 @@ def extract_named_tool_call_streaming(
+     )
+ 
+ 
++@dataclass
++class _RequiredToolCallSpan:
++    """Where one element of a ``tool_choice="required"`` array sits in the text.
++
++    The model output for ``tool_choice="required"`` is a JSON array of
++    ``{"name": ..., "parameters": ...}`` objects. ``name`` is only set once
++    its string value is closed and decodes as JSON; ``name_end`` is the
++    offset just past that closing quote. ``args_start``/``args_end`` are the
++    character offsets of the ``parameters`` value (``args_end`` is ``None``
++    while the value is still being generated).
++
++    All offsets are prefix-stable: scanning any prefix of the text yields the
++    same spans truncated to that prefix. That is what lets one scan of the
++    current text tell what an earlier, shorter text had already revealed.
++    """
++
++    name: str | None = None
++    name_end: int | None = None
++    args_start: int | None = None
++    args_end: int | None = None
++
++    def ready_at(self, length: int) -> bool:
++        """Whether the first ``length`` characters of the text already made
++        this call streamable: its name was complete and its parameters value
++        had started."""
++        return (
++            self.name is not None
++            and self.name_end is not None
++            and self.name_end <= length
++            and self.args_start is not None
++            and self.args_start < length
++        )
++
++    @property
++    def ready(self) -> bool:
++        return self.name is not None and self.args_start is not None
++
++
++# Parse states for one element object of the required-tool-call array.
++_EXPECT_KEY = 0
++_EXPECT_COLON = 1
++_EXPECT_VALUE = 2
++_IN_STRING_VALUE = 3
++_IN_CONTAINER_VALUE = 4
++_IN_SCALAR_VALUE = 5
++_AFTER_VALUE = 6
++
++
++def _scan_required_tool_calls(text: str) -> list[_RequiredToolCallSpan]:
++    """Locate every tool call of a (possibly partial) required-tool-call array.
++
++    A single string- and nesting-aware pass over ``text`` that records, for
++    each top-level array element, its ``name`` (once complete) and the
++    character span of its ``parameters`` value. Text after the closing ``]``
++    of the array is ignored. Only the element level of the array is
++    interpreted, so braces, brackets and quotes inside nested values and
++    strings cannot confuse it.
++    """
++    spans: list[_RequiredToolCallSpan] = []
++    depth = 0  # nesting depth of ``{}`` and ``[]``; element objects sit at 2
++    in_string = False
++    escaped = False
++    string_start = 0
++    cur: _RequiredToolCallSpan | None = None
++    expect = _EXPECT_KEY
++    key: str | None = None
++    value_start = 0
++
++    def end_value(pos: int) -> None:
++        nonlocal expect
++        assert cur is not None
++        if key == "parameters":
++            cur.args_end = pos
++        elif key == "name" and expect == _IN_STRING_VALUE:
++            try:
++                cur.name = json.loads(text[value_start:pos])
++                cur.name_end = pos
++            except json.JSONDecodeError:
++                # Not a valid JSON string: the call can never become ready,
++                # which matches the non-streaming path rejecting the array.
++                cur.name = None
++        expect = _AFTER_VALUE
++
++    def start_value(pos: int, state: int) -> None:
++        nonlocal expect, value_start
++        assert cur is not None
++        value_start = pos
++        if key == "parameters":
++            cur.args_start = pos
++        expect = state
++
++    for i, ch in enumerate(text):
++        if in_string:
++            if escaped:
++                escaped = False
++            elif ch == "\\":
++                escaped = True
++            elif ch == '"':
++                in_string = False
++                if depth == 2 and cur is not None:
++                    if expect == _EXPECT_KEY:
++                        key = text[string_start + 1 : i]
++                        expect = _EXPECT_COLON
++                    elif expect == _IN_STRING_VALUE:
++                        end_value(i + 1)
++            continue
++
++        if ch == '"':
++            in_string = True
++            string_start = i
++            if depth == 2 and cur is not None and expect == _EXPECT_VALUE:
++                start_value(i, _IN_STRING_VALUE)
++            continue
++
++        if ch in "{[":
++            if depth == 0:
++                if ch != "[":
++                    return spans
++            elif depth == 1:
++                if ch != "{":
++                    return spans
++                cur = _RequiredToolCallSpan()
++                spans.append(cur)
++                expect = _EXPECT_KEY
++                key = None
++            elif depth == 2 and cur is not None and expect == _EXPECT_VALUE:
++                start_value(i, _IN_CONTAINER_VALUE)
++            depth += 1
++            continue
++
++        if ch in "}]":
++            if depth == 2 and cur is not None and expect == _IN_SCALAR_VALUE:
++                end_value(i)
++            depth -= 1
++            if depth == 2 and cur is not None and expect == _IN_CONTAINER_VALUE:
++                end_value(i + 1)
++            elif depth == 1:
++                cur = None
++            elif depth <= 0:
++                return spans
++            continue
++
++        if depth != 2 or cur is None:
++            continue
++
++        if ch == ":":
++            if expect == _EXPECT_COLON:
++                expect = _EXPECT_VALUE
++        elif ch == ",":
++            if expect == _IN_SCALAR_VALUE:
++                end_value(i)
++            expect = _EXPECT_KEY
++            key = None
++        elif ch.isspace():
++            if expect == _IN_SCALAR_VALUE:
++                end_value(i)
++        elif expect == _EXPECT_VALUE:
++            start_value(i, _IN_SCALAR_VALUE)
++
++    return spans
++
++
+ def extract_required_tool_call_streaming(
+     *,
+-    previous_text: str,
+-    current_text: str | None,
+     delta_text: str,
+     function_name_returned: bool,
++    previous_text: str,
++    current_text: str | None,
+     tool_call_idx: int | None,
+     tool_call_id_type: str,
+ ) -> tuple[DeltaMessage | None, bool]:
+-    if current_text is None or current_text == "":
+-        # if the current text is empty, we cannot parse it
+-        return None, function_name_returned
+-    try:
+-        flags = Allow.ALL
+-        obj, _ = partial_json_loads(current_text, flags)
+-    except (
+-        partial_json_parser.core.exceptions.MalformedJSON,
+-        json.JSONDecodeError,
+-    ):
+-        obj = None
+-
+-    # check if the current text is a valid array
+-    # containing a partial tool calling object
+-    # if not repeat
+-    if obj is None or not isinstance(obj, list) or not len(obj) > 0:
+-        function_name_returned = False
+-        delta_message = None
+-    else:
+-        _, finishes_previous_tool = filter_delta_text(delta_text, previous_text)
+-        # take the last tool call from the generated list
+-        current_tool_call = obj[-1]
+-
+-        # once parameters have been generated the name is complete as well
+-        if not finishes_previous_tool and (
+-            "name" not in current_tool_call or "parameters" not in current_tool_call
+-        ):
+-            function_name_returned = False
+-            delta_message = None
+-        else:
+-            if not function_name_returned:
+-                # get partly generated arguments from the latest tool call
+-                param_match = re.search(
+-                    r'.*"parameters":\s*(.*)', current_text, re.DOTALL
+-                )
+-                arguments = param_match.group(1) if param_match else ""
+-                arguments, _ = filter_delta_text(arguments, previous_text)
+-
+-                # if this iteration finishes a previous tool call but a
+-                # new incomplete tool is already generated, take the
+-                # previous from the list
+-                if finishes_previous_tool and "parameters" not in current_tool_call:
+-                    current_tool_call = obj[-2]
+-
+-                function_name_returned = True
+-                tool_call_id = make_tool_call_id(
+-                    id_type=tool_call_id_type,
+-                    func_name=current_tool_call["name"],
+-                    idx=tool_call_idx,
+-                )
+-                delta_message = DeltaMessage(
+-                    tool_calls=[
+-                        DeltaToolCall(
+-                            id=tool_call_id,
+-                            function=DeltaFunctionCall(
+-                                name=current_tool_call["name"], arguments=arguments
+-                            ),
+-                            index=len(obj) - 1,
+-                            type="function",
+-                        )
+-                    ]
+-                )
++    """Stream the tool calls of a ``tool_choice="required"`` JSON array.
++
++    ``previous_text`` must be a prefix of ``current_text`` (the accumulated
++    text before and after this delta). Every array element that has something
++    not yet sent is emitted, in array order, so a delta may carry several
++    ``DeltaToolCall`` entries: the first chunk of a call carries its id, name
++    and the arguments generated so far; later chunks carry only new argument
++    text. What was already sent is read off the same scan, since the spans
++    are prefix-stable, so no state is needed beyond the two texts.
++
++    Returns the delta (``None`` when nothing is new) and whether at least one
++    call has been announced so far.
++    """
++    if not current_text:
++        return None, False
+ 
+-            else:
+-                delta_text, _ = filter_delta_text(delta_text, previous_text)
+-
+-                if delta_text != "":
+-                    delta_message = DeltaMessage(
+-                        tool_calls=[
+-                            DeltaToolCall(
+-                                function=DeltaFunctionCall(
+-                                    # OpenAI API returns None
+-                                    # instead of name every time
+-                                    name=None,
+-                                    arguments=delta_text,
+-                                ),
+-                                index=len(obj) - 1,
+-                            )
+-                        ]
++    spans = _scan_required_tool_calls(current_text)
++    sent_len = len(previous_text)
++
++    tool_calls: list[DeltaToolCall] = []
++    started = 0
++    for index, span in enumerate(spans):
++        if not span.ready:
++            # Elements are generated in order: nothing later can be ready.
++            break
++        assert span.args_start is not None
++        end = span.args_end if span.args_end is not None else len(current_text)
++        if span.ready_at(sent_len):
++            # Already announced: send only the new argument text.
++            sent_end = min(end, sent_len)
++            new_arguments = current_text[sent_end:end]
++            if new_arguments:
++                tool_calls.append(
++                    DeltaToolCall(
++                        index=index,
++                        function=DeltaFunctionCall(
++                            # OpenAI API returns None instead of name every time
++                            name=None,
++                            arguments=new_arguments,
++                        ),
+                     )
+-                else:
+-                    delta_message = None
++                )
++            continue
++
++        idx = None if tool_call_idx is None else tool_call_idx + started
++        started += 1
++        tool_calls.append(
++            DeltaToolCall(
++                id=make_tool_call_id(
++                    id_type=tool_call_id_type, func_name=span.name, idx=idx
++                ),
++                type="function",
++                index=index,
++                function=DeltaFunctionCall(
++                    name=span.name,
++                    arguments=current_text[span.args_start : end],
++                ),
++            )
++        )
+ 
+-    return delta_message, function_name_returned
++    function_name_returned = any(span.ready for span in spans)
++    if not tool_calls:
++        return None, function_name_returned
++    return DeltaMessage(tool_calls=tool_calls), function_name_returned

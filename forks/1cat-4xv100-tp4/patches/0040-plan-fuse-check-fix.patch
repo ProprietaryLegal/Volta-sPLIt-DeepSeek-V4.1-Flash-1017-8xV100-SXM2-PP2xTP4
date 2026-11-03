@@ -1,0 +1,18 @@
+diff --git a/benchmarks/deepseek_v41/plan_fuse_check.py b/benchmarks/deepseek_v41/plan_fuse_check.py
+index af25ef769..cef6215cf 100644
+--- a/benchmarks/deepseek_v41/plan_fuse_check.py
++++ b/benchmarks/deepseek_v41/plan_fuse_check.py
+@@ -205,9 +205,11 @@ def main():
+             miss["xq_xd"] += int(not (_same(a.xq, b.xq) and _same(a.xd, b.xd)))
+             miss["hq_hd"] += int(not (_same(a.hq, b.hq) and _same(a.hd, b.hd)))
+             finite += int(torch.isfinite(a.hd).all())
+-        report["mismatch"][f"M{m}"] = miss
+-        report["mismatch"][f"M{m}"]["hd_all_finite_trials"] = finite
+         bad += sum(miss.values())
++        # Synthetic weights keep every fp16 scale finite, so a non-finite hd is a
++        # kernel fault; gate it separately (it is a count of good trials).
++        bad += int(finite != args.trials)
++        report["mismatch"][f"M{m}"] = dict(miss, hd_all_finite_trials=finite)
+         ids = _ids(m, 0, g, dev)
+         x = torch.randn(m, K_DIM, device=dev, generator=g).half()
+         prob = torch.rand(m, TOP_K, device=dev, generator=g)

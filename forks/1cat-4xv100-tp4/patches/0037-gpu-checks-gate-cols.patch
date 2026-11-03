@@ -1,0 +1,131 @@
+diff --git a/benchmarks/deepseek_v41/plan_fuse_check.py b/benchmarks/deepseek_v41/plan_fuse_check.py
+index 4051418ec..af25ef769 100644
+--- a/benchmarks/deepseek_v41/plan_fuse_check.py
++++ b/benchmarks/deepseek_v41/plan_fuse_check.py
+@@ -85,6 +85,11 @@ class Layer:
+     def __init__(self, m, ids, x, prob, gate, up, gtype, book, garbage):
+         dev = x.device
+         routes = m * TOP_K
++        # the serving dtypes and shapes of _v41_experts_rows (TP4 row split)
++        assert x.dtype == torch.float16 and x.shape == (m, K_DIM)
++        assert ids.dtype == torch.int32 and ids.is_contiguous()
++        assert ids.numel() == routes and prob.dtype == torch.float32
++        assert gate.dtype == torch.uint8 and gate.shape[:2] == (E, ROWS)
+         self.args = (ids, prob, gate, up, gtype, book)
+         self.x = x
+         self.xq = torch.zeros((m, 160, 32), dtype=torch.int8, device=dev)
+diff --git a/benchmarks/deepseek_v41/router_floor_check.py b/benchmarks/deepseek_v41/router_floor_check.py
+index 333e5dfc1..a58f1db29 100644
+--- a/benchmarks/deepseek_v41/router_floor_check.py
++++ b/benchmarks/deepseek_v41/router_floor_check.py
+@@ -3,7 +3,8 @@
+ """GPU check for the V4.1 router floor kernels (one GPU, synthetic inputs).
+ 
+ 1. Bit equality, M = 1..6: ``_gate_cols`` vs ``_row_projection`` (FP32 gate
+-   logits from FP16 activations and a BF16 384 x 5120 gate) and
++   logits from FP16 activations and a 384 x 5120 gate in both serving
++   dtypes: BF16 when VLLM_V41_GATE_BF16 narrows it exactly, else FP32) and
+    ``_route_fast`` (each warp count) vs ``_route`` (ids and weight bits),
+    on random rows and on rows with exact key ties.
+ 2. Time per launch inside a CUDA graph (``--reps`` launches per replay).
+@@ -108,17 +109,26 @@ def main():
+     warps = [int(w) for w in args.warps.split(",")]
+     dev = torch.device("cuda")
+     g = torch.Generator(device=dev).manual_seed(args.seed)
+-    weight = (torch.randn(E, K_DIM, device=dev, generator=g) * 0.02).bfloat16()
++    # Serving: FP16 activations (collapse_hc with a norm weight); the V41Gate
++    # weight is FP32, narrowed to BF16 at load when that is exact.
++    bf16 = (torch.randn(E, K_DIM, device=dev, generator=g) * 0.02).bfloat16()
++    # not BF16-exact, so a gate like this one stays FP32 in serving
++    fp32 = bf16.float() + torch.randn(E, K_DIM, device=dev, generator=g) * 1e-5
++    weights = {"bf16": bf16, "fp32": fp32}
++    weight = bf16
+     bias = torch.randn(E, device=dev, generator=g) * 0.1
+     report = {"mismatch": {}, "us": {}}
+     bad = 0
+     for m in range(1, 7):
+         route = {w: 0 for w in warps}
+-        proj = 0
++        proj = dict.fromkeys(weights, 0)
+         for trial in range(args.trials):
+             x = torch.randn(m, K_DIM, device=dev, generator=g).half()
++            assert x.dtype == torch.float16 and x.is_contiguous()
++            for name, w_t in weights.items():
++                same = torch.equal(_bits(_proj_new(x, w_t)), _bits(_proj_ref(x, w_t)))
++                proj[name] += int(not same)
+             ref = _proj_ref(x, weight)
+-            proj += int(not torch.equal(_bits(_proj_new(x, weight)), _bits(ref)))
+             logits = ref.clone()
+             if trial % 4 == 3:  # exact key ties inside the top 6
+                 tie_bias = bias.clone()
+@@ -132,15 +142,18 @@ def main():
+                 same = torch.equal(ni.long(), ri) and torch.equal(_bits(nw), _bits(rw))
+                 route[w] += int(not same)
+         report["mismatch"][f"M{m}"] = {
+-            "gate_cols": proj,
++            **{f"gate_cols_{name}": n for name, n in proj.items()},
+             **{f"route_fast_w{w}": route[w] for w in warps},
+         }
+-        bad += proj + sum(route.values())
++        bad += sum(proj.values()) + sum(route.values())
+         x = torch.randn(m, K_DIM, device=dev, generator=g).half()
+         logits = _proj_ref(x, weight)
++        w32 = weights["fp32"]
+         us = {
+             "row_projection": _graph_us(lambda: _proj_ref(x, weight), args.reps),
+             "gate_cols": _graph_us(lambda: _proj_new(x, weight), args.reps),
++            "row_projection_fp32w": _graph_us(lambda: _proj_ref(x, w32), args.reps),
++            "gate_cols_fp32w": _graph_us(lambda: _proj_new(x, w32), args.reps),
+             "route": _graph_us(lambda: _route_ref(logits, bias), args.reps),
+             "route_plus_int32_cast": _graph_us(
+                 lambda: _route_ref(logits, bias)[1].to(torch.int32), args.reps
+diff --git a/tests/models/test_deepseek_v41_router_floor.py b/tests/models/test_deepseek_v41_router_floor.py
+index 3a72b5f2e..7116acdd2 100644
+--- a/tests/models/test_deepseek_v41_router_floor.py
++++ b/tests/models/test_deepseek_v41_router_floor.py
+@@ -148,6 +148,13 @@ def test_gate_cols_masks_a_partial_last_chunk_and_fp32_inputs():
+     assert torch.equal(_cols(x, weight), _row(x, weight))
+ 
+ 
++def test_gate_cols_matches_row_projection_with_an_fp32_gate():
++    g = torch.Generator().manual_seed(11)
++    x = torch.randn(3, 5120, generator=g).half()
++    weight = torch.randn(48, 5120, generator=g) * 0.02  # FP32 serving gate
++    assert torch.equal(_cols(x, weight), _row(x, weight))
++
++
+ def test_gate_cols_rows_do_not_depend_on_m():
+     g = torch.Generator().manual_seed(9)
+     x = torch.randn(6, 5120, generator=g).half()
+@@ -160,7 +167,9 @@ def test_gate_cols_rows_do_not_depend_on_m():
+ def test_dispatch_and_knobs():
+     src = (ROOT / "vllm/model_executor/kernels/mhc/deepseek_v41.py").read_text()
+     assert '_GATE_COLS = envs.VLLM_V41_GATE_COLS == "1"' in src
+-    assert "if _GATE_COLS and not normalized and x.shape[0] > 0:" in src
++    assert "            _GATE_COLS\n            and not normalized\n" in src
++    assert "and x.dtype == torch.float16\n" in src
++    assert "and weight.dtype in (torch.bfloat16, torch.float32)\n" in src
+     router = (
+         ROOT / "vllm/model_executor/kernels/mhc/deepseek_v41_router.py"
+     ).read_text()
+diff --git a/vllm/model_executor/kernels/mhc/deepseek_v41.py b/vllm/model_executor/kernels/mhc/deepseek_v41.py
+index 3bceaef92..f6b7fc5f0 100644
+--- a/vllm/model_executor/kernels/mhc/deepseek_v41.py
++++ b/vllm/model_executor/kernels/mhc/deepseek_v41.py
+@@ -234,7 +234,15 @@ def fp32_projection(x, weight, *, normalized=False, eps=1e-20):
+                 enable_fp_fusion=False,
+             )
+             return result
+-        if _GATE_COLS and not normalized and x.shape[0] > 0:
++        if (
++            _GATE_COLS
++            and not normalized
++            and x.shape[0] > 0
++            # only the serving dtypes router_floor_check proves bit-equal
++            and x.dtype == torch.float16
++            and weight.dtype in (torch.bfloat16, torch.float32)
++            and weight.shape == (384, 5120)
++        ):
+             _gate_cols[(weight.shape[0],)](
+                 x,
+                 weight,

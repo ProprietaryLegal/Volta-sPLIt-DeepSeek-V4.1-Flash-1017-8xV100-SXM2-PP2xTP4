@@ -1,0 +1,64 @@
+diff --git a/tests/v1/core/test_partial_prefix_cache.py b/tests/v1/core/test_partial_prefix_cache.py
+index e63462ab4..e8ccf823b 100644
+--- a/tests/v1/core/test_partial_prefix_cache.py
++++ b/tests/v1/core/test_partial_prefix_cache.py
+@@ -67,7 +67,7 @@ def test_eviction_releases_block_references():
+     assert pool.get_num_free_blocks() == free_before
+ 
+ 
+-def _request(boundaries, reasoning_ended=None):
++def _request(boundaries):
+     return Request(
+         request_id="r",
+         prompt_token_ids=list(range(1000)),
+@@ -75,7 +75,6 @@ def _request(boundaries, reasoning_ended=None):
+             max_tokens=4, extra_args={"prefix_cache_boundaries": boundaries}
+         ),
+         pooling_params=None,
+-        reasoning_ended=reasoning_ended,
+     )
+ 
+ 
+@@ -85,12 +84,6 @@ def test_request_boundaries_align_to_recurrent_chunks():
+     assert request.prefix_cache_boundaries == (align, 3 * align, 999 // align * align)
+ 
+ 
+-def test_reasoning_requests_do_not_cache_output_tokens():
+-    assert not _request([], reasoning_ended=False).cache_output_tokens
+-    assert _request([], reasoning_ended=True).cache_output_tokens
+-    assert _request([]).cache_output_tokens
+-
+-
+ class _Tokenizer:
+     """ChatML-like template: one token per role marker and content word."""
+ 
+diff --git a/vllm/v1/core/kv_cache_manager.py b/vllm/v1/core/kv_cache_manager.py
+index 05f43914e..c1e38a17a 100644
+--- a/vllm/v1/core/kv_cache_manager.py
++++ b/vllm/v1/core/kv_cache_manager.py
+@@ -733,9 +733,7 @@ class KVCacheManager:
+         # "finalized" tokens are cached.
+         num_tokens_to_cache = min(
+             total_computed_tokens + num_new_tokens,
+-            request.num_tokens
+-            if request.cache_output_tokens
+-            else request.num_prompt_tokens,
++            request.num_tokens,
+         )
+         self.coordinator.cache_blocks(request, num_tokens_to_cache)
+ 
+diff --git a/vllm/v1/request.py b/vllm/v1/request.py
+index d424ce4c7..89ad151e9 100644
+--- a/vllm/v1/request.py
++++ b/vllm/v1/request.py
+@@ -174,10 +174,6 @@ class Request:
+         )
+         # Partial prefix-cache entry selected by the last cache lookup.
+         self.partial_prefix_entry: Any = None
+-        # A request that starts in reasoning (thinking) mode: chat templates
+-        # drop the reasoning from later turns, so its output blocks can never
+-        # be a prefix of another request and are not cached.
+-        self.cache_output_tokens = reasoning_ended is not False
+ 
+         # Multi-modal related
+         self.mm_features = mm_features or []

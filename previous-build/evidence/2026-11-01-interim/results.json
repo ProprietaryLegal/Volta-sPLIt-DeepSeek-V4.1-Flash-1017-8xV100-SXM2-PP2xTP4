@@ -1,0 +1,308 @@
+{
+ "title": "DeepSeek-V4.1-Flash-1017 on 8x V100 with 1Cat-vLLM: results so far",
+ "as_of": "2026-11-01",
+ "interim": true,
+ "note": "Finished measurements only; final production numbers will follow.",
+ "credits": "Engine, launcher and EXL3 pack: philbert440 (built on 1CatAI's 1Cat-vLLM); model and Engram tables: DeepSeek.",
+ "setup": {
+  "gpus": "8x V100-SXM2-32GB, two NVLink quad boards, one host",
+  "host": "AMD Ryzen Threadripper PRO 3945WX (12C/24T), one NUMA node, 8x32 GB DDR4 RDIMM, MemTotal ~251 GiB",
+  "engine": {
+   "repo": "https://github.com/philbert440/deepseek-v4.1-v100",
+   "tag": "ds41-vision-20261025b",
+   "commit": "23cec6a9fcd1d8face54c178fced8b4300628ae5",
+   "wheel": "1cat_vllm-1.5.2.dev1149+ds41vision1025b-cp312-cp312-linux_x86_64.whl",
+   "wheel_sha256": "1a5fc4cdb0dde0956baf4014bdead1b6b3e18f179d90b5d0f670a6203d25cacf"
+  },
+  "weights": {
+   "pack": "philbert440/DeepSeek-V4.1-Flash-1017-EXL3-franken-v100@99d85a463b446e4ff07e173be6a8faf9b920b97d",
+   "engram": "deepseek-ai/DeepSeek-V4.1-Flash-1017@1bae0e1088993b9b82de08f59de5be5a34e42170 model-00047/00048-of-00048.safetensors"
+  },
+  "layout": "PP2 x TP4, one stage per NVLink quad, DSpark drafter",
+  "max_model_len": 327680,
+  "max_num_seqs": 3,
+  "kv_pool_tokens": 927004,
+  "max_num_batched_tokens": 1024,
+  "prefix_caching": true,
+  "numa": "all ranks on node 0 (patch 0001)",
+  "host_tuning": 0
+ },
+ "protocol": {
+  "prompt_tokens": "~75,000 (speed, decode-beside-prefill), ~300,000 x 3 (stress)",
+  "max_output_tokens": 2048,
+  "cache_salt": "fresh per request; prefix hits 0 in every timing cell",
+  "cold": "page cache dropped before the request",
+  "warm": "same prompt again with a new cache_salt",
+  "seeds_per_speed_cell": 6,
+  "dbp": "3,000-token decode stream; cold 75K prefill submitted 10 s later",
+  "stress": "3 x ~300K prompts submitted at once",
+  "ci": "95 % confidence interval of the change"
+ },
+ "results": [
+  {
+   "id": "baseline",
+   "status": "finished",
+   "date_utc": "2026-11-01T00:36Z/01:33Z",
+   "conditions": {
+    "memory": "DDR4-2666",
+    "graphics_clock_cap_mhz": 1425,
+    "power_limit_w": 180
+   },
+   "config": "production, Engram non-resident (VLLM_DS41_ENGRAM_RESIDENT=0)",
+   "seeds": {
+    "speed": "100-105",
+    "dbp": 30,
+    "stress": 40
+   },
+   "gates": {
+    "greedy_record_runs_identical": "3/3",
+    "functional_check": "15/15"
+   },
+   "cold_75k_ttft_s": {
+    "mean": 46.0,
+    "sd": 6.21,
+    "min": 37.88,
+    "max": 52.29,
+    "note": "bimodal"
+   },
+   "cold_prefill_tok_s": 1656,
+   "warm_75k_ttft_s": {
+    "mean": 27.02,
+    "sd": 0.07
+   },
+   "decode_tok_s": {
+    "cold_cells": 42.15,
+    "warm_cells": 40.91,
+    "accepted_per_draft": "~2.0"
+   },
+   "thinking_on_warm": {
+    "ttft_s": 29.88,
+    "decode_tok_s": 32.55,
+    "accepted_per_draft": 1.35
+   },
+   "decode_beside_cold_75k_prefill": {
+    "decode_before_tok_s": 32.2,
+    "decode_during_tok_s": 18.2,
+    "max_gap_s": 2.1,
+    "prefill_ttft_s": 104.3
+   },
+   "stress_3x300k": {
+    "completed": "3/3",
+    "wall_s": 476,
+    "ttft_s": [
+     194,
+     339,
+     469
+    ],
+    "preemptions": 0,
+    "peak_kv_pct": 35.4
+   }
+  },
+  {
+   "id": "engram_resident",
+   "status": "finished",
+   "date_utc": "2026-11-01T01:51Z/02:17Z",
+   "conditions": {
+    "memory": "DDR4-2666",
+    "graphics_clock_cap_mhz": 1425,
+    "power_limit_w": 180
+   },
+   "config": "baseline + VLLM_DS41_ENGRAM_RESIDENT=1",
+   "control": "baseline",
+   "seeds": {
+    "speed": "106-111",
+    "dbp": 31,
+    "stress": 43
+   },
+   "gates": {
+    "greedy_vs_baseline_identical": "16/16",
+    "functional_check": "15/15"
+   },
+   "cold_75k_ttft_s": {
+    "mean": 26.94,
+    "change_pct": -41.4,
+    "ci95_pct": [
+     -46.5,
+     -34.8
+    ]
+   },
+   "cold_prefill_tok_s": {
+    "value": 2785,
+    "change_pct": 68.1,
+    "ci95_pct": [
+     51.9,
+     86.9
+    ]
+   },
+   "warm_75k_ttft_s": {
+    "mean": 27.1,
+    "change_pct": 0.3,
+    "ci95_pct": [
+     -0.6,
+     1.7
+    ]
+   },
+   "decode_tok_s": {
+    "cold_cells": 46.41,
+    "warm_cells": 44.78,
+    "change_pct": [
+     10.1,
+     9.4
+    ],
+    "note": "CI spans 0"
+   },
+   "decode_beside_cold_75k_prefill": {
+    "decode_during_tok_s": 29.5,
+    "max_gap_s": 1.21,
+    "prefill_ttft_s": 53.6,
+    "prefill_ttft_change_pct": -48.6
+   },
+   "stress_3x300k": {
+    "wall_s": 368,
+    "ttft_s": [
+     120,
+     241,
+     361
+    ],
+    "preemptions": 0
+   },
+   "cost": {
+    "per_stage0_rank_gib": 45.78,
+    "ranks": 4,
+    "tables_gib": 183.1,
+    "load_s_per_rank": [
+     20.8,
+     27.3
+    ],
+    "load_gb_s": [
+     1.8,
+     2.36
+    ],
+    "host_ram_held_gib": "~208 of ~251",
+    "min_memavailable_gib": 32.0,
+    "start_needs_available_gib": "~241 with the server stopped",
+    "swap_growth": "none",
+    "oom_kills": 0
+   }
+  },
+  {
+   "id": "exl3_moe_prefill_smem_staging",
+   "status": "finished (kernel level only; no server measurement)",
+   "date_utc": "2026-10-31 (~22:20Z-22:55Z)",
+   "conditions": {
+    "graphics_clock_cap_mhz": 1425,
+    "power_limit_w": 180,
+    "gpus": 1,
+    "server": "none",
+    "checkpoint": "none"
+   },
+   "patch": "patches/v4.1-flash-1cat-vllm/0003-mp1-exl3-tiled-smem-staging.patch",
+   "knob": "VLLM_DS41_MOE_EXL3_PREFILL_SMEM=1 (default off)",
+   "harness": {
+    "T_tokens": 1016,
+    "tp_rank": 0,
+    "layers": [
+     5,
+     12
+    ],
+    "repetitions": 2
+   },
+   "bit_identical": true,
+   "tiled_pass_ms_off_to_on": {
+    "L5_r1": {
+     "gate": [
+      2.255,
+      2.021,
+      -10.4
+     ],
+     "down": [
+      2.24,
+      1.943,
+      -13.2
+     ]
+    },
+    "L5_r2": {
+     "gate": [
+      2.273,
+      1.994,
+      -12.3
+     ],
+     "down": [
+      2.217,
+      2.009,
+      -9.4
+     ]
+    },
+    "L12_r1": {
+     "gate": [
+      2.563,
+      2.32,
+      -9.5
+     ],
+     "down": [
+      2.498,
+      2.248,
+      -10.0
+     ]
+    },
+    "L12_r2": {
+     "gate": [
+      2.577,
+      2.343,
+      -9.1
+     ],
+     "down": [
+      2.502,
+      2.314,
+      -7.5
+     ]
+    }
+   },
+   "noise_floor_pct": 3,
+   "end_to_end": "not measured"
+  }
+ ],
+ "hardware_notes": [
+  {
+   "id": "pcie_completion_timeout_resets",
+   "observed": "ACPI BERT fatal PCIe error at a GPU board's root port, AER uncorrectable status 0x00004000 (Completion Timeout)",
+   "events": [
+    {
+     "date": "2026-10-22",
+     "conditions": "180 W limit, clocks up to 1477 MHz"
+    },
+    {
+     "date": "2026-10-31",
+     "conditions": "180 W limit, SM clocks uncapped"
+    }
+   ],
+   "other": "two more resets on 2026-10-31 (one after a hang) without BERT records",
+   "power_draw_above_limit_w": {
+    "uncapped_1hz_2026-10-31": [
+     192,
+     232
+    ],
+    "cap_1425_earlier_days": [
+     196,
+     217
+    ],
+    "cap_1425_500ms_2026-11-01_baseline_arm": [
+     196,
+     212
+    ]
+   },
+   "inference": "not proven: a board stops answering on its PCIe link under load transients",
+   "since_2026-11-01_boot": "no reset during the baseline and resident arms"
+  },
+  {
+   "id": "ddr4_uncorrected_ecc",
+   "observed_at": "DDR4-3200, 2026-10-31",
+   "uncorrected_errors": 4,
+   "channel": "one DIMM channel",
+   "detail": "3 during the first 392 GiB checkpoint load (2 workers SIGBUS), 1 in a CPU-only 110 GiB probe",
+   "mitigation": "memory clock DDR4-2666, same DIMMs",
+   "after": "3 rounds of 200 GiB x 5 patterns: 0 mismatches, EDAC 0 UE / 0 CE; EDAC 0/0 through both arms",
+   "note": "mitigation, not a repair; host-memory figures at DDR4-2666 are not comparable with DDR4-3200"
+  }
+ ]
+}

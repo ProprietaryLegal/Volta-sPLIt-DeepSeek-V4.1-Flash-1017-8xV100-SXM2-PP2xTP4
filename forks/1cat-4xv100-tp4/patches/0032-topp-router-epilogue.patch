@@ -1,0 +1,343 @@
+diff --git a/tests/models/test_deepseek_v41_expert_topp.py b/tests/models/test_deepseek_v41_expert_topp.py
+index 786ba6e83..d753157ec 100644
+--- a/tests/models/test_deepseek_v41_expert_topp.py
++++ b/tests/models/test_deepseek_v41_expert_topp.py
+@@ -284,6 +284,18 @@ def test_check_path_refuses(over, needle):
+         _check(_experts(), em=False)
+ 
+ 
++def test_active_rule_gates_rows_and_layers():
++    mod = _NS(prune_routes=True, experts=_experts())
++    assert ET.active_rule(mod, 1) is None  # RULE is None
++    on = _load({"VLLM_V41_PRUNE_TOPP": "0.85"})
++    calls = []
++    on.check_path = lambda experts: calls.append(experts)
++    assert on.active_rule(mod, 6) == on.RULE
++    assert on.active_rule(mod, 7) is None
++    assert on.active_rule(_NS(prune_routes=False), 1) is None
++    assert len(calls) == 1
++
++
+ def test_route_hook_off_on_and_row_gate():
+     w, ids = _router(6, seed=3)
+     mod = _NS(prune_routes=True, experts=_experts())
+@@ -326,8 +338,15 @@ def test_model_hooks_both_route_paths_and_draft_opts_out():
+     )
+     returns = [n for n in ast.walk(route) if isinstance(n, ast.Return)]
+     assert len(returns) == 2
+-    for r in returns:
+-        assert isinstance(r.value, ast.Call) and r.value.func.id == "route_hook"
++    values = [r.value for r in returns]
++    # Fused router: returns route_topk's output, the rule passed into its
++    # Triton epilogue (no extra launch). Unfused fallback: the torch prune.
++    assert sum(isinstance(v, ast.Name) for v in values) == 1
++    hooks = [v for v in values if isinstance(v, ast.Call)]
++    assert len(hooks) == 1 and hooks[0].func.id == "route_hook"
++    calls = {ast.unparse(n.func): n for n in ast.walk(route) if isinstance(n, ast.Call)}
++    assert "active_rule" in calls
++    assert any(k.arg == "prune" for k in calls["route_topk"].keywords)
+     draft = _class(ast.parse((PKG / "dspark.py").read_text()), "V41DraftMoE")
+     assert _flag(draft) is False
+ 
+diff --git a/tests/models/test_deepseek_v41_router_prune.py b/tests/models/test_deepseek_v41_router_prune.py
+new file mode 100644
+index 000000000..fbfd48aea
+--- /dev/null
++++ b/tests/models/test_deepseek_v41_router_prune.py
+@@ -0,0 +1,117 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""V4.1 fused router with the in-kernel expert top-p prune (CPU, interpreter).
++
++``route_topk(..., prune=rule)`` must equal ``expert_topp.prune`` applied to
++the unpruned ``route_topk`` output bit for bit, and ``prune=None`` must keep
++the router's original output. The Triton kernel runs in the interpreter
++(TRITON_INTERPRET=1); ``vllm.triton_utils`` is stubbed with triton itself.
++
++    python tests/models/test_deepseek_v41_router_prune.py   # or pytest
++"""
++
++import os
++
++os.environ["TRITON_INTERPRET"] = "1"  # before triton is imported
++
++import importlib.util  # noqa: E402
++import sys  # noqa: E402
++import types  # noqa: E402
++from pathlib import Path  # noqa: E402
++
++import pytest  # noqa: E402
++import torch  # noqa: E402
++import triton  # noqa: E402
++import triton.language as tl  # noqa: E402
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _load(name, path, stub=False):
++    if stub and "vllm.triton_utils" not in sys.modules:
++        mod = types.ModuleType("vllm.triton_utils")
++        mod.tl, mod.triton = tl, triton
++        sys.modules.setdefault("vllm", types.ModuleType("vllm"))
++        sys.modules["vllm.triton_utils"] = mod
++    spec = importlib.util.spec_from_file_location(name, path)
++    mod = importlib.util.module_from_spec(spec)
++    sys.modules[name] = mod
++    spec.loader.exec_module(mod)
++    return mod
++
++
++ROUTER = _load(
++    "v41_router_under_test",
++    ROOT / "vllm/model_executor/kernels/mhc/deepseek_v41_router.py",
++    stub=True,
++)
++ET = _load(
++    "v41_expert_topp_router_test", ROOT / "vllm/models/deepseek_v41/expert_topp.py"
++)
++Rule = ET.Rule
++
++
++def _inputs(rows, seed):
++    g = torch.Generator().manual_seed(seed)
++    logits = torch.randn(rows, 384, generator=g) * 2.0
++    bias = torch.randn(384, generator=g) * 0.1
++    return logits, bias
++
++
++def _torch_router(logits, bias, k=6, scale=1.5):
++    scores = torch.nn.functional.softplus(logits).sqrt()
++    ids = (scores + bias).topk(k, dim=-1).indices
++    p = scores.gather(1, ids)
++    return p / (p.sum(-1, keepdim=True) + 1e-20) * scale, ids
++
++
++def test_unpruned_router_matches_torch():
++    logits, bias = _inputs(6, 0)
++    w, ids = ROUTER.route_topk(logits, bias, 6, 1.5)
++    tw, tids = _torch_router(logits, bias)
++    assert torch.equal(ids, tids)
++    torch.testing.assert_close(w, tw, rtol=1e-5, atol=1e-6)
++
++
++RULES = [
++    Rule(0.85, 0.0, 3, "kept"),
++    Rule(0.7, 0.0, 1, "kept"),
++    Rule(0.5, 0.0, 2, "orig"),
++    Rule(0.0, 0.12, 2, "kept"),
++    Rule(0.9, 0.05, 3, "orig"),
++]
++
++
++@pytest.mark.parametrize("rule", RULES, ids=str)
++@pytest.mark.parametrize("seed", [0, 1])
++def test_in_kernel_prune_is_bit_equal_to_torch_rule(rule, seed):
++    logits, bias = _inputs(6, seed)
++    w, ids = ROUTER.route_topk(logits, bias, 6, 1.5)
++    pw, pids = ROUTER.route_topk(logits, bias, 6, 1.5, prune=rule)
++    ew, eids = ET.prune(w, ids, rule, 1.5)
++    assert torch.equal(pids, eids)
++    assert torch.equal(pw, ew), (pw, ew)
++
++
++def test_production_rule_drops_routes_in_kernel():
++    logits, bias = _inputs(6, 9)
++    rule = Rule(0.85, 0.0, 3, "kept")
++    hits = 0
++    for seed in range(4):
++        logits, bias = _inputs(6, seed + 20)
++        pw, pids = ROUTER.route_topk(logits, bias, 6, 1.5, prune=rule)
++        assert ((pids >= 0).sum(1) >= 3).all()
++        assert torch.equal(pw[pids < 0], torch.zeros_like(pw[pids < 0]))
++        hits += int((pids < 0).sum())
++    assert hits > 0
++
++
++def test_min_k_at_or_above_k_is_a_no_op():
++    logits, bias = _inputs(4, 3)
++    w, ids = ROUTER.route_topk(logits, bias, 6, 1.5)
++    pw, pids = ROUTER.route_topk(logits, bias, 6, 1.5, prune=Rule(0.5, 0.0, 6))
++    assert torch.equal(w, pw) and torch.equal(ids, pids)
++
++
++if __name__ == "__main__":
++    sys.exit(pytest.main([__file__, "-q"]))
+diff --git a/vllm/model_executor/kernels/mhc/deepseek_v41_router.py b/vllm/model_executor/kernels/mhc/deepseek_v41_router.py
+index 983db097e..12e8c5e98 100644
+--- a/vllm/model_executor/kernels/mhc/deepseek_v41_router.py
++++ b/vllm/model_executor/kernels/mhc/deepseek_v41_router.py
+@@ -1,12 +1,69 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+-"""Fused V4.1 router epilogue: sqrt(softplus) scores, biased top-k, renormalize."""
++"""Fused V4.1 router epilogue: sqrt(softplus) scores, biased top-k, renormalize.
++
++With PRUNE, the lossy decode expert top-p rule of
++vllm/models/deepseek_v41/expert_topp.py runs on the K weights in registers
++(no extra launch): dropped slots get weight 0 and id -1. It is bit-equal to
++expert_topp.prune(unpruned weights, ids, rule, SCALE).
++"""
+ 
+ import torch
+ 
+ from vllm.triton_utils import tl, triton
+ 
+ 
++@triton.jit
++def _pick(x, k, j):
++    """Lane j of an 8-lane vector as a scalar (exact: one non-zero term)."""
++    return tl.sum(tl.where(k == j, x, 0.0), 0)
++
++
++@triton.jit
++def _prune(
++    w,
++    chosen,
++    k,
++    K: tl.constexpr,
++    SCALE: tl.constexpr,
++    TOPP: tl.constexpr,
++    MIN_W: tl.constexpr,
++    MIN_K: tl.constexpr,
++    ORIG: tl.constexpr,
++):
++    live = k < K
++    w = tl.where(live, w, 0.0)
++    total = _pick(w, k, 0)
++    for j in tl.static_range(1, K):
++        total = total + _pick(w, k, j)
++    f = w / total
++    # rank: f descending, ties to the lower slot.
++    rank = tl.zeros((8,), tl.int32)
++    for j in tl.static_range(K):
++        fj = _pick(f, k, j)
++        ahead = (fj > f) | ((fj == f) & (j < k))
++        rank += ahead.to(tl.int32)
++    # Exclusive prefix of f in rank order, accumulated sequentially.
++    excl = tl.zeros((8,), tl.float32)
++    acc = _pick(f, k, -1)
++    for r in tl.static_range(K):
++        at = live & (rank == r)
++        excl = tl.where(at, acc, excl)
++        acc = acc + tl.sum(tl.where(at, f, 0.0), 0)
++    mass = f >= MIN_W
++    if TOPP > 0.0:
++        mass = mass & (excl < TOPP)
++    keep = live & ((rank < MIN_K) | mass)
++    ks = tl.sum(tl.where((k == 0) & keep, w, 0.0), 0)
++    for i in tl.static_range(1, K):
++        ks = ks + tl.sum(tl.where((k == i) & keep, w, 0.0), 0)
++    kept = w if ORIG else SCALE * (w / ks)
++    all_kept = tl.sum((live & ~keep).to(tl.int32), 0) == 0
++    out = tl.where(all_kept, w, tl.where(keep, kept, 0.0))
++    ids = tl.where(all_kept | keep, chosen, -1)
++    return out, ids
++
++
+ @triton.jit
+ def _route(
+     logits,
+@@ -17,6 +74,11 @@ def _route(
+     K: tl.constexpr,
+     SCALE: tl.constexpr,
+     BLOCK: tl.constexpr,
++    PRUNE: tl.constexpr = False,
++    TOPP: tl.constexpr = 0.0,
++    MIN_W: tl.constexpr = 0.0,
++    MIN_K: tl.constexpr = 3,
++    ORIG: tl.constexpr = False,
+ ):
+     t = tl.program_id(0)
+     e = tl.arange(0, BLOCK)
+@@ -38,11 +100,14 @@ def _route(
+         key = tl.where(e == index, float("-inf"), key)
+     total = tl.sum(tl.where(k < K, values, 0.0), 0)
+     out = values / (total + 1e-20) * SCALE
++    if PRUNE:
++        out, chosen = _prune(out, chosen, k, K, SCALE, TOPP, MIN_W, MIN_K, ORIG)
+     tl.store(probs + t * K + k, out, k < K)
+     tl.store(ids + t * K + k, chosen.to(tl.int64), k < K)
+ 
+ 
+-def route_topk(logits, bias, top_k=6, scale=1.5):
++def route_topk(logits, bias, top_k=6, scale=1.5, prune=None):
++    """`prune`: an expert_topp.Rule applied to every row, or None."""
+     tokens, experts = logits.shape
+     if logits.dtype != torch.float32 or bias.dtype != torch.float32 or top_k > 8:
+         raise ValueError("V4.1 fused routing requires FP32 logits/bias, top_k<=8")
+@@ -58,6 +123,11 @@ def route_topk(logits, bias, top_k=6, scale=1.5):
+             K=top_k,
+             SCALE=scale,
+             BLOCK=triton.next_power_of_2(experts),
++            PRUNE=prune is not None and prune.min_k < top_k,
++            TOPP=0.0 if prune is None else float(prune.topp),
++            MIN_W=0.0 if prune is None else float(prune.min_w),
++            MIN_K=3 if prune is None else int(prune.min_k),
++            ORIG=prune is not None and prune.renorm == "orig",
+             num_warps=4,
+         )
+     return probs, ids
+diff --git a/vllm/models/deepseek_v41/expert_topp.py b/vllm/models/deepseek_v41/expert_topp.py
+index d9d012f87..49d5a7dcc 100644
+--- a/vllm/models/deepseek_v41/expert_topp.py
++++ b/vllm/models/deepseek_v41/expert_topp.py
+@@ -201,13 +201,20 @@ def check_path(experts, em_ready=None, resident_type=None) -> None:
+         )
+ 
+ 
+-def route_hook(module, weights: torch.Tensor, ids: torch.Tensor, scale: float):
+-    """Prune a target MoE layer's decode routes when a rule is on."""
++def active_rule(module, rows: int) -> Rule | None:
++    """The rule for this layer and row count, or None (checked once)."""
+     if RULE is None or not getattr(module, "prune_routes", False):
+-        return weights, ids
++        return None
+     if not getattr(module, "_prune_checked", False):
+         check_path(module.experts)
+         module._prune_checked = True
+-    if weights.shape[0] > MAX_ROWS:
++    return RULE if rows <= MAX_ROWS else None
++
++
++def route_hook(module, weights: torch.Tensor, ids: torch.Tensor, scale: float):
++    """Torch prune for the unfused router path (the fused router prunes in its
++    Triton epilogue, see deepseek_v41_router.route_topk)."""
++    rule = active_rule(module, weights.shape[0])
++    if rule is None:
+         return weights, ids
+-    return prune(weights, ids, RULE, scale)
++    return prune(weights, ids, rule, scale)
+diff --git a/vllm/models/deepseek_v41/model.py b/vllm/models/deepseek_v41/model.py
+index a02f63a29..b3e87d48e 100644
+--- a/vllm/models/deepseek_v41/model.py
++++ b/vllm/models/deepseek_v41/model.py
+@@ -74,7 +74,7 @@ from .attention_ops import (
+ )
+ from .cache import V41LatentCache
+ from .contract import pp_split_problem, validate_runtime_geometry
+-from .expert_topp import route_hook
++from .expert_topp import active_rule, route_hook
+ from .norm import short_rms_norm
+ from .pp_commit import StageCommit
+ from .quant_rope import apply_rope, attention_qdq, rope_table
+@@ -187,12 +187,18 @@ class V41MoE(nn.Module):
+     def _route(self, hidden_states, gating_output, topk, renormalize):
+         del hidden_states, renormalize
+         if _ROUTER_FUSED and gating_output.is_cuda:
+-            routed = route_topk(gating_output.float(), self.gate.bias, topk, self.scale)
++            # The lossy decode prune runs inside the router kernel (no launch).
++            rule = active_rule(self, gating_output.shape[0])
++            if rule is not None and _PRED_STATS:
++                raise RuntimeError("VLLM_V41_PRUNE_* excludes VLLM_V41_PRED_STATS")
++            routed = route_topk(
++                gating_output.float(), self.gate.bias, topk, self.scale, prune=rule
++            )
+             if _SKIP_SUBST:
+                 stash_router(gating_output.float(), self.gate.bias, self.scale)
+             if _PRED_STATS and getattr(self, "_v41_index", None) is not None:
+                 _score_prediction(self._v41_index, routed[1])
+-            return route_hook(self, routed[0], routed[1], self.scale)
++            return routed
+         scores = F.softplus(gating_output).sqrt()
+         indices = (scores + self.gate.bias).topk(topk, dim=-1).indices
+         probabilities = scores.gather(1, indices)

@@ -1,0 +1,603 @@
+diff --git a/benchmarks/deepseek_v41/router_floor_check.py b/benchmarks/deepseek_v41/router_floor_check.py
+new file mode 100644
+index 000000000..333e5dfc1
+--- /dev/null
++++ b/benchmarks/deepseek_v41/router_floor_check.py
+@@ -0,0 +1,161 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""GPU check for the V4.1 router floor kernels (one GPU, synthetic inputs).
++
++1. Bit equality, M = 1..6: ``_gate_cols`` vs ``_row_projection`` (FP32 gate
++   logits from FP16 activations and a BF16 384 x 5120 gate) and
++   ``_route_fast`` (each warp count) vs ``_route`` (ids and weight bits),
++   on random rows and on rows with exact key ties.
++2. Time per launch inside a CUDA graph (``--reps`` launches per replay).
++
++Synthetic data only. Exit status 1 if any comparison differs.
++
++    python benchmarks/deepseek_v41/router_floor_check.py --trials 500
++"""
++
++import argparse
++import json
++import sys
++
++import torch
++
++from vllm.model_executor.kernels.mhc import deepseek_v41 as mhc
++from vllm.model_executor.kernels.mhc import deepseek_v41_router as router
++
++E, K_DIM, TOP_K, SCALE = 384, 5120, 6, 1.5
++
++
++def _route_ref(logits, bias):
++    probs = torch.empty(logits.shape[0], TOP_K, device=logits.device)
++    ids = torch.empty(logits.shape[0], TOP_K, dtype=torch.int64, device=logits.device)
++    router._route[(logits.shape[0],)](
++        logits, bias, probs, ids, E=E, K=TOP_K, SCALE=SCALE, BLOCK=512, num_warps=4
++    )
++    return probs, ids
++
++
++def _route_new(logits, bias, warps):
++    probs = torch.empty(logits.shape[0], TOP_K, device=logits.device)
++    ids = torch.empty(logits.shape[0], TOP_K, dtype=torch.int32, device=logits.device)
++    router._route_fast[(logits.shape[0],)](
++        logits, bias, probs, ids, E=E, K=TOP_K, SCALE=SCALE, BLOCK=512, num_warps=warps
++    )
++    return probs, ids
++
++
++def _proj_ref(x, weight):
++    out = torch.empty(x.shape[0], E, device=x.device)
++    mhc._row_projection[(x.shape[0], E)](
++        x,
++        weight,
++        out,
++        K=K_DIM,
++        N=E,
++        NORMALIZE=False,
++        EPS=1e-20,
++        BLOCK=1024,
++        enable_fp_fusion=False,
++    )
++    return out
++
++
++def _proj_new(x, weight):
++    out = torch.empty(x.shape[0], E, device=x.device)
++    mhc._gate_cols[(E,)](
++        x,
++        weight,
++        out,
++        M=x.shape[0],
++        K=K_DIM,
++        N=E,
++        BLOCK=1024,
++        enable_fp_fusion=False,
++    )
++    return out
++
++
++def _bits(t):
++    return t.contiguous().view(torch.int32)
++
++
++def _graph_us(fn, reps):
++    fn()
++    torch.cuda.synchronize()
++    graph = torch.cuda.CUDAGraph()
++    with torch.cuda.graph(graph):
++        for _ in range(reps):
++            fn()
++    graph.replay()
++    torch.cuda.synchronize()
++    start, end = torch.cuda.Event(True), torch.cuda.Event(True)
++    best = float("inf")
++    for _ in range(5):
++        start.record()
++        graph.replay()
++        end.record()
++        torch.cuda.synchronize()
++        best = min(best, start.elapsed_time(end) * 1000.0 / reps)
++    return best
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--trials", type=int, default=500)
++    ap.add_argument("--reps", type=int, default=200)
++    ap.add_argument("--warps", default="1,2,4")
++    ap.add_argument("--seed", type=int, default=0)
++    args = ap.parse_args()
++    warps = [int(w) for w in args.warps.split(",")]
++    dev = torch.device("cuda")
++    g = torch.Generator(device=dev).manual_seed(args.seed)
++    weight = (torch.randn(E, K_DIM, device=dev, generator=g) * 0.02).bfloat16()
++    bias = torch.randn(E, device=dev, generator=g) * 0.1
++    report = {"mismatch": {}, "us": {}}
++    bad = 0
++    for m in range(1, 7):
++        route = {w: 0 for w in warps}
++        proj = 0
++        for trial in range(args.trials):
++            x = torch.randn(m, K_DIM, device=dev, generator=g).half()
++            ref = _proj_ref(x, weight)
++            proj += int(not torch.equal(_bits(_proj_new(x, weight)), _bits(ref)))
++            logits = ref.clone()
++            if trial % 4 == 3:  # exact key ties inside the top 6
++                tie_bias = bias.clone()
++                tie_bias[10:20] = 0.05
++                logits[:, 10:20] = logits.amax(1, keepdim=True) + 1.0
++            else:
++                tie_bias = bias
++            rw, ri = _route_ref(logits, tie_bias)
++            for w in warps:
++                nw, ni = _route_new(logits, tie_bias, w)
++                same = torch.equal(ni.long(), ri) and torch.equal(_bits(nw), _bits(rw))
++                route[w] += int(not same)
++        report["mismatch"][f"M{m}"] = {
++            "gate_cols": proj,
++            **{f"route_fast_w{w}": route[w] for w in warps},
++        }
++        bad += proj + sum(route.values())
++        x = torch.randn(m, K_DIM, device=dev, generator=g).half()
++        logits = _proj_ref(x, weight)
++        us = {
++            "row_projection": _graph_us(lambda: _proj_ref(x, weight), args.reps),
++            "gate_cols": _graph_us(lambda: _proj_new(x, weight), args.reps),
++            "route": _graph_us(lambda: _route_ref(logits, bias), args.reps),
++            "route_plus_int32_cast": _graph_us(
++                lambda: _route_ref(logits, bias)[1].to(torch.int32), args.reps
++            ),
++        }
++        for w in warps:
++            us[f"route_fast_w{w}"] = _graph_us(
++                lambda w=w: _route_new(logits, bias, w), args.reps
++            )
++        report["us"][f"M{m}"] = {k: round(v, 2) for k, v in us.items()}
++    report["trials_per_m"] = args.trials
++    report["ok"] = bad == 0
++    print(json.dumps(report, indent=1))
++    return 0 if bad == 0 else 1
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tests/models/test_deepseek_v41_router_floor.py b/tests/models/test_deepseek_v41_router_floor.py
+new file mode 100644
+index 000000000..3a72b5f2e
+--- /dev/null
++++ b/tests/models/test_deepseek_v41_router_floor.py
+@@ -0,0 +1,181 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""V4.1 router floor kernels against today's kernels (CPU, Triton interpreter).
++
++``_route_fast`` (int32 ids, one packed int64 max per pick) must give
++``_route``'s routes and weights bit for bit, ties included, with and without
++the expert prune; ``_gate_cols`` (one program per gate column, all rows) must
++give ``_row_projection``'s FP32 logits bit for bit for M = 1..6.
++
++Scope: the interpreter runs ``tl.sum`` as a numpy reduction, so these tests
++prove the kernels' logic (indexing, packing, tie order, masking, chunk order
++and accumulation), not the GPU's in-warp reduction trees. The GPU check is
++benchmarks/deepseek_v41/router_floor_check.py.
++
++    python tests/models/test_deepseek_v41_router_floor.py   # or pytest
++"""
++
++import os
++
++os.environ["TRITON_INTERPRET"] = "1"  # before triton is imported
++
++import ast  # noqa: E402
++import importlib.util  # noqa: E402
++import sys  # noqa: E402
++import types  # noqa: E402
++from pathlib import Path  # noqa: E402
++
++import pytest  # noqa: E402
++import torch  # noqa: E402
++import triton  # noqa: E402
++import triton.language as tl  # noqa: E402
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _stubs():
++    sys.modules.setdefault("vllm", types.ModuleType("vllm"))
++    if "vllm.triton_utils" not in sys.modules:
++        tu = types.ModuleType("vllm.triton_utils")
++        tu.tl, tu.triton = tl, triton
++        sys.modules["vllm.triton_utils"] = tu
++    if "vllm.envs" not in sys.modules:
++        envs = types.ModuleType("vllm.envs")
++        envs.VLLM_V41_COL_PROJ = "0"
++        envs.VLLM_V41_COL_B = "2"
++        envs.VLLM_V41_COL_BLOCK = "256"
++        envs.VLLM_V41_COL_W = "4"
++        envs.VLLM_V41_GATE_COLS = "0"
++        sys.modules["vllm.envs"] = envs
++        sys.modules["vllm"].envs = envs
++
++
++def _load(name, rel):
++    _stubs()
++    spec = importlib.util.spec_from_file_location(name, ROOT / rel)
++    mod = importlib.util.module_from_spec(spec)
++    sys.modules[name] = mod
++    spec.loader.exec_module(mod)
++    return mod
++
++
++ROUTER = _load(
++    "v41_router_floor_router", "vllm/model_executor/kernels/mhc/deepseek_v41_router.py"
++)
++MHC = _load("v41_router_floor_mhc", "vllm/model_executor/kernels/mhc/deepseek_v41.py")
++ET = _load("v41_router_floor_topp", "vllm/models/deepseek_v41/expert_topp.py")
++
++
++def _logits(rows, seed, ties=False):
++    g = torch.Generator().manual_seed(seed)
++    logits = torch.randn(rows, 384, generator=g) * 2.0
++    bias = torch.randn(384, generator=g) * 0.1
++    if ties:
++        # Exact key ties: equal logits on experts with equal bias, placed so
++        # that tied experts land inside the top 6.
++        bias[10:20] = 0.05
++        for r in range(rows):
++            logits[r, 10:20] = logits[r].max() + 1.0
++            logits[r, 13] = logits[r, 11]
++    return logits, bias
++
++
++@pytest.mark.parametrize("rows", [1, 2, 3, 4, 5, 6])
++@pytest.mark.parametrize("ties", [False, True])
++def test_fast_route_matches_route(rows, ties):
++    for seed in range(3):
++        logits, bias = _logits(rows, seed + 10 * rows, ties)
++        w, ids = ROUTER.route_topk(logits, bias, 6, 1.5, fast=False)
++        fw, fids = ROUTER.route_topk(logits, bias, 6, 1.5, fast=True)
++        assert ids.dtype == torch.int64 and fids.dtype == torch.int32
++        assert torch.equal(fids.long(), ids)
++        assert torch.equal(fw, w)
++
++
++def test_ties_pick_the_lowest_expert_first():
++    logits, bias = _logits(2, 1, ties=True)
++    _, fids = ROUTER.route_topk(logits, bias, 6, 1.5, fast=True)
++    for r in range(2):
++        assert fids[r].tolist() == list(range(10, 16))
++
++
++@pytest.mark.parametrize(
++    "rule", [ET.Rule(0.85, 0.0, 3, "kept"), ET.Rule(0.5, 0.05, 1, "orig")], ids=str
++)
++def test_fast_route_with_prune_matches_route(rule):
++    logits, bias = _logits(6, 4)
++    w, ids = ROUTER.route_topk(logits, bias, 6, 1.5, prune=rule, fast=False)
++    fw, fids = ROUTER.route_topk(logits, bias, 6, 1.5, prune=rule, fast=True)
++    assert torch.equal(fids.long(), ids) and torch.equal(fw, w)
++    assert int((fids < 0).sum()) > 0
++
++
++def _row(x, weight):
++    out = torch.empty(x.shape[0], weight.shape[0], dtype=torch.float32)
++    MHC._row_projection[(x.shape[0], weight.shape[0])](
++        x,
++        weight,
++        out,
++        K=x.shape[1],
++        N=weight.shape[0],
++        NORMALIZE=False,
++        EPS=1e-20,
++        BLOCK=1024,
++    )
++    return out
++
++
++def _cols(x, weight):
++    out = torch.full((x.shape[0], weight.shape[0]), float("nan"))
++    MHC._gate_cols[(weight.shape[0],)](
++        x, weight, out, M=x.shape[0], K=x.shape[1], N=weight.shape[0], BLOCK=1024
++    )
++    return out
++
++
++@pytest.mark.parametrize("rows", [1, 2, 3, 4, 5, 6])
++def test_gate_cols_matches_row_projection(rows):
++    g = torch.Generator().manual_seed(rows)
++    x = torch.randn(rows, 5120, generator=g).half()
++    weight = (torch.randn(96, 5120, generator=g) * 0.02).bfloat16()
++    assert torch.equal(_cols(x, weight), _row(x, weight))
++
++
++def test_gate_cols_masks_a_partial_last_chunk_and_fp32_inputs():
++    g = torch.Generator().manual_seed(7)
++    x = torch.randn(4, 1500, generator=g)
++    weight = (torch.randn(24, 1500, generator=g) * 0.02).bfloat16()
++    assert torch.equal(_cols(x, weight), _row(x, weight))
++
++
++def test_gate_cols_rows_do_not_depend_on_m():
++    g = torch.Generator().manual_seed(9)
++    x = torch.randn(6, 5120, generator=g).half()
++    weight = (torch.randn(48, 5120, generator=g) * 0.02).bfloat16()
++    full = _cols(x, weight)
++    for m in range(1, 6):
++        assert torch.equal(_cols(x[:m].contiguous(), weight), full[:m])
++
++
++def test_dispatch_and_knobs():
++    src = (ROOT / "vllm/model_executor/kernels/mhc/deepseek_v41.py").read_text()
++    assert '_GATE_COLS = envs.VLLM_V41_GATE_COLS == "1"' in src
++    assert "if _GATE_COLS and not normalized and x.shape[0] > 0:" in src
++    router = (
++        ROOT / "vllm/model_executor/kernels/mhc/deepseek_v41_router.py"
++    ).read_text()
++    assert '_FAST = os.getenv("VLLM_V41_ROUTE_FAST", "0") == "1"' in router
++    envs = (ROOT / "vllm/envs.py").read_text()
++    for name, d in (
++        ("VLLM_V41_GATE_COLS", "0"),
++        ("VLLM_V41_ROUTE_FAST", "0"),
++        ("VLLM_V41_ROUTE_WARPS", "1"),
++    ):
++        assert f'    {name}: str = "{d}"\n' in envs
++        assert f'lambda: os.getenv("{name}", "{d}")' in envs
++    check = ROOT / "benchmarks/deepseek_v41/router_floor_check.py"
++    ast.parse(check.read_text())
++
++
++if __name__ == "__main__":
++    sys.exit(pytest.main([__file__, "-q"]))
+diff --git a/vllm/envs.py b/vllm/envs.py
+index d2bb57ca9..c5d07a48a 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -482,6 +482,7 @@ if TYPE_CHECKING:
+     VLLM_V41_FUSED_SPARSE: str = "0"
+     VLLM_V41_FUSED_SPARSE_MIN: str = "64"
+     VLLM_V41_GATE_BF16: str = "1"
++    VLLM_V41_GATE_COLS: str = "0"
+     VLLM_V41_GATHER_WPD: str | None = None
+     VLLM_V41_HC_COLS: str = "32"
+     VLLM_V41_HC_CUDA: str = "0"
+@@ -518,6 +519,8 @@ if TYPE_CHECKING:
+     VLLM_V41_PRUNE_TOPP: str = "0"
+     VLLM_V41_ROUTED_PREFILL_MAX: str = "1536"
+     VLLM_V41_ROUTER_FUSED: str = "1"
++    VLLM_V41_ROUTE_FAST: str = "0"
++    VLLM_V41_ROUTE_WARPS: str = "1"
+     VLLM_V41_ROUTE_TRACE: str | None = None
+     VLLM_V41_ROWS_TILE: str = "4,8"
+     VLLM_V41_SESSION_PREFIX: str = "0"
+@@ -7502,6 +7505,19 @@ environment_variables: dict[str, Callable[[], Any]] = {
+         acceleration_paths=(),
+         user_visible=False,
+     ),
++    "VLLM_V41_GATE_COLS": env_var(
++        lambda: os.getenv("VLLM_V41_GATE_COLS", "0"),
++        description=(
++            "DS-V4.1 router floor (bit-equal routes): "
++            "1 = one program per gate column for all rows."
++        ),
++        category="tuning",
++        declared_default="'0'",
++        effective_default="'0'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
+     "VLLM_V41_GATHER_WPD": env_var(
+         lambda: os.getenv("VLLM_V41_GATHER_WPD"),
+         description=("DS-V4.1 v41k peer gather tuning."),
+@@ -7912,6 +7928,32 @@ environment_variables: dict[str, Callable[[], Any]] = {
+         acceleration_paths=(),
+         user_visible=False,
+     ),
++    "VLLM_V41_ROUTE_FAST": env_var(
++        lambda: os.getenv("VLLM_V41_ROUTE_FAST", "0"),
++        description=(
++            "DS-V4.1 router floor (bit-equal routes): "
++            "1 = int32 ids and one packed max per pick."
++        ),
++        category="tuning",
++        declared_default="'0'",
++        effective_default="'0'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
++    "VLLM_V41_ROUTE_WARPS": env_var(
++        lambda: os.getenv("VLLM_V41_ROUTE_WARPS", "1"),
++        description=(
++            "DS-V4.1 router floor (bit-equal routes): "
++            "warps for VLLM_V41_ROUTE_FAST."
++        ),
++        category="tuning",
++        declared_default="'1'",
++        effective_default="'1'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
+     "VLLM_V41_ROUTE_TRACE": env_var(
+         lambda: os.getenv("VLLM_V41_ROUTE_TRACE"),
+         description=("DS-V4.1 SM70 runtime switch (developer)."),
+diff --git a/vllm/model_executor/kernels/mhc/deepseek_v41.py b/vllm/model_executor/kernels/mhc/deepseek_v41.py
+index 913f2334e..3bceaef92 100644
+--- a/vllm/model_executor/kernels/mhc/deepseek_v41.py
++++ b/vllm/model_executor/kernels/mhc/deepseek_v41.py
+@@ -17,6 +17,7 @@ _COL_PROJECTION = envs.VLLM_V41_COL_PROJ == "1"
+ _COLB = int(envs.VLLM_V41_COL_B)
+ _COL_BLOCK = int(envs.VLLM_V41_COL_BLOCK)
+ _COL_WARPS = int(envs.VLLM_V41_COL_W)
++_GATE_COLS = envs.VLLM_V41_GATE_COLS == "1"
+ 
+ 
+ @triton.jit
+@@ -48,6 +49,33 @@ def _row_projection(
+     tl.store(out + row * N + col, dot)
+ 
+ 
++@triton.jit
++def _gate_cols(
++    x,
++    weight,
++    out,
++    M: tl.constexpr,
++    K: tl.constexpr,
++    N: tl.constexpr,
++    BLOCK: tl.constexpr,
++):
++    # One program per output column for all M (<= 8) rows. Every row runs the
++    # exact _row_projection body (same 1024-wide chunks, chunk order, loads,
++    # reduction and warps), so its FP32 result does not depend on M or on
++    # which kernel ran; the weight row is read once instead of M times.
++    col = tl.program_id(0)
++    index = tl.arange(0, BLOCK)
++    rows = tl.arange(0, 8)
++    acc = tl.zeros((8,), tl.float32)
++    for first in tl.static_range(triton.cdiv(K, BLOCK)):
++        k = first * BLOCK + index
++        for row in tl.static_range(M):
++            a = tl.load(x + row * K + k, k < K, 0).to(tl.float32)
++            b = tl.load(weight + col * K + k, k < K, 0).to(tl.float32)
++            acc = tl.where(rows == row, acc + tl.sum(a * b, 0), acc)
++    tl.store(out + rows * N + col, acc, rows < M)
++
++
+ @triton.jit
+ def _col_projection(
+     x,
+@@ -206,6 +234,18 @@ def fp32_projection(x, weight, *, normalized=False, eps=1e-20):
+                 enable_fp_fusion=False,
+             )
+             return result
++        if _GATE_COLS and not normalized and x.shape[0] > 0:
++            _gate_cols[(weight.shape[0],)](
++                x,
++                weight,
++                result,
++                M=x.shape[0],
++                K=x.shape[1],
++                N=weight.shape[0],
++                BLOCK=1024,
++                enable_fp_fusion=False,
++            )
++            return result
+         _row_projection[(x.shape[0], weight.shape[0])](
+             x,
+             weight,
+diff --git a/vllm/model_executor/kernels/mhc/deepseek_v41_router.py b/vllm/model_executor/kernels/mhc/deepseek_v41_router.py
+index 12e8c5e98..a1764d1b2 100644
+--- a/vllm/model_executor/kernels/mhc/deepseek_v41_router.py
++++ b/vllm/model_executor/kernels/mhc/deepseek_v41_router.py
+@@ -8,10 +8,17 @@ vllm/models/deepseek_v41/expert_topp.py runs on the K weights in registers
+ expert_topp.prune(unpruned weights, ids, rule, SCALE).
+ """
+ 
++import os
++
+ import torch
+ 
+ from vllm.triton_utils import tl, triton
+ 
++# Router floor (default off): int32 ids (no int64 -> int32 cast launch), one
++# packed max per pick, ROUTE_WARPS warps. Routes and weights stay bit-equal.
++_FAST = os.getenv("VLLM_V41_ROUTE_FAST", "0") == "1"
++_FAST_WARPS = int(os.getenv("VLLM_V41_ROUTE_WARPS", "1"))
++
+ 
+ @triton.jit
+ def _pick(x, k, j):
+@@ -106,15 +113,75 @@ def _route(
+     tl.store(ids + t * K + k, chosen.to(tl.int64), k < K)
+ 
+ 
+-def route_topk(logits, bias, top_k=6, scale=1.5, prune=None):
+-    """`prune`: an expert_topp.Rule applied to every row, or None."""
++@triton.jit
++def _route_fast(
++    logits,
++    bias,
++    probs,
++    ids,
++    E: tl.constexpr,
++    K: tl.constexpr,
++    SCALE: tl.constexpr,
++    BLOCK: tl.constexpr,
++    PRUNE: tl.constexpr = False,
++    TOPP: tl.constexpr = 0.0,
++    MIN_W: tl.constexpr = 0.0,
++    MIN_K: tl.constexpr = 3,
++    ORIG: tl.constexpr = False,
++):
++    # _route with each pick's (max key, lowest index on ties) taken by one
++    # int64 max: high word = the key's order-preserving int32, low word =
++    # BLOCK - 1 - e. Exact for every non-NaN key (+0 and -0 aside, which a
++    # positive score plus a bias cannot produce as -0). Scores, the picked
++    # values and the weight sum are the _route expressions, unchanged.
++    t = tl.program_id(0)
++    e = tl.arange(0, BLOCK)
++    valid = e < E
++    g = tl.load(logits + t * E + e, valid, 0.0)
++    soft = tl.where(g > 20.0, g, tl.log(1.0 + tl.exp(tl.minimum(g, 20.0))))
++    score = tl.sqrt(soft)
++    key = tl.where(valid, score + tl.load(bias + e, valid, 0.0), float("-inf"))
++    bits = key.to(tl.int32, bitcast=True)
++    ordered = tl.where(bits >= 0, bits, bits ^ 0x7FFFFFFF)
++    packed = (ordered.to(tl.int64) << 32) | (BLOCK - 1 - e).to(tl.int64)
++    taken = tl.full((BLOCK,), -(2**63), tl.int64)
++    k = tl.arange(0, 8)
++    chosen = tl.zeros((8,), tl.int32)
++    values = tl.zeros((8,), tl.float32)
++    for j in tl.static_range(K):
++        best = tl.max(packed, 0)
++        index = (BLOCK - 1) - (best & 0xFFFFFFFF).to(tl.int32)
++        value = tl.sum(tl.where(e == index, score, 0.0), 0)
++        chosen = tl.where(k == j, index, chosen)
++        values = tl.where(k == j, value, values)
++        packed = tl.where(e == index, taken, packed)
++    total = tl.sum(tl.where(k < K, values, 0.0), 0)
++    out = values / (total + 1e-20) * SCALE
++    if PRUNE:
++        out, chosen = _prune(out, chosen, k, K, SCALE, TOPP, MIN_W, MIN_K, ORIG)
++    tl.store(probs + t * K + k, out, k < K)
++    tl.store(ids + t * K + k, chosen, k < K)
++
++
++def route_topk(logits, bias, top_k=6, scale=1.5, prune=None, fast=None):
++    """`prune`: an expert_topp.Rule applied to every row, or None.
++
++    `fast` (default VLLM_V41_ROUTE_FAST) returns int32 ids from _route_fast.
++    """
+     tokens, experts = logits.shape
+     if logits.dtype != torch.float32 or bias.dtype != torch.float32 or top_k > 8:
+         raise ValueError("V4.1 fused routing requires FP32 logits/bias, top_k<=8")
++    fast = _FAST if fast is None else fast
+     probs = torch.empty(tokens, top_k, dtype=torch.float32, device=logits.device)
+-    ids = torch.empty(tokens, top_k, dtype=torch.int64, device=logits.device)
++    ids = torch.empty(
++        tokens,
++        top_k,
++        dtype=torch.int32 if fast else torch.int64,
++        device=logits.device,
++    )
+     if tokens:
+-        _route[(tokens,)](
++        kernel = _route_fast if fast else _route
++        kernel[(tokens,)](
+             logits.contiguous(),
+             bias,
+             probs,
+@@ -128,6 +195,6 @@ def route_topk(logits, bias, top_k=6, scale=1.5, prune=None):
+             MIN_W=0.0 if prune is None else float(prune.min_w),
+             MIN_K=3 if prune is None else int(prune.min_k),
+             ORIG=prune is not None and prune.renorm == "orig",
+-            num_warps=4,
++            num_warps=_FAST_WARPS if fast else 4,
+         )
+     return probs, ids

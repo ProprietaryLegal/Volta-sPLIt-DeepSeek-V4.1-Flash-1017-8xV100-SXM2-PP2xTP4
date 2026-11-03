@@ -1,0 +1,40 @@
+diff --git a/vllm/models/deepseek_v4/sm70/indexer.py b/vllm/models/deepseek_v4/sm70/indexer.py
+index f34971857..6ab85f6aa 100644
+--- a/vllm/models/deepseek_v4/sm70/indexer.py
++++ b/vllm/models/deepseek_v4/sm70/indexer.py
+@@ -983,7 +983,9 @@ def sm70_indexer_decode_logits(
+             table_rows_per_request,
+         )
+         if blocker is None:
+-            logger.info_once("SM70 indexer decode: cuBLAS route on %s.", q.device)
++            logger.info_once(
++                "SM70 indexer decode: cuBLAS route on %s.", q.device, scope="process"
++            )
+             return _decode_logits_cublas(
+                 q,
+                 cache,
+@@ -998,6 +1000,7 @@ def sm70_indexer_decode_logits(
+             "needs %s.",
+             q.device,
+             blocker,
++            scope="process",
+         )
+ 
+     if native_rows:
+diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
+index 2927a7e07..5c1b6a4ce 100644
+--- a/vllm/v1/engine/core.py
++++ b/vllm/v1/engine/core.py
+@@ -260,6 +260,12 @@ class EngineCore:
+                 # much memory can be allocated for kv cache.
+                 available_gpu_memory = self.model_executor.determine_available_memory()
+                 self.available_gpu_memory_for_kv_cache = available_gpu_memory[0]
++                # The pool is the smallest one over the workers; only rank 0 logs
++                # its own figure, so name all of them.
++                logger.info(
++                    "Available KV cache memory per worker: %s",
++                    ", ".join(f"{m / 2**30:.2f} GiB" for m in available_gpu_memory),
++                )
+         else:
+             # Attention free models don't need memory for kv cache
+             available_gpu_memory = [0] * len(kv_cache_specs)

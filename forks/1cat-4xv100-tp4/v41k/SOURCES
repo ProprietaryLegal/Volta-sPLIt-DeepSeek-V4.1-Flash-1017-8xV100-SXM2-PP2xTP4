@@ -1,0 +1,9 @@
+# v41k source files in the patched tree (path relative to the 1Cat-vLLM checkout), sha256 first 12 hex.
+# This is the gu1103 source of the 8-GPU host's deployed v41k.so (V41PKG 7e9a15686 = combo1103f); build_v41k.sh refuses to
+# build if any file differs. Full sha256 sums are not stored: the repository keeps 40+ hex runs out.
+benchmarks/deepseek_v41/v41k/v41k.cu	84fd6fa10a95
+benchmarks/deepseek_v41/v41k/v41k_fast.cuh	7935e93c1996
+benchmarks/deepseek_v41/v41k/v41k_fast_gu.cuh	0851cf21cb17
+benchmarks/deepseek_v41/v41k/build.py	5199f80df340
+csrc/sm70_turbomind/ops/gguf_dp4a.cuh	4be5909c9bc7
+csrc/sm70_turbomind/ops/gguf_dmv13_x.cuh	54caa54e76ab

@@ -1,0 +1,40 @@
+diff --git a/tests/models/test_deepseek_v41_expert_fast.py b/tests/models/test_deepseek_v41_expert_fast.py
+index 51e87ecb8..968c79e27 100644
+--- a/tests/models/test_deepseek_v41_expert_fast.py
++++ b/tests/models/test_deepseek_v41_expert_fast.py
+@@ -96,7 +96,9 @@ def _module(fast, ops, peer, plan_fuse=False):
+         "_PLAN_FUSE": plan_fuse,
+         "_EM": {"books": {}},
+         "default_v41k_library": lambda: "/x/v41k.so",
+-        "logger": types.SimpleNamespace(info_once=logs.append),
++        "logger": types.SimpleNamespace(
++            info_once=lambda msg, *args, scope="local": logs.append((msg, scope))
++        ),
+         "_plan": lambda device: FakeTensor("plan"),
+         "_q8_and_plan": q8_and_plan,
+         "_PEER": {"dev": (2, (11, 12, 13, 14), own, 7)} if peer else {},
+@@ -208,7 +210,9 @@ def test_knob_on_matches_down_rows_arguments(peer, warps, classes):
+     assert new[1][9].name == old[1][10].name == "plan"
+     # the same launches in the same order
+     assert _sequence(calls_new) == _sequence(calls_old)
+-    assert len(logs) == 2 and "VLLM_V41_EXPERT_FAST=1" in logs[0]
++    assert len(logs) == 2 and "VLLM_V41_EXPERT_FAST=1" in logs[0][0]
++    # every PP / TP worker logs its activation line, not only rank 0
++    assert all(scope == "process" for _, scope in logs)
+ 
+ 
+ def test_fast_table_built_once_per_type():
+diff --git a/vllm/model_executor/layers/quantization/gguf_v41_moe.py b/vllm/model_executor/layers/quantization/gguf_v41_moe.py
+index f367f9503..058002ad5 100644
+--- a/vllm/model_executor/layers/quantization/gguf_v41_moe.py
++++ b/vllm/model_executor/layers/quantization/gguf_v41_moe.py
+@@ -248,7 +248,8 @@ def _expert_fast_book(kind, device):
+         logger.info_once(
+             "VLLM_V41_EXPERT_FAST=1: routed experts on v41k gate_up_fast and "
+             "down_rows_fast (bit-identical to gate_up7 / gate_up7p and to "
+-            "down_rows at row tile rows=4)"
++            "down_rows at row tile rows=4)",
++            scope="process",
+         )
+         book = torch.ops.v41k.fast_table(kind, device)
+         _EM["books"][key] = book  # type: ignore[index]

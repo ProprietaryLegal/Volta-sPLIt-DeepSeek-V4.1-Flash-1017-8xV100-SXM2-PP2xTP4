@@ -1,0 +1,701 @@
+diff --git a/tests/models/test_deepseek_v41_expert_topp.py b/tests/models/test_deepseek_v41_expert_topp.py
+new file mode 100644
+index 000000000..786ba6e83
+--- /dev/null
++++ b/tests/models/test_deepseek_v41_expert_topp.py
+@@ -0,0 +1,350 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""V4.1 lossy decode expert top-p prune (CPU).
++
++``expert_topp.prune`` must equal a line-by-line transcription of TensorFold's
++router_gemv.cu ``prune_row`` (fp32, op by op) bit for bit, leave untouched rows
++untouched, drop to id -1 with weight 0, and stay off unless the environment
++asks. ``check_path`` must refuse every route consumer that indexes with the id.
++The module is loaded from its file (it imports only torch); the model hook,
++the draft opt-out and the env registration are checked from source.
++
++    python tests/models/test_deepseek_v41_expert_topp.py   # or pytest
++"""
++
++import ast
++import importlib.util
++import os
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++import torch
++
++ROOT = Path(__file__).resolve().parents[2]
++PKG = ROOT / "vllm" / "models" / "deepseek_v41"
++SRC = PKG / "expert_topp.py"
++
++
++def _load(env=None):
++    name = "v41_expert_topp_under_test"
++    saved = dict(os.environ)
++    try:
++        for k in [k for k in os.environ if k.startswith("VLLM_V41_PRUNE_")]:
++            del os.environ[k]
++        os.environ.update(env or {})
++        spec = importlib.util.spec_from_file_location(name, SRC)
++        mod = importlib.util.module_from_spec(spec)
++        sys.modules[name] = mod  # dataclasses resolve the module by name
++        spec.loader.exec_module(mod)
++        return mod
++    finally:
++        os.environ.clear()
++        os.environ.update(saved)
++
++
++ET = _load()
++Rule = ET.Rule
++
++
++def reference_row(w, ids, rule, scale=None):
++    """router_gemv.cu prune_row for one row, fp32 op by op."""
++
++    def f32(x):
++        return torch.tensor(x, dtype=torch.float32)
++
++    K = len(w)
++    W = [f32(x) for x in w]
++    total = f32(0.0)
++    for i in range(K):
++        total = total + W[i]
++    f = [W[i] / total for i in range(K)]
++    rank = [
++        sum(1 for j in range(K) if f[j] > f[i] or (f[j] == f[i] and j < i))
++        for i in range(K)
++    ]
++    excl = [None] * K
++    acc = f32(0.0)
++    for r in range(K):
++        for i in range(K):
++            if rank[i] == r:
++                excl[i] = acc
++                acc = acc + f[i]
++    topp_on = 0.0 < rule.topp < 1.0
++    keep, ks = [], f32(0.0)
++    for i in range(K):
++        mass = (bool(excl[i] < rule.topp) if topp_on else True) and bool(
++            f[i] >= rule.min_w
++        )
++        k = mass or rank[i] < rule.min_k
++        keep.append(k)
++        ks = ks + (W[i] if k else f32(0.0))
++    if all(keep) or rule.min_k >= K:
++        return list(w), list(ids)
++    s = total if scale is None else f32(scale)
++    out_w, out_i = [], []
++    for i in range(K):
++        if keep[i]:
++            kw = W[i] if rule.renorm == "orig" else s * (W[i] / ks)
++            out_w.append(float(kw))
++            out_i.append(ids[i])
++        else:
++            out_w.append(0.0)
++            out_i.append(-1)
++    return out_w, out_i
++
++
++def _router(rows, k=6, seed=0, scale=1.5):
++    """Rows shaped like the V4.1 router: sqrt(softplus) of top-k, scaled."""
++    g = torch.Generator().manual_seed(seed)
++    logits = torch.randn(rows, 384, generator=g) * 2.0
++    scores = torch.nn.functional.softplus(logits).sqrt()
++    ids = scores.topk(k, dim=-1).indices
++    p = scores.gather(1, ids)
++    p = p / p.sum(-1, keepdim=True)
++    return (p * scale).float().contiguous(), ids
++
++
++RULES = [
++    Rule(0.85, 0.0, 3, "kept"),
++    Rule(0.7, 0.0, 1, "kept"),
++    Rule(0.5, 0.0, 2, "orig"),
++    Rule(0.0, 0.12, 2, "kept"),
++    Rule(0.9, 0.05, 3, "orig"),
++]
++
++
++@pytest.mark.parametrize("seed", [0, 1, 2])
++@pytest.mark.parametrize("rule", RULES, ids=str)
++@pytest.mark.parametrize("scale", [None, 1.5])
++def test_matches_reference_bit_for_bit(rule, seed, scale):
++    w, ids = _router(256, seed=seed)
++    nw, ni = ET.prune(w, ids, rule, scale)
++    for r in range(w.shape[0]):
++        ew, ei = reference_row(w[r].tolist(), ids[r].tolist(), rule, scale)
++        assert ni[r].tolist() == ei, r
++        got = nw[r]
++        want = torch.tensor(ew, dtype=torch.float32)
++        assert torch.equal(got, want), (r, got, want)
++
++
++def test_production_rule_drops_some_and_keeps_floor():
++    w, ids = _router(512, seed=7)
++    nw, ni = ET.prune(w, ids, Rule(0.85, 0.0, 3, "kept"), 1.5)
++    kept = (ni >= 0).sum(1)
++    assert int(kept.min()) >= 3
++    assert int((kept < 6).sum()) > 0
++    # Kept weights renormalize to the routed scaling factor.
++    torch.testing.assert_close(nw.sum(1), torch.full((512,), 1.5))
++    assert torch.equal(nw[ni < 0], torch.zeros_like(nw[ni < 0]))
++
++
++def test_untouched_rows_are_bit_identical_and_inputs_unchanged():
++    w = torch.tensor([[0.25] * 6, [0.9, 0.02, 0.02, 0.02, 0.02, 0.02]])
++    ids = torch.tensor([[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12]])
++    w0, i0 = w.clone(), ids.clone()
++    nw, ni = ET.prune(w, ids, Rule(0.85, 0.0, 3, "kept"))
++    assert torch.equal(w, w0) and torch.equal(ids, i0)
++    # Uniform row: excl reaches 0.85 only at the last slot, so all are kept.
++    assert torch.equal(nw[0], w[0]) and torch.equal(ni[0], ids[0])
++    assert ni[1].tolist() == [7, 8, 9, -1, -1, -1]
++
++
++def test_ties_break_to_the_lower_slot():
++    w = torch.tensor([[0.1, 0.3, 0.3, 0.1, 0.1, 0.1]])
++    ids = torch.arange(6).view(1, 6)
++    _, ni = ET.prune(w, ids, Rule(0.5, 0.0, 1, "kept"))
++    assert ni.tolist() == [[-1, 1, 2, -1, -1, -1]]
++    _, ni = ET.prune(w, ids, Rule(0.0, 0.11, 3, "kept"))
++    # Ranks 0..2 are slots 1, 2, 0 (lower slot wins the 0.1 tie).
++    assert ni.tolist() == [[0, 1, 2, -1, -1, -1]]
++
++
++def test_min_k_at_or_above_k_is_identity():
++    w, ids = _router(16)
++    nw, ni = ET.prune(w, ids, Rule(0.5, 0.0, 6, "kept"))
++    assert nw is w and ni is ids
++
++
++def test_dtypes_preserved():
++    w, ids = _router(32)
++    nw, ni = ET.prune(w.half(), ids.int(), Rule(0.85))
++    assert nw.dtype == torch.float16 and ni.dtype == torch.int32
++    nw, ni = ET.prune(w, ids, Rule(0.85))
++    assert nw.dtype == torch.float32 and ni.dtype == torch.int64
++
++
++def test_shape_errors():
++    w, ids = _router(4)
++    with pytest.raises(ValueError):
++        ET.prune(w, ids[:, :5], Rule(0.85))
++    w8, i8 = _router(4, k=8)
++    with pytest.raises(ValueError):
++        ET.prune(w8, i8, Rule(0.85))
++
++
++def test_parse_defaults_off_and_values():
++    assert ET.parse({}) is None
++    assert ET.parse({"VLLM_V41_PRUNE_TOPP": "0"}) is None
++    assert ET.parse({"VLLM_V41_PRUNE_TOPP": "off"}) is None
++    assert ET.parse({"VLLM_V41_PRUNE_TOPP": "0.85"}) == Rule(0.85, 0.0, 3, "kept")
++    env = {
++        "VLLM_V41_PRUNE_TOPP": "0.7",
++        "VLLM_V41_PRUNE_MIN_W": "0.05",
++        "VLLM_V41_PRUNE_MIN_K": "2",
++        "VLLM_V41_PRUNE_RENORM": "orig",
++    }
++    assert ET.parse(env) == Rule(0.7, 0.05, 2, "orig")
++    assert ET.parse({"VLLM_V41_PRUNE_MIN_W": "0.1"}) == Rule(0.0, 0.1, 3, "kept")
++
++
++@pytest.mark.parametrize(
++    "env",
++    [
++        {"VLLM_V41_PRUNE_TOPP": "1"},
++        {"VLLM_V41_PRUNE_TOPP": "-0.1"},
++        {"VLLM_V41_PRUNE_TOPP": "x"},
++        {"VLLM_V41_PRUNE_MIN_W": "1.5"},
++        {"VLLM_V41_PRUNE_MIN_K": "0"},
++        {"VLLM_V41_PRUNE_MIN_K": "7"},
++        {"VLLM_V41_PRUNE_MIN_K": "a"},
++        {"VLLM_V41_PRUNE_RENORM": "dup"},
++    ],
++)
++def test_parse_rejects(env):
++    with pytest.raises(ValueError):
++        ET.parse(env)
++
++
++def test_bad_env_fails_at_import():
++    code = (
++        "import importlib.util, sys;"
++        f"s = importlib.util.spec_from_file_location('m', {str(SRC)!r});"
++        "m = importlib.util.module_from_spec(s); sys.modules['m'] = m;"
++        "s.loader.exec_module(m)"
++    )
++    env = dict(os.environ, VLLM_V41_PRUNE_TOPP="2")
++    r = subprocess.run(
++        [sys.executable, "-c", code], env=env, capture_output=True, text=True
++    )
++    assert r.returncode != 0 and "VLLM_V41_PRUNE_TOPP" in r.stderr
++
++
++class _NS:
++    def __init__(self, **kw):
++        self.__dict__.update(kw)
++
++
++class _Resident:
++    pass
++
++
++def _experts(**over):
++    qm = _NS(is_v41=True, dp4a_admitted=True, expert_trace_tokens=0, expert_cache=None)
++    router = _NS(eplb_state=None, capture_fn=None)
++    ex = _NS(
++        quant_method=qm,
++        router=router,
++        expert_map=None,
++        gguf_w2=torch.empty(2, 1280, 1),
++    )
++    for k, v in over.items():
++        target = qm if hasattr(qm, k) else router if hasattr(router, k) else ex
++        setattr(target, k, v)
++    return ex
++
++
++def _check(ex, em=True):
++    ET.check_path(ex, em_ready=lambda: em, resident_type=_Resident)
++
++
++def test_check_path_accepts_verified_path():
++    _check(_experts())
++    _check(_experts(expert_cache=_NS(runtime=_Resident())))
++
++
++@pytest.mark.parametrize(
++    "over, needle",
++    [
++        ({"is_v41": False}, "native V4.1"),
++        ({"dp4a_admitted": False}, "dp4a"),
++        ({"expert_trace_tokens": 8}, "tracing"),
++        ({"expert_map": torch.zeros(4)}, "expert map"),
++        ({"eplb_state": object()}, "EPLB"),
++        ({"capture_fn": print}, "capture"),
++        ({"expert_cache": _NS(runtime=object())}, "resident"),
++        ({"gguf_w2": torch.empty(2, 5120, 1)}, "row-split"),
++    ],
++)
++def test_check_path_refuses(over, needle):
++    with pytest.raises(RuntimeError, match=needle):
++        _check(_experts(**over))
++    with pytest.raises(RuntimeError, match="expert-major"):
++        _check(_experts(), em=False)
++
++
++def test_route_hook_off_on_and_row_gate():
++    w, ids = _router(6, seed=3)
++    mod = _NS(prune_routes=True, experts=_experts())
++    assert ET.route_hook(mod, w, ids, 1.5) == (w, ids)  # RULE is None
++    on = _load({"VLLM_V41_PRUNE_TOPP": "0.85"})
++    calls = []
++    on.check_path = lambda experts: calls.append(experts)
++    nw, ni = on.route_hook(mod, w, ids, 1.5)
++    ew, ei = on.prune(w, ids, on.RULE, 1.5)
++    assert torch.equal(nw, ew) and torch.equal(ni, ei)
++    assert int((ni < 0).sum()) > 0
++    w7, i7 = _router(7, seed=3)
++    assert on.route_hook(mod, w7, i7, 1.5) == (w7, i7)  # prompt rows untouched
++    assert len(calls) == 1  # checked once, at the first call
++    draft = _NS(prune_routes=False, experts=None)
++    assert on.route_hook(draft, w, ids, 1.5) == (w, ids)
++
++
++def _class(tree, name):
++    return next(
++        n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == name
++    )
++
++
++def _flag(cls):
++    for n in cls.body:
++        if isinstance(n, ast.Assign) and any(
++            isinstance(t, ast.Name) and t.id == "prune_routes" for t in n.targets
++        ):
++            return n.value.value
++    return None
++
++
++def test_model_hooks_both_route_paths_and_draft_opts_out():
++    model = ast.parse((PKG / "model.py").read_text())
++    moe = _class(model, "V41MoE")
++    assert _flag(moe) is True
++    route = next(
++        n for n in moe.body if isinstance(n, ast.FunctionDef) and n.name == "_route"
++    )
++    returns = [n for n in ast.walk(route) if isinstance(n, ast.Return)]
++    assert len(returns) == 2
++    for r in returns:
++        assert isinstance(r.value, ast.Call) and r.value.func.id == "route_hook"
++    draft = _class(ast.parse((PKG / "dspark.py").read_text()), "V41DraftMoE")
++    assert _flag(draft) is False
++
++
++def test_env_knobs_registered_with_off_defaults():
++    src = (ROOT / "vllm" / "envs.py").read_text()
++    defaults = {
++        "VLLM_V41_PRUNE_TOPP": "0",
++        "VLLM_V41_PRUNE_MIN_W": "0",
++        "VLLM_V41_PRUNE_MIN_K": "3",
++        "VLLM_V41_PRUNE_RENORM": "kept",
++    }
++    for name, d in defaults.items():
++        assert f'    {name}: str = "{d}"\n' in src
++        assert f'lambda: os.getenv("{name}", "{d}")' in src
++    assert ET.parse(defaults) is None
++
++
++if __name__ == "__main__":
++    sys.exit(pytest.main([__file__, "-q"]))
+diff --git a/vllm/envs.py b/vllm/envs.py
+index 4cbb178b1..c5bd33938 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -509,6 +509,10 @@ if TYPE_CHECKING:
+     VLLM_V41_PREFILL_DMA: str = "1"
+     VLLM_V41_PREFILL_GROUP: str | None = None
+     VLLM_V41_PREFILL_TIMING: str = "0"
++    VLLM_V41_PRUNE_MIN_K: str = "3"
++    VLLM_V41_PRUNE_MIN_W: str = "0"
++    VLLM_V41_PRUNE_RENORM: str = "kept"
++    VLLM_V41_PRUNE_TOPP: str = "0"
+     VLLM_V41_ROUTED_PREFILL_MAX: str = "1536"
+     VLLM_V41_ROUTER_FUSED: str = "1"
+     VLLM_V41_ROUTE_TRACE: str | None = None
+@@ -7788,6 +7792,58 @@ environment_variables: dict[str, Callable[[], Any]] = {
+         acceleration_paths=(),
+         user_visible=False,
+     ),
++    "VLLM_V41_PRUNE_MIN_K": env_var(
++        lambda: os.getenv("VLLM_V41_PRUNE_MIN_K", "3"),
++        description=(
++            "Experimental DS-V4.1 lossy decode expert top-p prune: "
++            "never fewer kept routed experts per row, 1..6."
++        ),
++        category="experimental",
++        declared_default="'3'",
++        effective_default="'3'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
++    "VLLM_V41_PRUNE_MIN_W": env_var(
++        lambda: os.getenv("VLLM_V41_PRUNE_MIN_W", "0"),
++        description=(
++            "Experimental DS-V4.1 lossy decode expert top-p prune: "
++            "routed-weight fraction floor, [0, 1]; 0 = off."
++        ),
++        category="experimental",
++        declared_default="'0'",
++        effective_default="'0'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
++    "VLLM_V41_PRUNE_RENORM": env_var(
++        lambda: os.getenv("VLLM_V41_PRUNE_RENORM", "kept"),
++        description=(
++            "Experimental DS-V4.1 lossy decode expert top-p prune: "
++            "kept (rescale kept weights) or orig."
++        ),
++        category="experimental",
++        declared_default="'kept'",
++        effective_default="'kept'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
++    "VLLM_V41_PRUNE_TOPP": env_var(
++        lambda: os.getenv("VLLM_V41_PRUNE_TOPP", "0"),
++        description=(
++            "Experimental DS-V4.1 lossy decode expert top-p prune: "
++            "routed mass kept per decode row, (0, 1); 0 = off."
++        ),
++        category="experimental",
++        declared_default="'0'",
++        effective_default="'0'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
+     "VLLM_V41_ROUTED_PREFILL_MAX": env_var(
+         lambda: os.getenv("VLLM_V41_ROUTED_PREFILL_MAX", "1536"),
+         description=(
+diff --git a/vllm/models/deepseek_v41/dspark.py b/vllm/models/deepseek_v41/dspark.py
+index 78174b562..3995a0408 100644
+--- a/vllm/models/deepseek_v41/dspark.py
++++ b/vllm/models/deepseek_v41/dspark.py
+@@ -101,6 +101,8 @@ class V41DraftAttention(V41Attention):
+ 
+ 
+ class V41DraftMoE(V41MoE):
++    prune_routes = False
++
+     def forward(self, x):
+         routed, shared = self.experts.forward_partials(
+             hidden_states=x, router_logits=self.gate(x)
+diff --git a/vllm/models/deepseek_v41/expert_topp.py b/vllm/models/deepseek_v41/expert_topp.py
+new file mode 100644
+index 000000000..d9d012f87
+--- /dev/null
++++ b/vllm/models/deepseek_v41/expert_topp.py
+@@ -0,0 +1,213 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Decode routed-expert top-p prune. LOSSY, off by default.
++
++A port of TensorFold's TF_DSV41_EXPERT_TOPP rule (router_gemv.cu
++`prune_row`, as carried by 0rand/deepseek-v41-tensorfold-spark @ a903cb5).
++TensorFold production: TOPP 0.85, MIN_K 3, MIN_W 0, RENORM kept, decode and
++verify rows only. Author's figure: about +5 % decode.
++
++Per row, on the K routed weights w_0..w_{K-1} (slot = pick order):
++
++  total = sum of w in slot order (fp32, sequential)
++  f_i   = w_i / total
++  rank  = position by f descending, ties by the lower slot
++  excl  = exclusive prefix sum of f in rank order (sequential)
++  keep  = (excl < TOPP and f >= MIN_W) or rank < MIN_K
++  ks    = sum of the kept w in slot order
++  w_i'  = kept: w_i (orig) or scale * w_i / ks (kept); dropped: 0
++  id_i' = kept: id_i; dropped: -1
++
++A row that keeps every slot comes back bit for bit. Dropped routes carry
++id -1, which the v41k expert-major kernels skip (`moe_plan`: "id < 0: route
++dropped"). Only rows <= MAX_ROWS (the dp4a decode/verify path) are pruned.
++Every op stays on device without a host sync, so the call is graph safe.
++
++Environment (read once at import; a bad value raises):
++  VLLM_V41_PRUNE_TOPP    routed mass kept, (0, 1); 0 = off (default)
++  VLLM_V41_PRUNE_MIN_W   weight-fraction floor, [0, 1]; default 0 (off)
++  VLLM_V41_PRUNE_MIN_K   never fewer kept experts, 1..6; default 3
++  VLLM_V41_PRUNE_RENORM  kept (default) | orig
++"""
++
++from __future__ import annotations
++
++import os
++from dataclasses import dataclass
++
++import torch
++
++PREFIX = "VLLM_V41_PRUNE_"
++OFF = ("", "0", "off", "false", "no")
++KMAX = 6
++MAX_ROWS = 6
++
++
++@dataclass(frozen=True)
++class Rule:
++    topp: float = 0.0
++    min_w: float = 0.0
++    min_k: int = 3
++    renorm: str = "kept"
++
++    @property
++    def on(self) -> bool:
++        return 0.0 < self.topp < 1.0 or self.min_w > 0.0
++
++
++def _unit(env, name: str, open_top: bool) -> float:
++    raw = env.get(name, "").strip().lower()
++    if raw in OFF:
++        return 0.0
++    try:
++        v = float(raw)
++    except ValueError:
++        raise ValueError(f"{name}={raw!r}: a number in [0, 1]") from None
++    if not (0.0 <= v < 1.0 if open_top else 0.0 <= v <= 1.0):
++        top = ")" if open_top else "]"
++        raise ValueError(f"{name}={raw!r}: a number in [0, 1{top}")
++    return v
++
++
++def parse(env=None) -> Rule | None:
++    """The rule from the environment, or None when pruning is off."""
++    env = os.environ if env is None else env
++    topp = _unit(env, PREFIX + "TOPP", open_top=True)
++    min_w = _unit(env, PREFIX + "MIN_W", open_top=False)
++    raw_k = env.get(PREFIX + "MIN_K", "").strip()
++    try:
++        min_k = int(raw_k) if raw_k else 3
++    except ValueError:
++        raise ValueError(f"{PREFIX}MIN_K={raw_k!r}: 1..{KMAX}") from None
++    if not 1 <= min_k <= KMAX:
++        raise ValueError(f"{PREFIX}MIN_K={raw_k!r}: 1..{KMAX}")
++    renorm = env.get(PREFIX + "RENORM", "").strip().lower() or "kept"
++    if renorm not in ("kept", "orig"):
++        raise ValueError(f"{PREFIX}RENORM={renorm!r}: kept or orig")
++    rule = Rule(topp, min_w, min_k, renorm)
++    return rule if rule.on else None
++
++
++RULE = parse()
++
++
++def prune(
++    weights: torch.Tensor,
++    ids: torch.Tensor,
++    rule: Rule,
++    scale: float | None = None,
++) -> tuple[torch.Tensor, torch.Tensor]:
++    """New (weights, ids) for [R, K] router outputs; inputs are not modified.
++
++    `scale` is the kept-renorm target (the routed scaling factor); it
++    defaults to each row's own total.
++    """
++    if weights.shape != ids.shape or weights.dim() != 2:
++        raise ValueError(
++            f"expected matching [R, K] tensors, got {tuple(weights.shape)}"
++            f" / {tuple(ids.shape)}"
++        )
++    R, K = weights.shape
++    if not 1 <= K <= KMAX:
++        raise ValueError(f"top-k {K} outside 1..{KMAX}")
++    if rule.min_k >= K:
++        return weights, ids
++    w = weights.to(torch.float32)
++    total = w[:, 0].clone()
++    for i in range(1, K):
++        total = total + w[:, i]
++    f = w / total[:, None]
++    # Rank: f descending; a stable sort keeps slot order among equals.
++    order = torch.sort(f, dim=1, descending=True, stable=True).indices
++    ranks = torch.arange(K, device=f.device).expand(R, K).contiguous()
++    rank = torch.empty_like(order).scatter_(1, order, ranks)
++    f_sorted = torch.gather(f, 1, order)
++    excl_sorted = torch.zeros_like(f_sorted)
++    acc = torch.zeros(R, dtype=torch.float32, device=f.device)
++    for r in range(K):
++        excl_sorted[:, r] = acc
++        acc = acc + f_sorted[:, r]
++    excl = torch.empty_like(f).scatter_(1, order, excl_sorted)
++    keep = rank < rule.min_k
++    mass = f >= rule.min_w
++    if 0.0 < rule.topp < 1.0:
++        mass = mass & (excl < rule.topp)
++    keep = keep | mass
++    zero = torch.zeros_like(total)
++    ks = torch.where(keep[:, 0], w[:, 0], zero)
++    for i in range(1, K):
++        ks = ks + torch.where(keep[:, i], w[:, i], zero)
++    if rule.renorm == "orig":
++        kept_w = w
++    else:
++        s = total if scale is None else torch.full_like(total, float(scale))
++        kept_w = s[:, None] * (w / ks[:, None])
++    new_w = torch.where(keep, kept_w, torch.zeros_like(w)).to(weights.dtype)
++    new_ids = torch.where(keep, ids, torch.full_like(ids, -1))
++    all_kept = keep.all(dim=1, keepdim=True)
++    return (
++        torch.where(all_kept, weights, new_w),
++        torch.where(all_kept, ids, new_ids),
++    )
++
++
++def check_path(experts, em_ready=None, resident_type=None) -> None:
++    """Raise unless every consumer of this layer's routes skips id -1.
++
++    Verified consumers: the V4.1 dp4a decode op on the expert-major TP4 row
++    path (`moe_plan` skips id < 0) and a resident expert cache, whose
++    resolve only validates. The cold-expert SharedExpertRank resolve, the
++    fp16 fallback, expert maps, EPLB, routing capture and expert tracing
++    index with the id and are refused.
++    """
++    if em_ready is None:
++        from vllm.model_executor.layers.quantization.gguf_v41_moe import (
++            _expert_major_ready as em_ready,
++        )
++    if resident_type is None:
++        from vllm.model_executor.layers.quantization.gguf_shared_runtime import (
++            ResidentExpertRank as resident_type,
++        )
++    qm = getattr(experts, "quant_method", None)
++    router = getattr(experts, "router", None)
++    cache = getattr(qm, "expert_cache", None)
++    w2 = getattr(experts, "gguf_w2", None)
++    problems = []
++    if not getattr(qm, "is_v41", False):
++        problems.append("experts are not the native V4.1 GGUF method")
++    if not getattr(qm, "dp4a_admitted", False):
++        problems.append("the dp4a decode path is not admitted")
++    if getattr(qm, "expert_trace_tokens", 0):
++        problems.append("expert tracing is on")
++    if getattr(experts, "expert_map", None) is not None:
++        problems.append("an expert map is set")
++    if getattr(router, "eplb_state", None) is not None:
++        problems.append("EPLB is on")
++    if getattr(router, "capture_fn", None) is not None:
++        problems.append("routed-expert capture is on")
++    if cache is not None and not isinstance(
++        getattr(cache, "runtime", None), resident_type
++    ):
++        problems.append("the expert cache is not fully resident")
++    if not em_ready():
++        problems.append("the v41k expert-major kernels are not loaded")
++    if w2 is None or w2.dim() < 2 or w2.shape[1] != 1280:
++        problems.append("the TP4 row-split down path is not active")
++    if problems:
++        raise RuntimeError(
++            "VLLM_V41_PRUNE_* is set but dropped routes are not safe here: "
++            + "; ".join(problems)
++            + ". Unset VLLM_V41_PRUNE_TOPP / VLLM_V41_PRUNE_MIN_W."
++        )
++
++
++def route_hook(module, weights: torch.Tensor, ids: torch.Tensor, scale: float):
++    """Prune a target MoE layer's decode routes when a rule is on."""
++    if RULE is None or not getattr(module, "prune_routes", False):
++        return weights, ids
++    if not getattr(module, "_prune_checked", False):
++        check_path(module.experts)
++        module._prune_checked = True
++    if weights.shape[0] > MAX_ROWS:
++        return weights, ids
++    return prune(weights, ids, RULE, scale)
+diff --git a/vllm/models/deepseek_v41/model.py b/vllm/models/deepseek_v41/model.py
+index ad20b4c1e..068ef89b6 100644
+--- a/vllm/models/deepseek_v41/model.py
++++ b/vllm/models/deepseek_v41/model.py
+@@ -74,6 +74,7 @@ from .attention_ops import (
+ )
+ from .cache import V41LatentCache
+ from .contract import pp_split_problem, validate_runtime_geometry
++from .expert_topp import route_hook
+ from .norm import short_rms_norm
+ from .pp_commit import StageCommit
+ from .quant_rope import apply_rope, attention_qdq, rope_table
+@@ -155,6 +156,9 @@ class V41Gate(nn.Module):
+ 
+ 
+ class V41MoE(nn.Module):
++    # Target layers take the lossy decode prune (VLLM_V41_PRUNE_*); drafts do not.
++    prune_routes = True
++
+     def __init__(self, vllm_config, prefix):
+         super().__init__()
+         c = vllm_config.model_config.hf_text_config
+@@ -188,12 +192,14 @@ class V41MoE(nn.Module):
+                 stash_router(gating_output.float(), self.gate.bias, self.scale)
+             if _PRED_STATS and getattr(self, "_v41_index", None) is not None:
+                 _score_prediction(self._v41_index, routed[1])
+-            return routed
++            return route_hook(self, routed[0], routed[1], self.scale)
+         scores = F.softplus(gating_output).sqrt()
+         indices = (scores + self.gate.bias).topk(topk, dim=-1).indices
+         probabilities = scores.gather(1, indices)
+         probabilities = probabilities / (probabilities.sum(-1, keepdim=True) + 1e-20)
+-        return (probabilities * self.scale).contiguous(), indices
++        return route_hook(
++            self, (probabilities * self.scale).contiguous(), indices, self.scale
++        )
+ 
+     def forward(self, x):
+         return self.experts(hidden_states=x, router_logits=self.gate(x))

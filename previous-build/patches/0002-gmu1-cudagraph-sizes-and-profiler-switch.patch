@@ -1,0 +1,30 @@
+--- a/v100/serve_ds41.sh
++++ b/v100/serve_ds41.sh
+@@ -105,6 +105,14 @@
+   DS41_EXTRA_ARGS+=(--async-scheduling)
+   export VLLM_DS41_ENGRAM_DEFERRED="${VLLM_DS41_ENGRAM_DEFERRED:-1}"
+ fi
++# GMU1 (ds41-v100 patch 0002): DS41_CUDAGRAPH_SIZES='[1,...]' replaces the CUDA-graph capture list; unset = unchanged
++if [[ -n "${DS41_CUDAGRAPH_SIZES:-}" ]]; then
++  for i in "${!DS41_EXTRA_ARGS[@]}"; do
++    if [[ "${DS41_EXTRA_ARGS[$i]}" == '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":'* ]]; then
++      DS41_EXTRA_ARGS[$i]="{\"cudagraph_mode\":\"PIECEWISE\",\"cudagraph_capture_sizes\":$DS41_CUDAGRAPH_SIZES}"
++    fi
++  done
++fi
+ ds41_main "$@"
+ # CUDA context init drops the cards back to the default application clock after the pre-launch lock; re-apply once
+ # /health is up.
+--- a/v100/ds41_common.sh
++++ b/v100/ds41_common.sh
+@@ -307,6 +307,10 @@
+   for v in $(compgen -e | grep '^VLLM_DS41_' | sort); do
+     [[ " ${envs[*]} " == *" $v="* ]] || envs+=("$v=${!v}")
+   done
++  # GMU1 (ds41-v100 patch 0002): vLLM's CUDA-graph memory estimate switch, forwarded only when the caller sets it
++  if [[ -n "${VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS:-}" ]]; then
++    envs+=("VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=$VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS")
++  fi
+   local args=(
+     "$DS41_PYTHON" -m vllm.entrypoints.openai.api_server
+     --model "$DS41_MODEL" --tokenizer "$DS41_TOKENIZER" --served-model-name "$DS41_SERVED_NAME"

@@ -1,0 +1,281 @@
+diff --git a/tests/tool_parsers/test_qwen3coder_number_nonfinite.py b/tests/tool_parsers/test_qwen3coder_number_nonfinite.py
+new file mode 100644
+index 000000000..2c96eea87
+--- /dev/null
++++ b/tests/tool_parsers/test_qwen3coder_number_nonfinite.py
+@@ -0,0 +1,112 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""qwen3_coder: a non-finite number argument must not drop the tool call.
++
++``int(float("inf"))`` raised OverflowError while converting a "number"
++parameter. Non-streaming parsing then returned every call of the response as
++raw content; streaming aborted. Non-finite values are kept as strings
++(vllm-project/vllm#43984).
++"""
++
++import json
++
++import pytest
++from tokenizers import AddedToken, Tokenizer, decoders, models, pre_tokenizers
++from transformers import PreTrainedTokenizerFast
++
++from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
++from vllm.tool_parsers.qwen3coder_tool_parser import Qwen3CoderToolParser
++
++pytestmark = pytest.mark.cpu_test
++
++
++@pytest.fixture(scope="module")
++def byte_tokenizer():
++    alphabet = sorted(pre_tokenizers.ByteLevel.alphabet())
++    backend = Tokenizer(models.BPE({c: i for i, c in enumerate(alphabet)}, []))
++    backend.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
++    backend.decoder = decoders.ByteLevel()
++    backend.add_tokens(
++        [
++            AddedToken(token, special=False, normalized=False)
++            for token in ("<tool_call>", "</tool_call>")
++        ]
++    )
++    return PreTrainedTokenizerFast(tokenizer_object=backend)
++
++
++TOOLS = [
++    {
++        "type": "function",
++        "function": {
++            "name": "scale",
++            "parameters": {
++                "type": "object",
++                "properties": {
++                    "factor": {"type": "number"},
++                    "name": {"type": "string"},
++                },
++            },
++        },
++    }
++]
++
++
++def _call(factor):
++    return (
++        "<tool_call>\n<function=scale>\n"
++        f"<parameter=factor>\n{factor}\n</parameter>\n"
++        "<parameter=name>\nx\n</parameter>\n"
++        "</function>\n</tool_call>"
++    )
++
++
++@pytest.mark.parametrize("streaming", [False, True])
++@pytest.mark.parametrize("schema_type", ["number", ["number", "string"]])
++@pytest.mark.parametrize(
++    "factor,expected",
++    [
++        ("inf", "inf"),
++        ("-inf", "-inf"),
++        ("nan", "nan"),
++        ("Infinity", "Infinity"),
++        ("1e999", "1e999"),
++        ("2.5", 2.5),
++        ("5.0", 5),
++        ("1e3", 1000),
++    ],
++)
++def test_number_arguments(byte_tokenizer, streaming, schema_type, factor, expected):
++    request = ChatCompletionRequest(model="test", messages=[], tools=TOOLS)
++    request.tools[0].function.parameters["properties"]["factor"]["type"] = schema_type
++    parser = Qwen3CoderToolParser(byte_tokenizer, request.tools)
++    output = _call(factor)
++    if not streaming:
++        info = parser.extract_tool_calls(output, request)
++        assert info.tools_called
++        (call,) = info.tool_calls
++        arguments = call.function.arguments
++    else:
++        ids = byte_tokenizer.encode(output, add_special_tokens=False)
++        arguments = ""
++        previous = ""
++        for i in range(len(ids)):
++            current = byte_tokenizer.decode(ids[: i + 1])
++            delta = parser.extract_tool_calls_streaming(
++                previous,
++                current,
++                current[len(previous) :],
++                ids[:i],
++                ids[: i + 1],
++                ids[i : i + 1],
++                request,
++            )
++            if delta:
++                for call in delta.tool_calls or []:
++                    if call.function and call.function.arguments is not None:
++                        arguments += call.function.arguments
++            previous = current
++    parsed = json.loads(arguments)
++    assert parsed == {"factor": expected, "name": "x"}
++    # Reject NaN/Infinity even if the JSON implementation accepts extensions.
++    json.dumps(parsed, allow_nan=False)
+diff --git a/tests/tool_parsers/test_utils.py b/tests/tool_parsers/test_utils.py
+index 592ef580a..3276fa9dd 100644
+--- a/tests/tool_parsers/test_utils.py
++++ b/tests/tool_parsers/test_utils.py
+@@ -1,6 +1,8 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++import json
++
+ import pytest
+ 
+ from vllm.tool_parsers.utils import (
+@@ -91,6 +93,71 @@ class TestCoerceToSchemaType:
+         def test_invalid_number_fallback(self):
+             assert coerce_to_schema_type("abc", "number") == "abc"
+ 
++    class TestNonFiniteNumbers:
++        """Non-finite numeric strings must not crash and must coerce to a
++        JSON-serializable value.
++
++        Regression: ``int(float("inf"))`` raised an uncaught ``OverflowError``
++        (only ``ValueError``/``TypeError`` were handled), and ``"1e999"``
++        round-tripped through ``json.loads`` to a float ``inf`` that
++        ``json.dumps`` renders as invalid JSON ``Infinity``.
++        """
++
++        @pytest.mark.parametrize(
++            "value", ["inf", "-inf", "Infinity", "1e999", "nan", "-nan"]
++        )
++        def test_non_finite_number_does_not_crash(self, value):
++            # Must not raise (previously OverflowError for inf/1e999/Infinity).
++            result = coerce_to_schema_type(value, "number")
++            # Result must serialize to valid, finite JSON and round-trip.
++            assert json.loads(json.dumps(result)) == result
++
++        @pytest.mark.parametrize("value", ["inf", "-inf", "1e999"])
++        def test_non_finite_number_preserved_as_string(self, value):
++            assert coerce_to_schema_type(value, "number") == value
++
++        @pytest.mark.parametrize("value", ["inf", "1e999", "Infinity"])
++        def test_non_finite_integer_not_float_inf(self, value):
++            result = coerce_to_schema_type(value, "integer")
++            assert isinstance(result, str)
++            assert result == value
++
++    class TestNonFiniteContainers:
++        """Non-finite floats nested in object/array values must not produce
++        invalid JSON.
++
++        Regression: the ``object``/``array`` branch returned
++        ``json.loads(value)`` directly, so ``"[1e999]"`` became ``[inf]`` and
++        ``'{"x": Infinity}'`` became ``{"x": inf}`` -- values that
++        ``json.dumps`` later renders as invalid JSON (``Infinity``/``NaN``).
++        """
++
++        @pytest.mark.parametrize(
++            "value", ["[1e999]", "[1, 2, 1e999]", "[NaN]", "[-Infinity]"]
++        )
++        def test_array_with_non_finite_preserved_as_string(self, value):
++            result = coerce_to_schema_type(value, "array")
++            assert result == value
++            assert json.loads(json.dumps(result)) == result
++
++        @pytest.mark.parametrize(
++            "value", ['{"x": 1e999}', '{"x": Infinity}', '{"a": [1e999, 2]}']
++        )
++        def test_object_with_non_finite_preserved_as_string(self, value):
++            result = coerce_to_schema_type(value, "object")
++            assert result == value
++            assert json.loads(json.dumps(result)) == result
++
++        def test_finite_array_still_coerced(self):
++            assert coerce_to_schema_type("[1, 2, 3]", "array") == [1, 2, 3]
++
++        def test_finite_object_still_coerced(self):
++            assert coerce_to_schema_type('{"a": 1}', "object") == {"a": 1}
++
++        def test_unknown_type_non_finite_falls_back_to_string(self):
++            # Exercises the final json.loads fallback path.
++            assert coerce_to_schema_type("1e999", "unknown_type") == "1e999"
++
+     class TestBooleanType:
+         def test_true(self):
+             assert coerce_to_schema_type("true", "boolean") is True
+diff --git a/vllm/tool_parsers/utils.py b/vllm/tool_parsers/utils.py
+index 507f098cb..f078fdbeb 100644
+--- a/vllm/tool_parsers/utils.py
++++ b/vllm/tool_parsers/utils.py
+@@ -3,6 +3,7 @@
+ 
+ import ast
+ import json
++import math
+ from json import JSONDecodeError, JSONDecoder
+ from typing import Any, TypeAlias
+ 
+@@ -533,6 +534,20 @@ _TYPE_ALIASES: dict[str, str] = {
+ }
+ 
+ 
++def _is_json_finite(obj: Any) -> bool:
++    """Whether *obj* can be serialized to valid JSON.
++
++    ``json.dumps(..., allow_nan=False)`` raises ``ValueError`` on any
++    non-finite float (``inf``/``-inf``/``nan``) anywhere in the value, so this
++    detects non-finite floats nested inside parsed lists/dicts too.
++    """
++    try:
++        json.dumps(obj, allow_nan=False)
++        return True
++    except (ValueError, TypeError):
++        return False
++
++
+ def coerce_to_schema_type(value: str, schema_type: str | list[str]) -> Any:
+     """Best-effort coercion of a raw string value to a JSON Schema type.
+ 
+@@ -581,9 +596,15 @@ def coerce_to_schema_type(value: str, schema_type: str | list[str]) -> Any:
+         if candidate_type == "number":
+             try:
+                 val = float(value)
+-                return val if val != int(val) else int(val)
+             except (ValueError, TypeError):
+                 continue
++            if not math.isfinite(val):
++                # inf/-inf/nan are not valid JSON numbers. Fall through so
++                # the value is preserved as a string instead of crashing
++                # (int(float("inf")) raises OverflowError) or emitting
++                # invalid JSON (json.dumps(inf) -> "Infinity").
++                continue
++            return val if val != int(val) else int(val)
+         if candidate_type == "boolean":
+             lower_val = value.lower().strip()
+             if lower_val in ("true", "1"):
+@@ -593,14 +614,25 @@ def coerce_to_schema_type(value: str, schema_type: str | list[str]) -> Any:
+             continue
+         if candidate_type in ("object", "array"):
+             try:
+-                return json.loads(value)
++                parsed = json.loads(value)
+             except (json.JSONDecodeError, ValueError, TypeError):
+                 continue
++            if _is_json_finite(parsed):
++                return parsed
++            # Non-finite floats (e.g. "[1e999]" -> [inf]) cannot be
++            # serialized back to valid JSON; preserve the raw string.
++            continue
+ 
+     try:
+-        return json.loads(value)
++        parsed = json.loads(value)
+     except (json.JSONDecodeError, ValueError):
+         return value
++    # Reject non-finite results (e.g. json.loads("1e999") -> inf, or nested
++    # inf/nan inside a parsed list/dict) which json.dumps would render as
++    # invalid JSON (Infinity/NaN). Preserve the raw string instead.
++    if not _is_json_finite(parsed):
++        return value
++    return parsed
+ 
+ 
+ def compute_tool_delta(

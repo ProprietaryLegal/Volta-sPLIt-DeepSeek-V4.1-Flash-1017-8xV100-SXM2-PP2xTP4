@@ -1,0 +1,360 @@
+diff --git a/vllm/models/deepseek_v41/dspark.py b/vllm/models/deepseek_v41/dspark.py
+index f921fd5ba..0af823248 100644
+--- a/vllm/models/deepseek_v41/dspark.py
++++ b/vllm/models/deepseek_v41/dspark.py
+@@ -52,6 +52,10 @@ _COUPLED_SHARD = __import__("os").environ.get("VLLM_V41_COUPLED_SHARD", "0") ==
+ _COUPLED_SHARD_CHECK = (
+     __import__("os").environ.get("VLLM_V41_COUPLED_SHARD_CHECK", "0") == "1"
+ )
++# Probabilistic (draft_sample_method: probabilistic) B=1 drafts from vocabulary
++# shards in their own graph (markov_psample.py); needs VLLM_V41_MARKOV_SHARD=1
++# and VLLM_V41_COUPLED_DRAFTS=1 (the runner fills the request stream keys).
++_PSAMPLE_SHARD = __import__("os").environ.get("VLLM_V41_PSAMPLE_SHARD", "0") == "1"
+ 
+ logger = init_logger(__name__)
+ 
+@@ -301,6 +305,12 @@ class DSparkDeepseekV41ForCausalLM(nn.Module):
+             else V41CoupledDraftGraph(self._coupled_shard_draft)
+         )
+         self._coupled_check = [0, 0]  # rounds checked, rounds with different drafts
++        self.psample_graph = (
++            None
++            if vllm_config.speculative_config.enforce_eager or not _PSAMPLE_SHARD
++            else V41CoupledDraftGraph(self._psample_shard_draft)
++        )
++        self._psample_scale: float | None = None
+ 
+     def embed_input_ids(self, input_ids):
+         return self.model.embed_tokens(input_ids)
+@@ -417,6 +427,49 @@ class DSparkDeepseekV41ForCausalLM(nn.Module):
+             )
+         return tokens
+ 
++    def _psample_shard_draft(self, hidden_states, anchor, temperature, keys, positions):
++        from .markov_psample import psample_shard_tokens
++
++        assert self._psample_scale is not None
++        return psample_shard_tokens(
++            self._markov_shard,
++            self.local_logits(hidden_states),
++            anchor,
++            temperature,
++            keys,
++            positions,
++            self._psample_scale,
++        )
++
++    def psample_shard_draft(
++        self, hidden_states, anchor, temperature, keys, positions, scale
++    ):
++        """([5] probabilistic drafts, [5, n] FP32 x of this rank's vocabulary
++        rows) for one request, or None unless VLLM_V41_PSAMPLE_SHARD=1 and the
++        shard path is on. x = (draft logits + Markov bias) / (T * scale); the
++        drafts are exact samples of softmax(gathered x) (markov_psample.py).
++        """
++        if not _PSAMPLE_SHARD or self._markov_shard is None:
++            return None
++        scale = float(scale)
++        if self._psample_scale is None:
++            self._psample_scale = scale
++            logger.info(
++                "VLLM_V41_PSAMPLE_SHARD=1: probabilistic drafts from vocabulary "
++                "shards (TP rank %d, draft temperature scale %s, graph %s)",
++                self._markov_shard.tp_rank,
++                scale,
++                self.psample_graph is not None,
++            )
++        elif self._psample_scale != scale:
++            # The captured graph holds the first scale; the policy is per engine.
++            raise RuntimeError(
++                f"VLLM_V41_PSAMPLE_SHARD: draft temperature scale changed "
++                f"{self._psample_scale} -> {scale}"
++            )
++        run = self.psample_graph or self._psample_shard_draft
++        return run(hidden_states, anchor, temperature, keys, positions)
++
+     def _coupled_shard_check(
+         self, hidden_states, anchor, temperature, keys, positions, tokens
+     ):
+diff --git a/vllm/models/deepseek_v41/markov_psample.py b/vllm/models/deepseek_v41/markov_psample.py
+new file mode 100644
+index 000000000..098b8c44f
+--- /dev/null
++++ b/vllm/models/deepseek_v41/markov_psample.py
+@@ -0,0 +1,180 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Probabilistic DSpark Markov drafts on vocabulary shards (VLLM_V41_PSAMPLE_SHARD).
++
++The sharded, graph-capturable form of the proposer's probabilistic path
++(``draft_sample_method: probabilistic``, 1Cat #183): per step every TP rank
++scores its rows of the BF16 Markov head exactly as ``_markov_keyed_block``
++does, forms x = (draft logits + Markov bias) / (T * scale) in FP32, stores x
++in a persistent [steps, n] buffer, and takes argmax(x + G) with a keyed
++Gumbel draw G whose stream key is the request key XOR ``DRAFT_SALT``. One
++small all-reduce per step picks the token (``markov_shard`` exchange), as the
++coupled shard steps do.
++
++argmax(x + G) over the whole vocabulary is an exact sample of softmax(x)
++(Gumbel-max), so the proposer can hand softmax(gathered x) to the standard
++(Leviathan) rejection sampler as the draft law q. The verifier draws its
++acceptance uniforms and recovery samples from its own generator, which is
++independent of G, so the output follows the target distribution exactly.
++The salt keeps G apart from the target-side keyed draws of the coupled
++path (rounds that fall back to it use ``key`` unsalted).
++A draft position re-drafted after a rejection reuses its draw G(key, pos):
++that draw was never seen by an emitted token (positions past the first
++rejection are discarded unseen; the rejected position itself is emitted
++from the recovery distribution and never drafted again).
++"""
++
++import torch
++
++from vllm.triton_utils import tl, triton
++from vllm.v1.spec_decode.coupled_draw import gumbel, row_seed
++
++from .markov_fused import ROWS
++from .markov_shard import _markov_shard_slot
++
++# 63-bit salt (SHA-256 of "V41 PSAMPLE draft stream", first 8 bytes, top bit cleared).
++DRAFT_SALT = 0x2D1F6A4B9C35E871
++
++
++@triton.jit
++def _markov_psample_block(
++    weight,
++    embed_row,
++    logits,
++    temperature,
++    scale,
++    keys,
++    positions,
++    x_out,
++    best_val,
++    best_idx,
++    start,
++    V: tl.constexpr,
++    K: tl.constexpr,
++    ROWS: tl.constexpr,
++):
++    """One step, one request: rows v of this rank's slice [start, start + V).
++
++    Stores x = (logits + bias) / (t * scale) for the rank's rows and the
++    block's maximum of x + G (lowest local id on ties). Requires t > 0.
++    """
++    pid = tl.program_id(0)
++    v = pid * ROWS + tl.arange(0, ROWS)
++    k = tl.arange(0, K)
++    valid = v < V
++    raw = tl.load(weight + v[:, None] * K + k[None, :], valid[:, None], 0)
++    w = (raw.to(tl.int32) << 16).to(tl.float32, bitcast=True)
++    e = tl.load(embed_row + k).to(tl.float32)
++    bias = tl.sum(w * e[None, :], 1)
++    x = tl.load(logits + v, valid, float("-inf")) + bias
++    t = tl.load(temperature)
++    x = x / (t * scale)
++    tl.store(x_out + v, x, valid)
++    seed = row_seed(tl.load(keys), tl.load(positions))
++    y = x + gumbel(seed, (v + start).to(tl.int64))
++    y = tl.where(valid, y, float("-inf"))
++    m = tl.max(y, 0)
++    tl.store(best_val + pid, m)
++    tl.store(best_idx + pid, tl.min(tl.where(y == m, v, 2147483647), 0))
++
++
++def psample_shard_tokens(
++    shard,
++    local_logits: torch.Tensor,
++    anchor: torch.Tensor,
++    temperature: torch.Tensor,
++    keys: torch.Tensor,
++    positions: torch.Tensor,
++    scale: float,
++) -> tuple[torch.Tensor, torch.Tensor]:
++    """([steps] int64 drafts, [steps, n] FP32 x of this rank's rows).
++
++    shard: the model's ``MarkovShardGreedy`` (weights, embedding, exchange);
++    local_logits: this rank's [steps, n] draft logits; anchor: [1] token id;
++    temperature: [1] FP32 (> 0); keys: [1] int64 request stream key (unsalted);
++    positions: [steps] int64 output positions of the drafts. Every rank must
++    call with the same anchor, temperature, keys and positions (the
++    exchanges pair up). The x buffer is persistent (``shard.psample_x``), so
++    a captured graph returns a fixed address.
++    """
++    device = local_logits.device
++    steps, n = shard.steps, shard.n
++    if local_logits.shape != (steps, n):
++        raise ValueError(
++            f"local logits {tuple(local_logits.shape)}, expected {(steps, n)}"
++        )
++    x = getattr(shard, "psample_x", None)
++    if x is None or x.device != device:
++        x = torch.empty((steps, n), dtype=torch.float32, device=device)
++        shard.psample_x = x
++    tokens = torch.empty(steps, dtype=torch.int64, device=device)
++    logits = local_logits.float().contiguous()
++    salted = torch.bitwise_xor(keys.reshape(1).to(torch.int64), DRAFT_SALT)
++    temperature = temperature.reshape(1).to(torch.float32)
++    first = anchor.reshape(-1)[:1].long().clamp(0, shard.vocab - 1)
++    shard.row.copy_(torch.index_select(shard.embed, 0, first).reshape(-1))
++    for step in range(steps):
++        _markov_psample_block[(shard.blocks,)](
++            shard.weight,
++            shard.row,
++            logits[step],
++            temperature,
++            float(scale),
++            salted,
++            positions[step:],
++            x[step],
++            shard.best_val,
++            shard.best_idx,
++            shard.start,
++            V=n,
++            K=shard.rank,
++            ROWS=ROWS,
++            num_warps=4,
++        )
++        _markov_shard_slot[(1,)](
++            shard.best_val,
++            shard.best_idx,
++            shard.slots[step],
++            shard.start,
++            shard.tp_rank,
++            N=n,
++            BLOCKS=shard.blocks,
++            PB=triton.next_power_of_2(shard.blocks),
++            TP=shard.tp,
++            TPP=triton.next_power_of_2(shard.tp),
++            num_warps=4,
++        )
++        shard._pick(shard.exchange(shard.slots[step]), tokens[step : step + 1])
++    return tokens, x
++
++
++def psample_reference(
++    weight_bf16: torch.Tensor,
++    embed: torch.Tensor,
++    full_logits: torch.Tensor,
++    anchor: int,
++    temperature: float,
++    key: int,
++    positions: torch.Tensor,
++    scale: float,
++) -> tuple[torch.Tensor, torch.Tensor]:
++    """Plain-torch statement of what the shard steps compute on the gathered
++    vocabulary: ([steps] drafts, [steps, vocab] x). For tests; ties go to the
++    lowest id; the bias is summed in FP32 from the BF16 head."""
++    from vllm.v1.spec_decode.coupled_draw import keyed_gumbel
++
++    steps, vocab = full_logits.shape
++    w = weight_bf16.float()
++    prev = max(0, min(int(anchor), vocab - 1))
++    xs, toks = [], []
++    keys = torch.tensor([key ^ DRAFT_SALT], dtype=torch.int64, device=positions.device)
++    for step in range(steps):
++        bias = w @ embed[prev].float()
++        x = (full_logits[step].float() + bias) / (temperature * scale)
++        g = keyed_gumbel(keys, positions[step : step + 1].long(), vocab)[0]
++        y = x + g
++        tok = int(torch.argmax(torch.nan_to_num(y, nan=float("-inf"))))
++        xs.append(x)
++        toks.append(tok)
++        prev = max(0, min(tok, vocab - 1))
++    return torch.tensor(toks, dtype=torch.int64), torch.stack(xs)
+diff --git a/vllm/v1/spec_decode/dspark.py b/vllm/v1/spec_decode/dspark.py
+index 27b9d78bf..ed46ddd1e 100644
+--- a/vllm/v1/spec_decode/dspark.py
++++ b/vllm/v1/spec_decode/dspark.py
+@@ -2,6 +2,8 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ """DSpark proposer built on the existing non-causal DFlash execution path."""
+ 
++import os
++
+ import torch
+ from typing_extensions import override
+ 
+@@ -10,6 +12,10 @@ from vllm.v1.sample.metadata import SamplingMetadata
+ from vllm.v1.spec_decode import coupled_draw
+ from vllm.v1.spec_decode.dflash import DFlashProposer
+ 
++# V4.1: probabilistic drafts from vocabulary shards (models/deepseek_v41/
++# markov_psample.py); default off. Needs draft_sample_method: probabilistic.
++_PSAMPLE_SHARD = os.getenv("VLLM_V41_PSAMPLE_SHARD", "0") == "1"
++
+ 
+ class DSparkProposer(DFlashProposer):
+     def __init__(
+@@ -167,6 +173,61 @@ class DSparkProposer(DFlashProposer):
+         )
+         return tokens, None
+ 
++    def _psample_shard(
++        self,
++        hidden_states: torch.Tensor,
++        sampling_metadata: SamplingMetadata | None,
++        logits: torch.Tensor | None,
++    ) -> tuple[torch.Tensor, torch.Tensor] | None:
++        """VLLM_V41_PSAMPLE_SHARD=1: the probabilistic draft path for one
++        sampled request, from vocabulary shards in a graph.
++
++        Returns ([5] drafts, [5, vocab] FP32 draft law q) for the standard
++        rejection sampler, or None (the regular paths run) unless the
++        engine drafts probabilistically, the batch is one all-random request
++        and the model's shard path is on. q = softmax of the gathered
++        x = (draft logits + Markov bias) / (T * draft temperature scale);
++        each draft is a keyed Gumbel-max sample of its row of q.
++        """
++        if (
++            not _PSAMPLE_SHARD
++            or hidden_states.shape[0] != self.num_speculative_tokens
++            or logits is not None
++            or sampling_metadata is None
++            or not sampling_metadata.all_random
++            or sampling_metadata.temperature is None
++            or not getattr(self, "_enable_probabilistic_draft_probs", False)
++            or not coupled_draw.ENABLED  # the runner fills keys only then
++            or self.collect_confidence_logits
++            or self._static_draft_vocab is not None
++        ):
++            return None
++        draft = getattr(self.model, "psample_shard_draft", None)
++        if draft is None:
++            return None
++        k = self.num_speculative_tokens
++        temperature = sampling_metadata.temperature[:1].to(torch.float32)
++        keys = coupled_draw.keys_buffer(self.device, self.max_batch_size)[:1]
++        positions = self.positions[:k] + 1
++        scale = self._sampling_policy.draft_temperature_scale
++        out = draft(
++            hidden_states,
++            self.input_ids[:1],
++            temperature,
++            keys,
++            positions,
++            1.0 if scale is None else scale,
++        )
++        if out is None:
++            return None
++        tokens, x_local = out
++        from vllm.distributed import tensor_model_parallel_all_gather
++
++        x = tensor_model_parallel_all_gather(x_local, dim=-1)
++        probs = x.softmax(dim=-1, dtype=torch.float32)
++        tokens, _ = self._graph_draft_result(tokens, hidden_states)
++        return tokens, probs
++
+     @override
+     def _sample_draft_tokens(
+         self,
+@@ -197,6 +258,9 @@ class DSparkProposer(DFlashProposer):
+             tokens = greedy_graph(hidden_states, self.input_ids[:1])
+             if tokens is not None:
+                 return self._graph_draft_result(tokens, hidden_states)
++        psample = self._psample_shard(hidden_states, sampling_metadata, logits)
++        if psample is not None:
++            return psample
+         coupled_graph = getattr(self.model, "coupled_shard_draft_tokens", None)
+         if (
+             coupled_graph is not None

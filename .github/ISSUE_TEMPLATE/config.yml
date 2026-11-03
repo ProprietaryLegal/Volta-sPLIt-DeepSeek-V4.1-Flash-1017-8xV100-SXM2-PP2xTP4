@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security problem
+    url: https://github.com/ProprietaryLegal/Volta-sPLIt-DeepSeek-V4.1-Flash-1017-8xV100-SXM2-PP2xTP4/security/advisories/new
+    about: Report security problems privately, not as a public issue.
+  - name: Engine problem (1CatAI/1Cat-vLLM)
+    url: https://github.com/1CatAI/1Cat-vLLM/issues
+    about: Problems in the upstream engine or its #1277 DeepSeek-V4.1 package themselves.

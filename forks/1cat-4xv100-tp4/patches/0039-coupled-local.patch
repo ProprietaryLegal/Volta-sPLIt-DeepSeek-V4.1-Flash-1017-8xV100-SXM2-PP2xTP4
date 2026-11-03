@@ -1,0 +1,1079 @@
+diff --git a/tests/models/test_deepseek_v41_coupled_drafts.py b/tests/models/test_deepseek_v41_coupled_drafts.py
+index 771940a46..9061b9557 100644
+--- a/tests/models/test_deepseek_v41_coupled_drafts.py
++++ b/tests/models/test_deepseek_v41_coupled_drafts.py
+@@ -295,7 +295,7 @@ def test_sampler_runner_and_drafter_glue():
+     # greedy batches skip every coupled op; keys copy pinned, only on change
+     assert "if _COUPLED_DRAFTS and not sampling_metadata.all_greedy:" in runner
+     assert "buffer[:num_reqs].copy_(staged, non_blocking=True)" in runner
+-    assert "and not sampling_metadata.all_greedy\n        ):\n" in runner
++    assert "and not sampling_metadata.all_greedy\n            ):\n" in runner
+     fused = (
+         "sampled = coupled_draw.keyed_argmax(processed, temperature, keys, positions)"
+     )
+diff --git a/tests/models/test_deepseek_v41_coupled_local.py b/tests/models/test_deepseek_v41_coupled_local.py
+new file mode 100644
+index 000000000..e996874b9
+--- /dev/null
++++ b/tests/models/test_deepseek_v41_coupled_local.py
+@@ -0,0 +1,449 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""VLLM_V41_COUPLED_LOCAL: target keyed verification from vocabulary shards.
++
++1. Fallback conditions. ``coupled_draw.local_fallback`` clears only
++   plain-temperature steps with every row random; greedy rows, top-k, top-p,
++   active min-p or min-tokens, logprobs, penalties, allowed or bad words, a
++   thinking budget or any other logits processor take today's path. The
++   runner's ``_can_use_v41_keyed_local`` (run from the source with a fake
++   runner) adds grammar, DDTree, tracing, probabilistic MTP, synthetic
++   acceptance, dynamic draft vocabulary, PP broadcast and non-standard rows,
++   and stays off unless both knobs are set.
++2. Exactness. ``coupled_draw.KeyedShard`` on 4 emulated TP ranks (threads,
++   sum all-reduce in rank order, Triton interpreter) gives every rank
++   ``keyed_argmax``'s tokens on the gathered, temperature-divided rows:
++   random rows at several temperatures, uneven shards that are not a
++   multiple of the block, a greedy row, and infinite ties across shards.
++
++    python tests/models/test_deepseek_v41_coupled_local.py   # or pytest
++"""
++
++import os
++
++os.environ["TRITON_INTERPRET"] = "1"  # before triton is imported
++
++import ast  # noqa: E402
++import importlib.util  # noqa: E402
++import sys  # noqa: E402
++import types  # noqa: E402
++from pathlib import Path  # noqa: E402
++
++import pytest  # noqa: E402
++import torch  # noqa: E402
++import triton  # noqa: E402
++import triton.language as tl  # noqa: E402
++
++ROOT = Path(__file__).resolve().parents[2]
++RUNNER = ROOT / "vllm/v1/worker/gpu_model_runner.py"
++
++
++def _load(name, path):
++    spec = importlib.util.spec_from_file_location(name, path)
++    mod = importlib.util.module_from_spec(spec)
++    sys.modules[name] = mod
++    spec.loader.exec_module(mod)
++    return mod
++
++
++def _coupled_draw():
++    for name in ("vllm", "vllm.v1", "vllm.v1.spec_decode"):
++        sys.modules.setdefault(name, types.ModuleType(name))
++    if "vllm.triton_utils" not in sys.modules:
++        tu = types.ModuleType("vllm.triton_utils")
++        tu.tl, tu.triton = tl, triton
++        sys.modules["vllm.triton_utils"] = tu
++    cd = _load(
++        "vllm.v1.spec_decode.coupled_draw",
++        ROOT / "vllm" / "v1" / "spec_decode" / "coupled_draw.py",
++    )
++    sys.modules["vllm.v1.spec_decode"].coupled_draw = cd
++    return cd
++
++
++CD = _coupled_draw()
++MS = _load(
++    "v41_coupled_local_emulation",
++    ROOT / "tests/models/test_deepseek_v41_markov_shard.py",
++)
++for _name in ("_keyed_shard_block", "_keyed_shard_slot", "_keyed_shard_pick"):
++    setattr(CD, _name, MS._Locked(getattr(CD, _name)))
++
++# ---------------------------------------------------------------- fallback
++
++
++class MinP:
++    def __init__(self, count=0):
++        self.min_p_count = count
++
++
++class MinTokens:
++    def __init__(self, active=False):
++        self.min_toks = {0: (3, set())} if active else {}
++
++
++class Budget:
++    def __init__(self, tracked):
++        self.tracked = tracked
++
++    def has_tracked_requests(self):
++        return self.tracked
++
++
++def _metadata(**changes):
++    fields = dict(
++        all_greedy=False,
++        all_random=True,
++        temperature=torch.ones(2),
++        top_k=None,
++        top_p=None,
++        max_num_logprobs=None,
++        logprob_token_ids=None,
++        no_penalties=True,
++        allowed_token_ids_mask=None,
++        bad_words_token_ids={},
++        thinking_budget_state_holder=None,
++        logitsprocs=types.SimpleNamespace(all=[MinTokens(), MinP()]),
++    )
++    fields.update(changes)
++    return types.SimpleNamespace(**fields)
++
++
++def _procs(*procs):
++    return types.SimpleNamespace(all=list(procs))
++
++
++FALLBACKS = {
++    "greedy_rows": [
++        dict(all_random=False),  # a greedy row in a random batch
++        dict(all_greedy=True, all_random=False),
++    ],
++    "no_temperature": [dict(temperature=None)],
++    "top_k": [dict(top_k=torch.tensor([50, 0]))],
++    "top_p": [dict(top_p=torch.tensor([0.9, 1.0]))],
++    "logprobs": [dict(max_num_logprobs=0), dict(logprob_token_ids={0: [5]})],
++    "penalties": [dict(no_penalties=False)],
++    "allowed_token_ids": [dict(allowed_token_ids_mask=torch.zeros(2, 8))],
++    "bad_words": [dict(bad_words_token_ids={0: [[7]]})],
++    "thinking_budget": [dict(thinking_budget_state_holder=Budget(True))],
++    "min_p": [dict(logitsprocs=_procs(MinTokens(), MinP(1)))],
++    "min_tokens": [dict(logitsprocs=_procs(MinTokens(True), MinP()))],
++    "logits_processor": [dict(logitsprocs=_procs(MinP(), object()))],
++}
++
++
++def test_plain_temperature_steps_take_the_shard_path():
++    assert CD.local_fallback(_metadata()) is None
++    assert CD.local_fallback(_metadata(temperature=torch.tensor([0.6, 1.3]))) is None
++    assert CD.local_fallback(_metadata(logitsprocs=_procs())) is None
++    holder = Budget(False)
++    assert CD.local_fallback(_metadata(thinking_budget_state_holder=holder)) is None
++
++
++@pytest.mark.parametrize(
++    "reason,change",
++    [(r, c) for r, cases in FALLBACKS.items() for c in cases],
++    ids=lambda x: x if isinstance(x, str) else "",
++)
++def test_other_sampling_takes_todays_path(reason, change):
++    assert CD.local_fallback(_metadata(**change)) == reason
++
++
++def _runner_gate(drafts=True, local=True):
++    """_can_use_v41_keyed_local from the runner source, its globals faked."""
++    tree = ast.parse(RUNNER.read_text())
++    cls = next(
++        n
++        for n in tree.body
++        if isinstance(n, ast.ClassDef) and n.name == "GPUModelRunner"
++    )
++    fn = next(
++        n
++        for n in cls.body
++        if isinstance(n, ast.FunctionDef) and n.name == "_can_use_v41_keyed_local"
++    )
++    ns = {
++        "_COUPLED_DRAFTS": drafts,
++        "_COUPLED_LOCAL": local,
++        "SpecDecodeMetadata": type("SpecDecodeMetadata", (), {}),
++    }
++    exec(compile(ast.Module([fn], []), str(RUNNER), "exec"), ns)
++    return ns["_can_use_v41_keyed_local"]
++
++
++def _runner(metadata=None, shard=True, **changes):
++    spec = types.SimpleNamespace(
++        method="dspark", draft_sample_method="greedy", use_dflash_ddtree=lambda: False
++    )
++    fields = dict(
++        broadcast_pp_output=False,
++        is_pooling_model=False,
++        rejection_sampler=types.SimpleNamespace(synthetic_mode=False),
++        dynamic_draft_vocab_prefill_topk=0,
++        speculative_config=spec,
++        input_batch=types.SimpleNamespace(sampling_metadata=metadata or _metadata()),
++        _v41_keyed_shard=lambda: object() if shard else None,
++    )
++    fields.update(changes)
++    return types.SimpleNamespace(**fields)
++
++
++def _spec(drafts=(5, 5)):
++    return types.SimpleNamespace(
++        num_draft_tokens=list(drafts),
++        bonus_logits_indices=torch.zeros(len(drafts)),
++    )
++
++
++def _sched(grammar=False):
++    return types.SimpleNamespace(has_structured_output_requests=grammar)
++
++
++def test_runner_gate_on_for_plain_temperature():
++    assert _runner_gate()(_runner(), _sched(), _spec(), 12) is True
++    assert _runner_gate()(_runner(), _sched(), _spec((5,)), 6) is True
++
++
++def _ddtree():
++    return types.SimpleNamespace(
++        method="dspark", draft_sample_method="greedy", use_dflash_ddtree=lambda: True
++    )
++
++
++def _mtp_probabilistic():
++    return types.SimpleNamespace(
++        method="mtp",
++        draft_sample_method="probabilistic",
++        use_dflash_ddtree=lambda: False,
++    )
++
++
++@pytest.mark.parametrize(
++    "case",
++    [
++        "knob_off",
++        "drafts_off",
++        "no_spec",
++        "grammar",
++        "pp_broadcast",
++        "pooling",
++        "trace",
++        "synthetic",
++        "dynamic_vocab",
++        "ddtree",
++        "mtp_probabilistic",
++        "no_spec_config",
++        "rows",
++        "bonus_rows",
++        "no_shard_layout",
++        "top_p",
++        "greedy_row",
++    ],
++)
++def test_runner_gate_falls_back(case, monkeypatch):
++    gate, runner, sched, spec, rows = _runner_gate(), _runner(), _sched(), _spec(), 12
++    if case == "knob_off":
++        gate = _runner_gate(local=False)
++    elif case == "drafts_off":
++        gate = _runner_gate(drafts=False)
++    elif case == "no_spec":
++        spec = None
++    elif case == "grammar":
++        sched = _sched(grammar=True)
++    elif case == "pp_broadcast":
++        runner = _runner(broadcast_pp_output=True)
++    elif case == "pooling":
++        runner = _runner(is_pooling_model=True)
++    elif case == "trace":
++        monkeypatch.setattr(CD, "TRACE", "/tmp/never-written")
++    elif case == "synthetic":
++        runner = _runner(rejection_sampler=types.SimpleNamespace(synthetic_mode=True))
++    elif case == "dynamic_vocab":
++        runner = _runner(dynamic_draft_vocab_prefill_topk=64)
++    elif case == "ddtree":
++        runner = _runner(speculative_config=_ddtree())
++    elif case == "mtp_probabilistic":
++        runner = _runner(speculative_config=_mtp_probabilistic())
++    elif case == "no_spec_config":
++        runner = _runner(speculative_config=None)
++    elif case == "rows":
++        rows = 11
++    elif case == "bonus_rows":
++        spec.bonus_logits_indices = torch.zeros(3)
++    elif case == "no_shard_layout":
++        runner = _runner(shard=False)
++    elif case == "top_p":
++        runner = _runner(_metadata(top_p=torch.tensor([0.9, 1.0])))
++    elif case == "greedy_row":
++        runner = _runner(_metadata(all_random=False))
++    assert gate(runner, sched, spec, rows) is False
++
++
++def test_runner_wiring():
++    src = RUNNER.read_text()
++    assert '_COUPLED_LOCAL = envs.VLLM_V41_COUPLED_LOCAL == "1"' in src
++    # Decided after every existing fast path, before the logits are computed.
++    assert (
++        "                    logits = None\n"
++        "                elif self._can_use_v41_keyed_local(\n"
++    ) in src
++    assert "self._v41_keyed_local_step = True\n                    logits = None" in src
++    # _sample: only a step the gate cleared, and draft probabilities (or a
++    # grammar that computed the logits) send it back to today's path.
++    assert (
++        'keyed_local = logits is None and getattr(self, "_v41_keyed_local_step", False)'
++    ) in src
++    assert "if keyed_local and draft_probs is not None:\n" in src
++    assert "if logits is None and not keyed_local:\n" in src
++    assert "self._set_coupled_rows(spec_decode_metadata, logits)" in src
++    sampler = (ROOT / "vllm/v1/sample/rejection_sampler.py").read_text()
++    assert "    def sample_coupled_local(\n" in sampler
++    assert "processed.div_(divisor.unsqueeze(-1))" in sampler
++    model = (ROOT / "vllm/models/deepseek_v41/model.py").read_text()
++    assert "    def local_vocab(self) -> tuple[int, int] | None:\n" in model
++    envs = (ROOT / "vllm/envs.py").read_text()
++    for name in ("VLLM_V41_COUPLED_LOCAL", "VLLM_V41_COUPLED_LOCAL_CHECK"):
++        assert f'    {name}: str = "0"\n' in envs
++        assert f'lambda: os.getenv("{name}", "0")' in envs
++
++
++def _local_vocab(vocab, tp, rank, padding=64, added=0, scale=1.0, soft_cap=None):
++    """DeepseekV41ForCausalLM.local_vocab from the model source on a fake
++    head laid out as VocabParallelEmbedding lays it out."""
++    model = ROOT / "vllm/models/deepseek_v41/model.py"
++    tree = ast.parse(model.read_text())
++    cls = next(
++        n
++        for n in tree.body
++        if isinstance(n, ast.ClassDef)
++        and any(
++            isinstance(f, ast.FunctionDef) and f.name == "local_vocab" for f in n.body
++        )
++    )
++    fn = next(f for f in cls.body if getattr(f, "name", "") == "local_vocab")
++    missing = type("PPMissingLayer", (), {})
++    ns = {
++        "PPMissingLayer": missing,
++        "get_tensor_model_parallel_rank": lambda: rank,
++        "get_tensor_model_parallel_world_size": lambda: tp,
++    }
++    exec(compile(ast.Module([fn], []), str(model), "exec"), ns)
++    padded = -(-vocab // padding) * padding
++    per_rank = -(-(padded + added) // (padding * tp)) * padding
++    org_start = min(rank * per_rank, vocab)
++    head = types.SimpleNamespace(
++        num_embeddings_per_partition=per_rank,
++        num_added_embeddings=added,
++        org_vocab_size=vocab,
++        shard_indices=types.SimpleNamespace(
++            org_vocab_start_index=org_start,
++            padded_org_vocab_start_index=min(rank * per_rank, padded),
++            num_org_elements=min((rank + 1) * per_rank, vocab) - org_start,
++        ),
++    )
++    proc = types.SimpleNamespace(
++        logits_as_input=False, scale=scale, soft_cap=soft_cap, org_vocab_size=vocab
++    )
++    return ns["local_vocab"](types.SimpleNamespace(lm_head=head, logits_processor=proc))
++
++
++def test_local_vocab_layouts():
++    # 8-GPU build: 129280 = 4 x 32320, no padding
++    assert [_local_vocab(129280, 4, r) for r in range(4)] == [
++        (r * 32320, 32320) for r in range(4)
++    ]
++    # padding only in the last shard's tail
++    assert [_local_vocab(1000, 4, r) for r in range(4)] == [
++        (0, 256),
++        (256, 256),
++        (512, 256),
++        (768, 232),
++    ]
++    assert _local_vocab(100, 4, 0) is None  # rank 3 would be empty: all ranks off
++    assert _local_vocab(129280, 4, 1, scale=0.5) is None
++    assert _local_vocab(129280, 4, 1, soft_cap=30.0) is None
++    assert _local_vocab(129280, 4, 1, added=64) is None
++
++
++# --------------------------------------------------------------- exactness
++
++SIZES = [1500, 1500, 1500, 1300]  # not block multiples; the last one shorter
++STARTS = [sum(SIZES[:r]) for r in range(len(SIZES))]
++VOCAB = sum(SIZES)
++
++
++def _keys(n, seed):
++    g = torch.Generator().manual_seed(seed)
++    keys = torch.randint(0, 1 << 62, (n,), generator=g, dtype=torch.int64)
++    pos = torch.randint(0, 1 << 20, (n,), generator=g, dtype=torch.int64)
++    return keys, pos
++
++
++def _shard_tokens(logits, temperature, keys, positions):
++    """Every rank's picks from its own columns (temperature divided per rank,
++    as sample_coupled_local does) and the gathered keyed_argmax picks."""
++    divisor = torch.where(temperature > 0, temperature, torch.ones_like(temperature))
++    want = CD.keyed_argmax(logits / divisor.unsqueeze(1), temperature, keys, positions)
++    group = MS.Group(tp=len(SIZES))
++    shards = [
++        CD.KeyedShard(STARTS[r], SIZES[r], r, len(SIZES), group.all_reduce)
++        for r in range(len(SIZES))
++    ]
++
++    def rank(r):
++        local = logits[:, STARTS[r] : STARTS[r] + SIZES[r]].clone()
++        local.div_(divisor.unsqueeze(1))
++        return shards[r](local, temperature, keys, positions)
++
++    got = group.run(rank)
++    for r, tokens in enumerate(got):
++        if isinstance(tokens, BaseException):
++            raise tokens
++        assert torch.equal(tokens, want), (r, tokens.tolist(), want.tolist())
++    assert [op for op, _ in group.ops[0]] == ["all_reduce"]
++    return want
++
++
++@pytest.mark.parametrize("temperature", [1.0, 0.6, 2.0])
++def test_shard_picks_equal_gathered_keyed_argmax(temperature):
++    rows = 6
++    g = torch.Generator().manual_seed(int(temperature * 10))
++    logits = torch.randn(rows, VOCAB, generator=g) * 3.0
++    keys, pos = _keys(rows, 1)
++    _shard_tokens(logits, torch.full((rows,), temperature), keys, pos)
++
++
++def test_mixed_rows_and_a_greedy_row():
++    rows = 5
++    g = torch.Generator().manual_seed(7)
++    logits = torch.randn(rows, VOCAB, generator=g) * 2.0
++    keys, pos = _keys(rows, 2)
++    temperature = torch.tensor([1.0, 0.0, 0.7, 1.3, 1.0])
++    want = _shard_tokens(logits, temperature, keys, pos)
++    assert want[1] == logits[1].argmax()
++
++
++def test_infinite_ties_across_shards_take_the_lowest_global_id():
++    rows = 3
++    g = torch.Generator().manual_seed(9)
++    logits = torch.randn(rows, VOCAB, generator=g)
++    logits[:, STARTS[1] + SIZES[1] - 1] = float("inf")
++    logits[:, STARTS[3]] = float("inf")
++    keys, pos = _keys(rows, 3)
++    want = _shard_tokens(logits, torch.ones(rows), keys, pos)
++    assert want.tolist() == [STARTS[1] + SIZES[1] - 1] * rows
++
++
++def test_one_rank_is_keyed_argmax():
++    g = torch.Generator().manual_seed(11)
++    logits = torch.randn(4, 2500, generator=g)
++    keys, pos = _keys(4, 4)
++    t = torch.tensor([1.0, 0.5, 1.0, 0.0])
++    shard = CD.KeyedShard(0, 2500, 0, 1, lambda slots: slots)
++    divisor = torch.where(t > 0, t, torch.ones_like(t)).unsqueeze(1)
++    got = shard(logits / divisor, t, keys, pos)
++    assert torch.equal(got, CD.keyed_argmax(logits / divisor, t, keys, pos))
++
++
++if __name__ == "__main__":
++    sys.exit(pytest.main([__file__, "-q"]))
+diff --git a/vllm/envs.py b/vllm/envs.py
+index 5c76e8879..0d8fc7eee 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -466,6 +466,8 @@ if TYPE_CHECKING:
+     VLLM_V41_COUPLED_DRAFTS: str = "0"
+     VLLM_V41_COUPLED_SHARD: str = "0"
+     VLLM_V41_COUPLED_SHARD_CHECK: str = "0"
++    VLLM_V41_COUPLED_LOCAL: str = "0"
++    VLLM_V41_COUPLED_LOCAL_CHECK: str = "0"
+     VLLM_V41_COORD_DEBUG: str | None = None
+     VLLM_V41_DENSE_TM: str = "1"
+     VLLM_V41_DMA_DEBUG: str | None = None
+@@ -7320,6 +7322,33 @@ environment_variables: dict[str, Callable[[], Any]] = {
+         acceleration_paths=(),
+         user_visible=False,
+     ),
++    "VLLM_V41_COUPLED_LOCAL": env_var(
++        lambda: os.getenv("VLLM_V41_COUPLED_LOCAL", "0"),
++        description=(
++            "Experimental DS-V4.1 coupled drafts: 1 = keyed verification of "
++            "plain-temperature steps from the vocabulary shards (no logits "
++            "all-gather); other sampling settings take the gathered path."
++        ),
++        category="experimental",
++        declared_default="'0'",
++        effective_default="'0'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
++    "VLLM_V41_COUPLED_LOCAL_CHECK": env_var(
++        lambda: os.getenv("VLLM_V41_COUPLED_LOCAL_CHECK", "0"),
++        description=(
++            "Debug for VLLM_V41_COUPLED_LOCAL: also run the gathered keyed "
++            "verification each step and log steps whose output differs (slow)."
++        ),
++        category="experimental",
++        declared_default="'0'",
++        effective_default="'0'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
+     "VLLM_V41_COUPLED_TRACE": env_var(
+         lambda: os.getenv("VLLM_V41_COUPLED_TRACE", ""),
+         description=(
+@@ -20578,6 +20607,8 @@ def compile_factors(kernel_config=None, *, vllm_config=None) -> dict[str, object
+         "VLLM_V41_COL_PROJ",
+         "VLLM_V41_COUPLED_DRAFTS",
+         "VLLM_V41_COUPLED_DRAFT_TEMP",
++        "VLLM_V41_COUPLED_LOCAL",
++        "VLLM_V41_COUPLED_LOCAL_CHECK",
+         "VLLM_V41_COUPLED_SHARD",
+         "VLLM_V41_COUPLED_SHARD_CHECK",
+         "VLLM_V41_COUPLED_TRACE",
+diff --git a/vllm/models/deepseek_v41/model.py b/vllm/models/deepseek_v41/model.py
+index b3e87d48e..c9c6d7970 100644
+--- a/vllm/models/deepseek_v41/model.py
++++ b/vllm/models/deepseek_v41/model.py
+@@ -1281,6 +1281,36 @@ class DeepseekV41ForCausalLM(nn.Module, SupportsEagle3, SupportsPP):
+     def compute_logits(self, hidden_states):
+         return self.logits_processor(self.lm_head, hidden_states)
+ 
++    def local_vocab(self) -> tuple[int, int] | None:
++        """(start, n): this rank's vocabulary shard as ``compute_logits``
++        lays it out (gathered columns [start, start + n) are token ids
++        [start, start + n)), or None when the gathered logits are more than
++        the shards side by side (scale, soft cap, added vocabulary, an empty
++        shard) and only the gathered path is exact. Every check is the same
++        on every TP rank, so the ranks agree and their collectives pair up."""
++        head, proc = self.lm_head, self.logits_processor
++        if isinstance(head, PPMissingLayer) or proc.logits_as_input:
++            return None
++        if proc.scale != 1.0 or proc.soft_cap is not None:
++            return None
++        vocab, per_rank = proc.org_vocab_size, head.num_embeddings_per_partition
++        if head.num_added_embeddings or vocab != head.org_vocab_size:
++            return None
++        tp = get_tensor_model_parallel_world_size()
++        if vocab <= (tp - 1) * per_rank or vocab >= 1 << 24:  # ids exact in FP32
++            return None
++        si = head.shard_indices
++        start = get_tensor_model_parallel_rank() * per_rank
++        # Padding sits only after the last real token (asserted, not assumed).
++        assert si.org_vocab_start_index == si.padded_org_vocab_start_index == start
++        return start, min(si.num_org_elements, vocab - start)
++
++    def local_logits(self, hidden_states, n: int):
++        """This rank's [rows, n] shard of ``compute_logits`` (no all-gather):
++        the same head call, so the values are the gathered ones bit for bit."""
++        logits = self.lm_head.quant_method.apply(self.lm_head, hidden_states, bias=None)
++        return logits[:, :n]
++
+     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+         return AutoWeightsLoader(self).load_weights(weights)
+ 
+diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
+index 6c0c46dad..9b1b118a2 100644
+--- a/vllm/v1/sample/rejection_sampler.py
++++ b/vllm/v1/sample/rejection_sampler.py
+@@ -612,6 +612,45 @@ class RejectionSampler(nn.Module):
+             logprobs_tensors=None,
+         )
+ 
++    def sample_coupled_local(
++        self,
++        metadata: SpecDecodeMetadata,
++        local_logits: torch.Tensor,
++        sampling_metadata: SamplingMetadata,
++        keys: torch.Tensor,
++        positions: torch.Tensor,
++        shard,
++    ) -> SamplerOutput:
++        """_sample_coupled on this rank's vocabulary shard (no all-gather).
++
++        Only for steps coupled_draw.local_fallback clears (plain temperature,
++        every row random): the processing is then the temperature division
++        alone, done as apply_sampling_constraints does it, so the shard holds
++        the gathered processed values bit for bit, and ``shard``
++        (coupled_draw.KeyedShard) picks keyed_argmax's tokens.
++        """
++        num_rows = local_logits.shape[0]
++        assert sampling_metadata.temperature is not None
++        cu = metadata.cu_num_sampled_tokens
++        divisor = expand_batch_to_tokens(
++            sampling_metadata.temperature,
++            cu,
++            num_rows,
++            replace_from=GREEDY_TEMPERATURE,
++            replace_to=1,
++        )
++        processed = local_logits.to(torch.float32)
++        processed.div_(divisor.unsqueeze(-1))
++        temperature = expand_batch_to_tokens(
++            sampling_metadata.temperature, cu, num_rows
++        )
++        keys = expand_batch_to_tokens(keys, cu, num_rows)
++        sampled = shard(processed, temperature, keys, positions)
++        return SamplerOutput(
++            sampled_token_ids=token_match_sample(metadata, sampled),
++            logprobs_tensors=None,
++        )
++
+     def _sample_by_token_matching(
+         self,
+         metadata: SpecDecodeMetadata,
+diff --git a/vllm/v1/spec_decode/coupled_draw.py b/vllm/v1/spec_decode/coupled_draw.py
+index da23b9300..f320da79b 100644
+--- a/vllm/v1/spec_decode/coupled_draw.py
++++ b/vllm/v1/spec_decode/coupled_draw.py
+@@ -239,6 +239,194 @@ def keyed_argmax(
+     return out
+ 
+ 
++# Target-side keyed picks from vocabulary shards (VLLM_V41_COUPLED_LOCAL):
++# each TP rank scores only its shard of the verify logits at the global ids,
++# then one [rows, tp, 2] FP32 all-reduce replaces the logits all-gather.
++@triton.jit
++def _keyed_shard_block(
++    logits,
++    l_stride,
++    temperature,
++    keys,
++    positions,
++    best_val,
++    best_idx,
++    start,
++    N: tl.constexpr,
++    NB: tl.constexpr,
++    BLOCK: tl.constexpr,
++):
++    pid, r = tl.program_id(0), tl.program_id(1)
++    v = pid * BLOCK + tl.arange(0, BLOCK)
++    valid = v < N
++    x = tl.load(logits + r.to(tl.int64) * l_stride + v, valid, float("-inf"))
++    x = x.to(tl.float32)
++    if tl.load(temperature + r) > 0:
++        seed = row_seed(tl.load(keys + r), tl.load(positions + r))
++        x = x + gumbel(seed, v.to(tl.int64) + start)  # the global token id
++    x = tl.where(valid, x, float("-inf"))
++    m = tl.max(x, 0)
++    tl.store(best_val + r * NB + pid, m)
++    tl.store(best_idx + r * NB + pid, tl.min(tl.where(x == m, v, 2147483647), 0))
++
++
++@triton.jit
++def _keyed_shard_slot(
++    best_val,
++    best_idx,
++    slots,
++    start,
++    rank,
++    NB: tl.constexpr,
++    PB: tl.constexpr,
++    TP: tl.constexpr,
++    TPP: tl.constexpr,
++):
++    """Row r's shard maximum and its lowest global id into slot [r, rank];
++    the other slots of the row are zero, so a sum all-reduce copies every
++    rank's pair to every rank exactly (ids below 2**24 are exact in FP32)."""
++    r = tl.program_id(0)
++    b = tl.arange(0, PB)
++    valid = b < NB
++    val = tl.load(best_val + r * NB + b, valid, float("-inf"))
++    idx = tl.load(best_idx + r * NB + b, valid, 2147483647)
++    m = tl.max(val, 0)
++    gid = (tl.min(tl.where(val == m, idx, 2147483647), 0) + start).to(tl.float32)
++    t = tl.arange(0, TPP)
++    mine = t == rank
++    tl.store(slots + r * (2 * TP) + 2 * t, tl.where(mine, m, 0.0), t < TP)
++    tl.store(slots + r * (2 * TP) + 2 * t + 1, tl.where(mine, gid, 0.0), t < TP)
++
++
++@triton.jit
++def _keyed_shard_pick(slots, out, TP: tl.constexpr, TPP: tl.constexpr):
++    """Largest shard maximum, lowest global id on ties (shards are in
++    vocabulary order): keyed_argmax's pick over the gathered row."""
++    r = tl.program_id(0)
++    t = tl.arange(0, TPP)
++    valid = t < TP
++    val = tl.load(slots + r * (2 * TP) + 2 * t, valid, float("-inf"))
++    gid = tl.load(slots + r * (2 * TP) + 2 * t + 1, valid, 0.0).to(tl.int32)
++    m = tl.max(val, 0)
++    token = tl.min(tl.where(val == m, gid, 2147483647), 0)
++    tl.store(out + r, token.to(tl.int64))
++
++
++class KeyedShard:
++    """keyed_argmax for the target's verify rows on one TP rank's shard.
++
++    ``local`` holds this rank's columns [start, start + n) of the processed
++    (temperature-scaled) logits; the tokens equal keyed_argmax on the
++    gathered rows whenever no row holds NaN. ``exchange`` sums a
++    [rows, tp, 2] FP32 tensor over the TP group (the engine passes
++    ``tensor_model_parallel_all_reduce``); every rank must call it with the
++    same rows, so the exchanges pair up.
++    """
++
++    def __init__(self, start: int, n: int, rank: int, tp: int, exchange):
++        if n <= 0 or tp < 1 or not 0 <= rank < tp:
++            raise ValueError(f"bad shard start={start} n={n} rank={rank} tp={tp}")
++        if start + n >= 1 << 24:
++            raise ValueError("token ids must stay below 2**24 (exact in FP32)")
++        self.start, self.n, self.rank, self.tp = start, n, rank, tp
++        self.exchange = exchange
++
++    def __call__(
++        self,
++        local: torch.Tensor,
++        temperature: torch.Tensor,
++        keys: torch.Tensor,
++        positions: torch.Tensor,
++    ) -> torch.Tensor:
++        rows, n = local.shape
++        if n != self.n:
++            raise ValueError(f"shard has {n} columns, expected {self.n}")
++        if local.stride(1) != 1:
++            local = local.contiguous()
++        device = local.device
++        out = torch.empty(rows, dtype=torch.int64, device=device)
++        slots = torch.empty((rows, self.tp, 2), dtype=torch.float32, device=device)
++        if rows == 0:
++            return out
++        nb = triton.cdiv(n, KEYED_BLOCK)
++        best_val = torch.empty((rows, nb), dtype=torch.float32, device=device)
++        best_idx = torch.empty((rows, nb), dtype=torch.int32, device=device)
++        _keyed_shard_block[(nb, rows)](
++            local,
++            local.stride(0),
++            temperature.to(torch.float32),
++            keys.contiguous(),
++            positions.contiguous(),
++            best_val,
++            best_idx,
++            self.start,
++            N=n,
++            NB=nb,
++            BLOCK=KEYED_BLOCK,
++            num_warps=4,
++        )
++        tpp = triton.next_power_of_2(self.tp)
++        _keyed_shard_slot[(rows,)](
++            best_val,
++            best_idx,
++            slots,
++            self.start,
++            self.rank,
++            NB=nb,
++            PB=triton.next_power_of_2(nb),
++            TP=self.tp,
++            TPP=tpp,
++            num_warps=4,
++        )
++        _keyed_shard_pick[(rows,)](
++            self.exchange(slots), out, TP=self.tp, TPP=tpp, num_warps=1
++        )
++        return out
++
++
++def local_fallback(sampling_metadata) -> str | None:
++    """Why this step's verify rows must take the gathered path; None when
++    the shard path gives the same tokens.
++
++    The shard path covers plain temperature only: every row random (no
++    greedy row in the batch), no top-k, top-p or active min_p, no logprobs,
++    penalties, allowed or bad words, no thinking budget and no other active
++    logits processor. Grammar (structured output) is the runner's check: it
++    edits the gathered logits after the forward pass.
++    """
++    m = sampling_metadata
++    if m.all_greedy or not m.all_random:
++        return "greedy_rows"
++    if m.temperature is None:
++        return "no_temperature"
++    if m.top_k is not None:
++        return "top_k"
++    if m.top_p is not None:
++        return "top_p"
++    if m.max_num_logprobs is not None or m.logprob_token_ids:
++        return "logprobs"
++    if not m.no_penalties:
++        return "penalties"
++    if m.allowed_token_ids_mask is not None:
++        return "allowed_token_ids"
++    if m.bad_words_token_ids:
++        return "bad_words"
++    holder = m.thinking_budget_state_holder
++    if holder is not None and holder.has_tracked_requests():
++        return "thinking_budget"
++    for proc in m.logitsprocs.all:
++        # With speculative decoding only min-tokens and min-p are built.
++        if hasattr(proc, "min_p_count"):
++            if proc.min_p_count:
++                return "min_p"
++        elif hasattr(proc, "min_toks"):
++            if proc.min_toks:
++                return "min_tokens"
++        else:
++            return "logits_processor"
++    return None
++
++
+ _TRACE_STEP = [0]
+ 
+ 
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index a1a44f708..3fecf9bed 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -1086,6 +1086,8 @@ def _non_greedy_rows_carry_drafts(
+ _V41_TRUNC_CUTOFF = int(envs.VLLM_V41_TRUNC_CUTOFF)
+ _V41_TRUNC = envs.VLLM_V41_TRUNC == "1"
+ _COUPLED_DRAFTS = os.getenv("VLLM_V41_COUPLED_DRAFTS", "0") == "1"
++_COUPLED_LOCAL = envs.VLLM_V41_COUPLED_LOCAL == "1"
++_COUPLED_LOCAL_CHECK = envs.VLLM_V41_COUPLED_LOCAL_CHECK == "1"
+ 
+ 
+ class GPUModelRunner(
+@@ -7144,29 +7146,155 @@ class GPUModelRunner(
+             buffer[:num_reqs].copy_(staged, non_blocking=True)
+             self._coupled_keys_state = state
+ 
+-    def _set_coupled_rows(
+-        self, metadata: SpecDecodeMetadata, logits: torch.Tensor
+-    ) -> None:
+-        """Per-logits-row output position (and per-request key) for keyed
++    def _coupled_rows(
++        self, metadata: SpecDecodeMetadata, rows: int
++    ) -> tuple[torch.Tensor, torch.Tensor] | None:
++        """Per-request keys and per-logits-row output positions for keyed
+         verification.
+ 
+-        Row i of `logits` is the token at self.positions[logits_indices[i]];
+-        it predicts the next position. Skipped (regular rejection sampling)
+-        when the rows do not follow the standard one-bonus-per-request layout.
++        Row i of the logits is the token at self.positions[logits_indices[i]];
++        it predicts the next position. None (regular rejection sampling) when
++        the rows do not follow the standard one-bonus-per-request layout.
+         """
+         from vllm.v1.spec_decode import coupled_draw
+ 
+         num_reqs = len(metadata.num_draft_tokens)
+         num_rows = sum(metadata.num_draft_tokens) + num_reqs
+         if (
+-            logits.shape[0] != num_rows
++            rows != num_rows
+             or metadata.logits_indices.numel() != num_rows
+             or metadata.bonus_logits_indices.numel() != num_reqs
+         ):
+-            return
++            return None
+         buffer = coupled_draw.keys_buffer(self.device, self.max_num_reqs)
+         positions = self.positions[metadata.logits_indices.long()] + 1
+-        self.rejection_sampler.set_coupled_rows(buffer[:num_reqs], positions)
++        return buffer[:num_reqs], positions
++
++    def _set_coupled_rows(
++        self, metadata: SpecDecodeMetadata, logits: torch.Tensor
++    ) -> None:
++        rows = self._coupled_rows(metadata, logits.shape[0])
++        if rows is not None:
++            self.rejection_sampler.set_coupled_rows(*rows)
++
++    def _v41_keyed_shard(self):
++        """coupled_draw.KeyedShard for the target's vocabulary shard, built
++        once; None when the model does not lay its logits out as shards."""
++        shard = getattr(self, "_v41_keyed_shard_cache", False)
++        if shard is not False:
++            return shard
++        shard = None
++        local_vocab = getattr(self.model, "local_vocab", None)
++        layout = local_vocab() if callable(local_vocab) else None
++        if layout is not None:
++            from vllm.distributed import tensor_model_parallel_all_reduce
++            from vllm.v1.spec_decode import coupled_draw
++
++            group = get_tp_group()
++            shard = coupled_draw.KeyedShard(
++                *layout,
++                group.rank_in_group,
++                group.world_size,
++                tensor_model_parallel_all_reduce,
++            )
++        logger.info(
++            "V4.1 coupled local verify (VLLM_V41_COUPLED_LOCAL): %s",
++            f"vocabulary shard {layout[0]}+{layout[1]}"
++            if layout
++            else "gathered logits only",
++        )
++        self._v41_keyed_shard_cache = shard
++        return shard
++
++    def _can_use_v41_keyed_local(
++        self,
++        scheduler_output: "SchedulerOutput",
++        spec_decode_metadata: SpecDecodeMetadata | None,
++        rows: int,
++    ) -> bool:
++        """VLLM_V41_COUPLED_LOCAL: keyed verification from the vocabulary
++        shards, so no logits all-gather and no full-vocabulary sampler work.
++        Anything else takes today's path (gathered logits): greedy rows,
++        top-k, top-p, min-p, logprobs, penalties, allowed or bad words,
++        grammar, logits processors, draft probabilities, DDTree, tracing.
++        """
++        if not (_COUPLED_DRAFTS and _COUPLED_LOCAL) or spec_decode_metadata is None:
++            return False
++        from vllm.v1.spec_decode import coupled_draw
++
++        if (
++            self.broadcast_pp_output
++            or self.is_pooling_model
++            or scheduler_output.has_structured_output_requests
++            or coupled_draw.TRACE
++            or self.rejection_sampler.synthetic_mode
++            or self.dynamic_draft_vocab_prefill_topk != 0
++        ):
++            return False
++        spec_config = self.speculative_config
++        if spec_config is None or spec_config.use_dflash_ddtree():
++            return False
++        if spec_config.method == "mtp" and (
++            spec_config.draft_sample_method == "probabilistic"
++        ):
++            return False
++        if coupled_draw.local_fallback(self.input_batch.sampling_metadata):
++            return False
++        num_reqs = len(spec_decode_metadata.num_draft_tokens)
++        if (
++            rows != sum(spec_decode_metadata.num_draft_tokens) + num_reqs
++            or spec_decode_metadata.bonus_logits_indices.numel() != num_reqs
++        ):
++            return False
++        return self._v41_keyed_shard() is not None
++
++    def _sample_v41_keyed_local(
++        self,
++        metadata: SpecDecodeMetadata,
++        sample_hidden_states: torch.Tensor,
++        sampling_metadata: SamplingMetadata,
++    ) -> SamplerOutput:
++        shard = self._v41_keyed_shard()
++        rows = self._coupled_rows(metadata, sample_hidden_states.shape[0])
++        assert shard is not None and rows is not None
++        local = self.model.local_logits(sample_hidden_states, shard.n)
++        output = self.rejection_sampler.sample_coupled_local(
++            metadata, local, sampling_metadata, *rows, shard
++        )
++        if _COUPLED_LOCAL_CHECK:
++            self._v41_keyed_local_check(
++                metadata, sample_hidden_states, sampling_metadata, rows, output
++            )
++        return output
++
++    def _v41_keyed_local_check(
++        self, metadata, sample_hidden_states, sampling_metadata, rows, output
++    ) -> None:
++        """Debug (VLLM_V41_COUPLED_LOCAL_CHECK): today's gathered keyed
++        verification on the same step; counts steps whose output differs
++        (host sync; every rank runs it, so the all-gathers pair up)."""
++        logits = self.model.compute_logits(sample_hidden_states)
++        want = self.rejection_sampler._sample_coupled(
++            metadata, logits, sampling_metadata, *rows
++        ).sampled_token_ids
++        check = getattr(self, "_v41_keyed_local_counts", None)
++        if check is None:
++            check = self._v41_keyed_local_counts = [0, 0]
++        check[0] += 1
++        if not torch.equal(want, output.sampled_token_ids):
++            check[1] += 1
++            logger.warning(
++                "V4.1 coupled local verify: output differs from the gathered "
++                "path (%d of %d steps)",
++                check[1],
++                check[0],
++            )
++        if check[0] % 200 == 0:
++            logger.info(
++                "V4.1 coupled local verify check: %d mismatched of %d steps",
++                check[1],
++                check[0],
++            )
+ 
+     def _sample(
+         self,
+@@ -7180,6 +7308,8 @@ class GPUModelRunner(
+         sampling_metadata = self.input_batch.sampling_metadata
+         if _COUPLED_DRAFTS and not sampling_metadata.all_greedy:
+             self._fill_coupled_keys()
++        keyed_local = logits is None and getattr(self, "_v41_keyed_local_step", False)
++        self._v41_keyed_local_step = False
+         self._ddtree_accepted_rows_cpu_sidecar = None
+         self._ddtree_sampled_token_counts_cpu_sidecar = None
+         # Update output token ids with tokens sampled in last step
+@@ -7419,9 +7549,9 @@ class GPUModelRunner(
+                 len(ddtree_payloads),
+             )
+ 
+-        if logits is None:
++        if logits is None and not keyed_local:
+             logits = self.model.compute_logits(sample_hidden_states)
+-        assert logits is not None
++        assert logits is not None or keyed_local
+ 
+         if ddtree_greedy_candidate and spec_decode_metadata is not None:
+             if _dflash_ddtree_trace_path() is not None:
+@@ -7680,20 +7810,28 @@ class GPUModelRunner(
+                 spec_decode_metadata.draft_token_ids = torch.where(
+                     index + 1 >= trunc, torch.full_like(drafts, -1), drafts
+                 )
+-        if (
+-            _COUPLED_DRAFTS
+-            and draft_probs is None
+-            and logits is not None
+-            and not sampling_metadata.all_greedy
+-        ):
+-            self._set_coupled_rows(spec_decode_metadata, logits)
+-        sampler_output = self.rejection_sampler(
+-            spec_decode_metadata,
+-            draft_probs,
+-            logits,
+-            sampling_metadata,
+-            draft_confidence_logits=draft_confidence_logits,
+-        )
++        if keyed_local and draft_probs is not None:
++            keyed_local = False
++            logits = self.model.compute_logits(sample_hidden_states)
++        if keyed_local:
++            sampler_output = self._sample_v41_keyed_local(
++                spec_decode_metadata, sample_hidden_states, sampling_metadata
++            )
++        else:
++            assert logits is not None
++            if (
++                _COUPLED_DRAFTS
++                and draft_probs is None
++                and not sampling_metadata.all_greedy
++            ):
++                self._set_coupled_rows(spec_decode_metadata, logits)
++            sampler_output = self.rejection_sampler(
++                spec_decode_metadata,
++                draft_probs,
++                logits,
++                sampling_metadata,
++                draft_confidence_logits=draft_confidence_logits,
++            )
+         target_candidate_ids = self.rejection_sampler.take_last_target_candidate_ids()
+         update_dynamic_draft_vocab = getattr(
+             getattr(self, "drafter", None), "update_dynamic_draft_vocab", None
+@@ -8909,6 +9047,7 @@ class GPUModelRunner(
+ 
+                 sample_hidden_states = hidden_states[logits_indices]
+                 mtp_logits_start = self._step_profiler.start(mtp_profile_events)
++                self._v41_keyed_local_step = False
+                 if (
+                     self._can_use_greedy_token_fastpath(
+                         scheduler_output, spec_decode_metadata
+@@ -8924,6 +9063,13 @@ class GPUModelRunner(
+                     )
+                 ):
+                     logits = None
++                elif self._can_use_v41_keyed_local(
++                    scheduler_output,
++                    spec_decode_metadata,
++                    sample_hidden_states.shape[0],
++                ):
++                    self._v41_keyed_local_step = True
++                    logits = None
+                 else:
+                     logits = self.model.compute_logits(sample_hidden_states)
+                 self._step_profiler.finish(

@@ -1,0 +1,1160 @@
+diff --git a/benchmarks/deepseek_v41/small_fuse_check.py b/benchmarks/deepseek_v41/small_fuse_check.py
+index 8e9ba2bec..1c33b8165 100644
+--- a/benchmarks/deepseek_v41/small_fuse_check.py
++++ b/benchmarks/deepseek_v41/small_fuse_check.py
+@@ -3,16 +3,18 @@
+ """GPU check for the V4.1 small-kernel fusions (one GPU, synthetic inputs).
+ 
+     VLLM_V41_FUSE_TRANSITION  _transition_parts3 + _transition_finish3
+-                              -> _transition_fused3 (last-arrival finish)
++                              -> _transition_fused3 (one ticket per CTA,
++                              last-arrival finish; M = 1..6)
+     VLLM_V41_FUSE_ATTN_PREP   _rotate(q), _short_rms(kv), _rotate(kv), _qdq
+                               -> _attn_prep
+     VLLM_V41_FUSE_ATTN_POST   _ring_insert, _rotate(inverse), _qdq
+                               -> _attn_post
+ 
+ 1. Bit equality, old vs new, every output into fresh NaN-poisoned buffers:
+-   transition for M = 1..8, with mixes (the attention and FFN boundaries)
+-   and without (a stage's final norm), fn-row groups = VLLM_V41_HC_V3_GROUPS
+-   (8 unless set) and 1/2/4; PREP for M = 1..6 on the window and compressed
++   transition for M = 1..8 (7..8 take the old kernels), with mixes (the
++   attention and FFN boundaries) and without (a stage's final norm), fn-row
++   groups = VLLM_V41_HC_V3_GROUPS (8 unless set) and 1/2/4; PREP for M = 1..6
++   on the window and compressed
+    RoPE tables; POST for M = 1..8 with and without a window ring. Positions
+    inside the 16K table, at its end, beyond it (cos/sin on the fly) and 0;
+    zero rows, sub-floor QDQ groups and near-FP16-max values; invalid ring
+@@ -23,13 +25,23 @@
+ 3. Time per call inside a CUDA graph (--reps calls per replay, median of
+    --trials), old vs new, for M = --time-tokens; the per-layer and per-round
+    estimate uses 2 transitions + 1 PREP + 1 POST per layer, --layers layers.
+-   Transition register caps (maxnreg None/40/32) are timed too.
++   Transition register caps (maxnreg 40/None/32) are timed too.
++
++--transition-variants instead runs only the transition, for one GPU window:
++every fused-transition variant (register cap 40/32/None, early fn-row loads
++off, NORM block pairs off, quadrant Sinkhorn off, 4 fn-row groups) is
++bit-checked against the old kernels (M = 1..6, mixes on/off, eager and CUDA
++graphs) and timed per M next to the old pair, plus timing probes of the old
++kernels alone and of both paths without mixes (what a side-stream mix would
++leave on the critical path).
+ 
+ Loads the kernel modules from this script's tree (no vllm install or build
+ needed). Exit status 1 on any difference.
+ 
+     CUDA_VISIBLE_DEVICES=0 python benchmarks/deepseek_v41/small_fuse_check.py \\
+         --json /tmp/small_fuse.json
++    CUDA_VISIBLE_DEVICES=0 python benchmarks/deepseek_v41/small_fuse_check.py \\
++        --transition-variants --json /tmp/transition_variants.json
+ """
+ 
+ import argparse
+@@ -460,7 +472,7 @@ def timing(report, tokens_list, reps, trials, layers, groups):
+             lambda: _transition(FUSED._hc_transition3, x, res), reps, trials
+         )
+         cap = FUSED._FT_MAXNREG
+-        for maxnreg in (cap, None, 40, 32):
++        for maxnreg in (cap, 40, None, 32):
+             key = f"transition_new_maxnreg{maxnreg}"
+             if key in row:
+                 continue
+@@ -504,6 +516,176 @@ def timing(report, tokens_list, reps, trials, layers, groups):
+     )
+ 
+ 
++# ------------------------------------------------- transition variants --
++
++VARIANTS = (
++    ("v2", {}),  # as shipped
++    ("v2_maxnreg32", {"_FT_MAXNREG": 32}),
++    ("v2_maxnreg_none", {"_FT_MAXNREG": None}),
++    ("v2_no_early", {"_FT_EARLY": False}),
++    ("v2_no_pairs", {"_FT_NORM_PAIRS": False}),
++    ("v2_no_quad", {"_FT_QUAD": False}),
++    ("v2_groups4", {"_V3_GROUPS": 4}),  # fused path only; old keeps prod groups
++)
++
++
++@contextlib.contextmanager
++def fused_knobs(knobs):
++    saved = {name: getattr(FUSED, name) for name in knobs}
++    for name, value in knobs.items():
++        setattr(FUSED, name, value)
++    try:
++        yield
++    finally:
++        for name, value in saved.items():
++            setattr(FUSED, name, value)
++
++
++def check_variant(failures, name, knobs):
++    """Eager M = 1..6 (mixes on/off, 2 seeds) and interleaved graph replays."""
++    before = len(failures)
++    for tokens in range(1, FUSED._FT_TOKENS + 1):
++        for mix in (True, False):
++            for seed in range(2):
++                x = transition_inputs(tokens, mix, 7000 + 10 * tokens + seed)
++                with poisoned():
++                    old = _transition(FUSED._hc_transition3, x)
++                    with fused_knobs(knobs):
++                        new = _transition(FUSED._hc_transition_fused, x)
++                compare_transition(
++                    failures, f"{name} M={tokens} mix={mix} seed={seed}", old, new
++                )
++    graphs = {}
++    big = FUSED._FT_TOKENS
++    sizes = (big, 1, max(1, big // 2))
++    for tokens in sorted(set(sizes)):
++        x = transition_inputs(tokens, True, 170 + tokens)
++        res_old, res_new = x["residual"].clone(), x["residual"].clone()
++        g_old, out_old = _capture(
++            lambda x=x, r=res_old: _transition(FUSED._hc_transition3, x, r)[1:]
++        )
++        with fused_knobs(knobs):
++            g_new, out_new = _capture(
++                lambda x=x, r=res_new: _transition(FUSED._hc_transition_fused, x, r)[1:]
++            )
++        graphs[tokens] = (x, res_old, res_new, g_old, out_old, g_new, out_new)
++    for step, tokens in enumerate((big, 1, big, sizes[2], big)):
++        x, res_old, res_new, g_old, out_old, g_new, out_new = graphs[tokens]
++        fresh = transition_inputs(tokens, True, 8000 + step)
++        for key in ("y", "post", "comb", "collapse_pre"):
++            x[key].copy_(fresh[key])
++        res_old.copy_(fresh["residual"])
++        res_new.copy_(fresh["residual"])
++        g_old.replay()
++        g_new.replay()
++        torch.cuda.synchronize()
++        compare_transition(
++            failures,
++            f"{name} graph step={step} M={tokens}",
++            (res_old, out_old[0], out_old[1]),
++            (res_new, out_new[0], out_new[1]),
++        )
++    return len(failures) - before
++
++
++def _probes(tokens, groups):
++    """Timing-only launches of the old kernels alone, outside any wrapper."""
++    x = transition_inputs(tokens, True, 31)
++    res = x["residual"].clone()
++    f32 = dict(dtype=torch.float32, device=DEV)
++    cbuf = torch.zeros(tokens, H, **f32)
++    csq = torch.zeros(tokens, FUSED.CHUNKS, **f32)
++    dots = torch.zeros(tokens, FUSED.CHUNKS, 24, **f32)
++    sq = torch.zeros(tokens, FUSED.CHUNKS, **f32)
++    pre = torch.zeros(tokens, 4, **f32)
++    post_n = torch.zeros(tokens, 4, **f32)
++    comb_n = torch.zeros(tokens, 4, 4, **f32)
++    out = torch.zeros(tokens, H, dtype=torch.float16, device=DEV)
++    shape = dict(H=H, COLS=FUSED.COLS, CHUNKS=FUSED.CHUNKS)
++    opts = dict(num_warps=4, enable_fp_fusion=False)
++
++    def parts(mix):
++        g = groups if mix else 1
++        FUSED._transition_parts3[(tokens, FUSED.CHUNKS, g)](
++            res, x["y"], x["post"], x["comb"],
++            x["fn"] if mix else x["post"], x["collapse_pre"], cbuf,
++            dots if mix else csq, sq if mix else csq, csq,
++            MIX=mix, ROWS=24 // g, **shape, **opts,
++        )  # fmt: skip
++
++    def finish(mix):
++        FUSED._transition_finish3[(tokens, FUSED.CHUNKS)](
++            res, x["y"], x["post"], x["comb"],
++            dots if mix else csq, sq if mix else csq, csq, cbuf,
++            x["norm_weight"], out,
++            x["scale"] if mix else csq, x["base"] if mix else csq,
++            pre if mix else csq, post_n if mix else csq, comb_n if mix else csq,
++            MIX=mix, NORM_EPS=1e-20, HC_EPS=1e-6, ITERS=20, **shape, **opts,
++        )  # fmt: skip
++
++    nomix = dict(x, fn=None, scale=None, base=None)
++    for mix in (True, False):
++        parts(mix)  # fills the buffers finish3 reads
++    return {
++        "old_parts3": lambda: parts(True),
++        "old_finish3": lambda: finish(True),
++        "old_parts3_nomix": lambda: parts(False),
++        "old_finish3_nomix": lambda: finish(False),
++        "old_transition_nomix": lambda: _transition(FUSED._hc_transition3, nomix, res),
++        "v2_transition_nomix": lambda: _transition(
++            FUSED._hc_transition_fused, nomix, res
++        ),
++    }
++
++
++def transition_variants(report, failures, tokens_list, reps, trials, layers):
++    groups = FUSED._V3_GROUPS
++    old_us, variants, probes = {}, {}, {}
++    for name, knobs in VARIANTS:
++        n = check_variant(failures, name, knobs)
++        variants[name] = {"knobs": {k: v for k, v in knobs.items()}, "mismatches": n}
++    for tokens in tokens_list:
++        key = f"M={tokens}"
++        x = transition_inputs(tokens, True, 31)
++        res = x["residual"].clone()
++        old_us[key] = graph_us(
++            lambda: _transition(FUSED._hc_transition3, x, res), reps, trials
++        )
++        for name, knobs in VARIANTS:
++            with fused_knobs(knobs):
++                us = graph_us(
++                    lambda: _transition(FUSED._hc_transition_fused, x, res),
++                    reps,
++                    trials,
++                )
++            variants[name].setdefault("us", {})[key] = round(us, 2)
++            variants[name].setdefault("saved_us", {})[key] = round(old_us[key] - us, 2)
++        for name, fn in _probes(tokens, groups).items():
++            probes.setdefault(name, {})[key] = round(graph_us(fn, reps, trials), 2)
++    for v in variants.values():
++        v["round_saving_ms"] = {
++            k: round(2 * layers * s / 1000.0, 3) for k, s in v["saved_us"].items()
++        }
++    last = f"M={tokens_list[-1]}"
++    clean = [n for n, v in variants.items() if v["mismatches"] == 0]
++    report["transition_variants"] = {
++        "old_us": {k: round(v, 2) for k, v in old_us.items()},
++        "variants": variants,
++        "probes_us": probes,
++        "fastest_clean": (
++            min(clean, key=lambda n: variants[n]["us"][last]) if clean else None
++        ),
++        "fastest_clean_at": last,
++        "note": (
++            f"median of {trials} x 10 replays of a {reps}-call graph; mixes on; "
++            f"old groups={groups}; round = 2 transitions x {layers} layers. "
++            "Probes: old kernels alone (MIX and not) and whole transitions "
++            "without mixes; v2 - v2_transition_nomix is what moving the mixes "
++            "to a side stream would take off the critical path here."
++        ),
++    }
++
++
+ def main():
+     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+     ap.add_argument("--device", type=int, default=0)
+@@ -512,6 +694,7 @@ def main():
+     ap.add_argument("--trials", type=int, default=7)
+     ap.add_argument("--layers", type=int, default=40)
+     ap.add_argument("--skip-timing", action="store_true")
++    ap.add_argument("--transition-variants", action="store_true")
+     ap.add_argument("--json", default=None)
+     args = ap.parse_args()
+     torch.cuda.set_device(args.device)
+@@ -526,6 +709,23 @@ def main():
+         "transition_maxnreg": FUSED._FT_MAXNREG,
+     }
+     failures = []
++    if args.transition_variants:
++        transition_variants(
++            report,
++            failures,
++            [int(t) for t in args.time_tokens.split(",")],
++            args.reps,
++            args.trials,
++            args.layers,
++        )
++        report["mismatches"] = len(failures)
++        report["failures"] = failures[:40]
++        report["ok"] = not failures
++        text = json.dumps(report, indent=1)
++        print(text)
++        if args.json:
++            Path(args.json).write_text(text)
++        return 0 if not failures else 1
+     check_transition(failures, report, groups_list)
+     FUSED._V3_GROUPS = prod_groups
+     check_prep(failures, report)
+diff --git a/benchmarks/deepseek_v41/small_fuse_sm70_check.py b/benchmarks/deepseek_v41/small_fuse_sm70_check.py
+index 62b7fa3e3..d7a4c52c5 100644
+--- a/benchmarks/deepseek_v41/small_fuse_sm70_check.py
++++ b/benchmarks/deepseek_v41/small_fuse_sm70_check.py
+@@ -8,10 +8,15 @@ and checks:
+ 
+ * every FP32 add-reduction (``tt.reduce`` + ``arith.addf``) in a fused kernel
+   has an operand layout and axis that the replaced kernels use, so the
+-  in-thread / warp-shuffle / cross-warp summation tree is the same; max
+-  reductions are exact in any order and are only listed;
++  in-thread / warp-shuffle / cross-warp summation tree is the same; sums of
++  exactly two elements (the transition's quadrant Sinkhorn) are exact in any
++  order and max reductions likewise, so those are only listed;
+ * ptxas (Triton's bundled CUDA 12.x one) reports no spills;
+-* the fused transition stays within its register cap (one wave at 6 tokens).
++* the fused transition stays within its register cap (one wave at 6 tokens),
++  takes its ticket with relaxed atomics between exactly two fences, and the
++  old finish3's Sinkhorn sums are the 4-lane butterflies (xor 2 then 1 over a
++  row, xor 8 then 4 over a column) that the quadrant form reproduces.
++  Register use of the timing variants (--transition-variants) is reported.
+ 
+ Prints one JSON report; exit 1 on any failure, 2 if this Triton cannot
+ target sm_70.
+@@ -165,6 +170,12 @@ def reductions(ttgir):
+     return found
+ 
+ 
++def _extent(key):
++    """Size of the reduced axis of a reductions() key."""
++    dims = re.match(r"tensor<([\dx]+)x\w+,", key[2])
++    return int(dims.group(1).split("x")[key[1]]) if dims else None
++
++
+ def _check_adds(name, old_kernels, new, report):
+     old = Counter()
+     for kernel in old_kernels:
+@@ -172,6 +183,8 @@ def _check_adds(name, old_kernels, new, report):
+     adds = Counter(
+         {k: v for k, v in reductions(new["ttgir"]).items() if k[0] == "addf"}
+     )
++    pairs = Counter({k: v for k, v in adds.items() if _extent(k) == 2})
++    adds -= pairs
+     known = {k for k in old if k[0] == "addf"}
+     unmatched = [k for k in adds if k not in known]
+     report[name] = {
+@@ -181,6 +194,7 @@ def _check_adds(name, old_kernels, new, report):
+         "add_reductions": [
+             f"{v} x axis {k[1]} {k[2]}" for k, v in sorted(adds.items())
+         ],
++        "two_element_add_reductions": sum(pairs.values()),
+         "max_reductions": sum(
+             v for k, v in reductions(new["ttgir"]).items() if k[0] != "addf"
+         ),
+@@ -208,6 +222,20 @@ def main():
+     fused_t = dict(finish_t, fn=p32, cpre=p32, counters=pi)
+     shape = dict(H=fused.H, COLS=fused.COLS, CHUNKS=fused.CHUNKS)
+     eps = dict(NORM_EPS=1e-20, HC_EPS=1e-6, ITERS=20)
++
++    def fused_cx(mix, groups, early=None, pairs=None, quad=None):
++        rows = 24 // groups
++        early = fused._FT_EARLY if early is None else early
++        return dict(
++            shape, MIX=mix, ROWS=rows, GROUPS=groups, **eps,
++            LINE=fused._FT_LINE, CHUNK_AT=fused._FT_CHUNK_AT,
++            EARLY=early and rows == 3, NORM_BLOCK=fused._FT_NORM_BLOCK,
++            NORM_PAIRS=fused._FT_NORM_PAIRS if pairs is None else pairs,
++            QUAD=fused._FT_QUAD if quad is None else quad, FENCE=True,
++        )  # fmt: skip
++
++    cap = fused._FT_MAXNREG
++    finish_mix = None
+     for mix, groups in ((True, 8), (True, 4), (True, 1), (False, 1)):
+         rows = 24 // groups
+         old = [
+@@ -218,23 +246,56 @@ def main():
+                 fused._transition_finish3, finish_t, dict(shape, MIX=mix, **eps)
+             ),
+         ]
++        if mix:
++            finish_mix = old[1]
+         new = compile_sm70(
+-            fused._transition_fused3,
+-            fused_t,
+-            dict(
+-                shape, MIX=mix, ROWS=rows, GROUPS=groups, **eps,
+-                NORM_AT=fused._FT_NORM_AT, MIX_AT=fused._FT_MIX_AT, FENCE=True,
+-            ),
+-            maxnreg=fused._FT_MAXNREG,
+-        )  # fmt: skip
++            fused._transition_fused3, fused_t, fused_cx(mix, groups), maxnreg=cap
++        )
+         name = f"transition mix={mix} groups={groups}"
+         ok &= _check_adds(name, old, new, report)
+-        cap = fused._FT_MAXNREG
+-        report[name]["fences"] = new["ptx"].count("fence.acq_rel.gpu")
+-        report[name]["atomics"] = new["ptx"].count("atom.global")
++        ptx = new["ptx"]
++        atomics = len(re.findall(r"\batom\.global\b|\bred\.global\b", ptx))
++        relaxed = len(re.findall(r"\b(?:atom|red)\.global\.gpu\.relaxed\.", ptx))
++        report[name]["fences"] = ptx.count("fence.acq_rel.gpu")
++        report[name]["atomics"] = atomics
++        report[name]["relaxed_atomics"] = relaxed
++        errors = []
+         if cap is not None and new["regs"] > cap:
++            errors.append(f"{new['regs']} registers > cap {cap}")
++        if report[name]["fences"] != 2 or relaxed != atomics or atomics == 0:
++            errors.append("ticket: expected 2 fences and only relaxed atomics")
++        if errors:
+             ok = False
+-            report[name]["error"] = f"{new['regs']} registers > cap {cap}"
++            report[name]["error"] = "; ".join(errors)
++
++    # The quadrant Sinkhorn reproduces finish3's 4-lane butterfly sums.
++    shuffles = re.findall(
++        r"shfl\.sync\.bfly\.b32\s+\S+,\s*\S+,\s*(\d+),", finish_mix["ptx"]
++    )
++    report["finish3_sinkhorn_shuffles"] = " ".join(shuffles)
++    if "2 1 8 4" not in " ".join(shuffles):
++        ok = False
++        report["finish3_sinkhorn_error"] = "finish3 sums are not xor 2,1 / 8,4"
++
++    # Register use of the timing variants (report only).
++    variants = {}
++    for vname, kw, nreg in (
++        ("maxnreg32", {}, 32),
++        ("maxnreg_none", {}, None),
++        ("no_early", dict(early=False), cap),
++        ("no_pairs", dict(pairs=False), cap),
++        ("no_quad", dict(quad=False), cap),
++        ("groups4", {}, cap),
++    ):
++        groups = 4 if vname == "groups4" else 8
++        v = compile_sm70(
++            fused._transition_fused3,
++            fused_t,
++            fused_cx(True, groups, **kw),
++            maxnreg=nreg,
++        )
++        variants[vname] = {"regs": v["regs"], "spill_bytes": v["spill_bytes"]}
++    report["transition_variants"] = variants
+ 
+     # VLLM_V41_FUSE_ATTN_PREP: _rotate(q), _short_rms(kv), _rotate(kv), _qdq.
+     rot_t = dict(x=p16, positions=pi64, table=p32, out=p16, LENGTH="i32")
+diff --git a/tests/models/test_deepseek_v41_small_fuse.py b/tests/models/test_deepseek_v41_small_fuse.py
+index d4a91802e..e57fd1216 100644
+--- a/tests/models/test_deepseek_v41_small_fuse.py
++++ b/tests/models/test_deepseek_v41_small_fuse.py
+@@ -2,10 +2,12 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ """V4.1 small-kernel fusions against today's kernels (CPU, Triton interpreter).
+ 
+-* VLLM_V41_FUSE_TRANSITION: ``_transition_fused3`` (one launch, last-arrival
+-  finish) must give ``_transition_parts3`` + ``_transition_finish3``'s residual,
+-  FP16 collapse and mixes bit for bit, for 1..8 tokens, MIX on/off and every
+-  fn-row grouping, and must leave its counters at zero.
++* VLLM_V41_FUSE_TRANSITION: ``_transition_fused3`` (one launch, one ticket
++  per CTA, last-arrival finish) must give ``_transition_parts3`` +
++  ``_transition_finish3``'s residual, FP16 collapse and mixes bit for bit, for
++  1..6 tokens (7..8 take the old kernels), MIX on/off, every fn-row grouping
++  and every timing variant (early row loads, NORM block pairs, quadrant
++  Sinkhorn), and must leave its counters at zero.
+ * VLLM_V41_FUSE_ATTN_PREP: ``_attn_prep`` must give ``_rotate`` (query) and
+   ``_short_rms`` -> ``_rotate`` -> ``_qdq`` (window) bit for bit.
+ * VLLM_V41_FUSE_ATTN_POST: ``_attn_post`` must give ``_ring_insert`` ->
+@@ -14,8 +16,12 @@
+ Scope: the interpreter runs programs one after another and ``tl.sum`` as a
+ numpy reduction, so these tests prove the kernels' logic (ticket counting,
+ who finishes, re-arming, chunk order, residual write-after-read), not the
+-GPU's reduction trees or memory ordering. Reduction layouts are compared on
+-sm_70 TTGIR in test_deepseek_v41_small_fuse_sm70.py; the GPU check is
++GPU's reduction trees or memory ordering. For the transition tests the
++interpreter's 4- and 2-element sums are replaced by the order the sm_70 code
++uses (4 lanes: xor-2 pairs first, ``(x0 + x2) + (x1 + x3)``), so the old
++Sinkhorn and the quadrant one are compared under the GPU's summation order.
++Reduction layouts are compared on sm_70 TTGIR in
++test_deepseek_v41_small_fuse_sm70.py; the GPU check is
+ benchmarks/deepseek_v41/small_fuse_check.py.
+ 
+     python tests/models/test_deepseek_v41_small_fuse.py   # or pytest
+@@ -32,10 +38,12 @@ import sys  # noqa: E402
+ import types  # noqa: E402
+ from pathlib import Path  # noqa: E402
+ 
++import numpy as np  # noqa: E402
+ import pytest  # noqa: E402
+ import torch  # noqa: E402
+ import triton  # noqa: E402
+ import triton.language as tl  # noqa: E402
++from triton.runtime import interpreter  # noqa: E402
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+ 
+@@ -225,22 +233,115 @@ def _counters_zero():
+         assert int(counters.abs().sum()) == 0
+ 
+ 
+-@pytest.mark.parametrize(
+-    "tokens,mix,groups",
++def _gpu_order_sum(self, input):
++    # sm_70 order for 4- and 2-element sums (finish3's Sinkhorn: 4-lane
++    # butterflies, xor 2 then xor 1); everything else stays numpy's.
++    data = input.handle.data
++    axis = self.axis
++    if (
++        axis is None
++        or data.dtype.kind != "f"
++        or data.ndim == 0
++        or data.shape[axis] not in (2, 4)
++    ):
++        return _NUMPY_SUM(self, input)
++    x = [np.take(data, k, axis=axis) for k in range(data.shape[axis])]
++    total = x[0] + x[1] if len(x) == 2 else (x[0] + x[2]) + (x[1] + x[3])
++    if self.keep_dims:
++        total = np.expand_dims(total, axis)
++    return self.to_tensor(total.astype(data.dtype), input.dtype)
++
++
++_NUMPY_SUM = interpreter.ReduceOps.sum
++
++
++@pytest.fixture
++def gpu_sum_order(monkeypatch):
++    monkeypatch.setattr(interpreter.ReduceOps, "sum", _gpu_order_sum)
++    yield
++
++
++@pytest.fixture
++def variant(monkeypatch):
++    """Set the fused transition's timing knobs (outputs must not change)."""
++
++    def apply(**knobs):
++        for name, value in knobs.items():
++            monkeypatch.setattr(FUSED, name, value)
++
++    return apply
++
++
++def test_gpu_order_sum_differs_from_numpy(gpu_sum_order):
++    # The patched order is live (else the quadrant tests prove nothing).
++    @triton.jit
++    def _row_sums(x, out):
++        i = tl.arange(0, 4)
++        tl.store(out + i, tl.sum(tl.load(x + i[:, None] * 4 + i[None, :]), 1))
++
++    x = torch.tensor([[1.0, 2.0**-24, -1.0, 2.0**-24]] * 4)
++    out = torch.empty(4)
++    _row_sums[(1,)](x, out)
++    assert out.tolist() == [2.0**-23] * 4  # (1 - 1) + (2**-24 + 2**-24)
++
++
++TRANSITION_CASES = (
+     [(t, True, 8) for t in range(1, 9)]
+     + [(t, False, 1) for t in (1, 2, 5, 6, 8)]
+-    + [(t, True, g) for t in (1, 6) for g in (1, 2, 3, 4)],
++    + [(t, True, g) for t in (1, 6) for g in (1, 2, 3, 4)]
+ )
+-def test_transition_fused_bitwise(monkeypatch, tokens, mix, groups):
++
++
++class _LaunchSpy:
++    """Stands in for a @triton.jit kernel and records each launch's tokens."""
++
++    def __init__(self, kernel, launches):
++        self.kernel, self.launches = kernel, launches
++
++    def __getitem__(self, grid):
++        self.launches.append(grid[0])
++        return self.kernel[grid]
++
++
++@pytest.mark.parametrize("tokens,mix,groups", TRANSITION_CASES)
++def test_transition_fused_bitwise(monkeypatch, gpu_sum_order, tokens, mix, groups):
+     monkeypatch.setattr(FUSED, "_V3_GROUPS", groups)
+     inputs = _transition_inputs(tokens, 100 + tokens * 7 + groups, mix)
++    launches = []
++    spy = _LaunchSpy(FUSED._transition_fused3, launches)
++    monkeypatch.setattr(FUSED, "_transition_fused3", spy)
++    old = _call(FUSED._hc_transition3, inputs)
++    new = _call(FUSED._hc_transition_fused, inputs)
++    _assert_transition_equal(old, new)
++    _counters_zero()
++    # One fused launch for the decode graph sizes, the old kernels above them.
++    assert launches == ([tokens] if tokens <= FUSED._FT_TOKENS else [])
++
++
++@pytest.mark.parametrize(
++    "knobs",
++    [
++        dict(_FT_EARLY=False),
++        dict(_FT_NORM_PAIRS=False),
++        dict(_FT_QUAD=False),
++        dict(_FT_EARLY=False, _FT_NORM_PAIRS=False, _FT_QUAD=False),
++    ],
++    ids=["no_early", "no_pairs", "no_quad", "none"],
++)
++@pytest.mark.parametrize("tokens,mix", [(6, True), (2, True), (3, False)])
++def test_transition_fused_variants(
++    monkeypatch, gpu_sum_order, variant, knobs, tokens, mix
++):
++    monkeypatch.setattr(FUSED, "_V3_GROUPS", 8)
++    variant(**knobs)
++    inputs = _transition_inputs(tokens, 900 + tokens, mix)
+     old = _call(FUSED._hc_transition3, inputs)
+     new = _call(FUSED._hc_transition_fused, inputs)
+     _assert_transition_equal(old, new)
+     _counters_zero()
+ 
+ 
+-def test_transition_fused_rearms(monkeypatch):
++def test_transition_fused_rearms(monkeypatch, gpu_sum_order):
+     # Same counters, back-to-back launches with different shapes and inputs.
+     monkeypatch.setattr(FUSED, "_V3_GROUPS", 8)
+     for tokens, mix, seed in ((6, True, 1), (3, False, 2), (6, True, 3), (1, True, 4)):
+@@ -251,8 +352,22 @@ def test_transition_fused_rearms(monkeypatch):
+         _counters_zero()
+ 
+ 
+-def test_transition_dispatch(monkeypatch):
+-    # Knob on: hc_transition takes the fused path for 1..8 tokens only.
++def test_transition_counter_layout():
++    # Token words and (token, chunk) counts on separate 128-byte lines, all
++    # inside the buffer for the largest fused batch.
++    assert FUSED._FT_LINE * 4 == 128
++    assert FUSED.CHUNKS <= FUSED._FT_LINE
++    assert FUSED._FT_CHUNK_AT == FUSED._FT_TOKENS * FUSED._FT_LINE
++    assert FUSED._FT_SLOTS >= FUSED._FT_CHUNK_AT + FUSED._FT_TOKENS * FUSED._FT_LINE
++    # Packed ticket: 8 groups fit the low 3 bits, the all-CTA count stays
++    # below the group-0 count's 2**16 step, and the word fits int32 x 8.
++    assert 24 // 3 <= 8
++    assert FUSED.CHUNKS * 24 < 65536
++    assert (FUSED.CHUNKS * 65536 + FUSED.CHUNKS * 24) * 8 < 2**31
++
++
++def test_transition_dispatch(monkeypatch, gpu_sum_order):
++    # Knob on: hc_transition takes the fused path for 1..6 tokens only.
+     calls = []
+     real = FUSED._hc_transition_fused
+ 
+diff --git a/vllm/model_executor/kernels/mhc/deepseek_v41_fused.py b/vllm/model_executor/kernels/mhc/deepseek_v41_fused.py
+index 5e26af61d..3f920b025 100644
+--- a/vllm/model_executor/kernels/mhc/deepseek_v41_fused.py
++++ b/vllm/model_executor/kernels/mhc/deepseek_v41_fused.py
+@@ -996,28 +996,44 @@ def _hc_transition3(
+ 
+ # --- VLLM_V41_FUSE_TRANSITION: parts3 + finish3 in one launch -----------------
+ #
+-# Same grid and phase-1 code as _transition_parts3. Instead of a second launch,
+-# CTAs take tickets on small per-device counters and the last arrival does the
+-# work finish3 did, with finish3's arithmetic and summation order:
++# Same grid and phase-1 arithmetic as _transition_parts3. Instead of a second
++# launch, every CTA takes ONE ticket (relaxed atomics on small per-device
++# counters, ordered by a fence on each side) and the last arrivals do the work
++# finish3 did, with finish3's arithmetic and summation order:
+ #   * last of the GROUPS CTAs of (token, chunk): stores the updated residual
+ #     chunk (every group has read the old one by then);
+ #   * last of the CHUNKS group-0 CTAs of a token: sums csquares in order and
+-#     writes the whole normalized FP16 collapse row;
+-#   * last of the CHUNKS chunk completions of a token (MIX): the mixes and the
++#     writes the whole normalized FP16 collapse row (1024-column blocks, two
++#     blocks' loads in flight per round);
++#   * last of all CHUNKS * GROUPS CTAs of a token (MIX): the mixes and the
+ #     Sinkhorn, i.e. finish3's chunk==0 block.
+-# Each counter is reset by its last arrival, so it is zero between launches
+-# (CUDA-graph replays included). Counters live outside any graph pool.
++# One packed word per token counts both of the last two (group-0 arrivals in
++# the high half, all arrivals in the low half), and the (token, chunk) count
++# rides in the same atomic instruction, so a CTA pays one fence + atomic round
++# trip, not one per finisher. Each finisher re-arms its count with a
++# fire-and-forget atomic, so the counters are zero between launches (CUDA-graph
++# replays included). Counters live outside any graph pool.
++#
++# v1 (6bc7af9) was slower than the two launches on the GPU: its NORM finisher
++# walked 20 column chunks with each chunk's loads issued after the previous
++# chunk's store (no restrict: about 20 serial L2 round trips), and the MIX
++# finisher sat behind two ticket rounds plus an exchange-and-fence take.
+ 
+ _FUSE_TRANSITION = envs.VLLM_V41_FUSE_TRANSITION == "1"
+-_FT_TOKENS = 8
+-_FT_NORM_AT = _FT_TOKENS * CHUNKS  # per-(token, chunk) slots come first
+-_FT_MIX_AT = _FT_NORM_AT + _FT_TOKENS
+-_FT_SLOTS = _FT_MIX_AT + _FT_TOKENS
++_FT_TOKENS = 6  # the decode CUDA-graph sizes; one wave at 6 x 20 x 8 CTAs
++_FT_LINE = 32  # int32 per 128-byte line: one line per token and counter kind
++_FT_CHUNK_AT = _FT_TOKENS * _FT_LINE
++_FT_SLOTS = 2 * _FT_TOKENS * _FT_LINE
++_FT_NORM_BLOCK = 1024
+ # The interpreter runs programs one by one and has no inline PTX.
+ _FT_FENCE = os.environ.get("TRITON_INTERPRET", "0") != "1"
+-# Cap at parts3's 32 registers (sm_70: 16 CTAs/SM, so 6 x 20 x 8 = 960 CTAs
+-# stay one wave); ptxas fits the finish paths in 32 without spills.
+-_FT_MAXNREG = 32
++# sm_70: 40 registers -> 12 CTAs/SM, so 6 x 20 x 8 = 960 CTAs are one wave on
++# 80 SMs. Variants for timing (benchmarks/deepseek_v41/small_fuse_check.py
++# --transition-variants) set these module attributes; outputs are identical.
++_FT_MAXNREG = 40
++_FT_EARLY = True  # 3 fn rows per CTA: issue all 12 row loads before any store
++_FT_NORM_PAIRS = True  # NORM finisher: two 1024-column blocks per round
++_FT_QUAD = True  # Sinkhorn on 2x2 quadrants (same sums; half the shuffle levels)
+ _FT_COUNTERS: dict = {}
+ _FT_LOGGED = False
+ _FT_CAPTURE_WARNED = False
+@@ -1036,21 +1052,6 @@ def _ft_fence(FENCE: tl.constexpr):
+         )
+ 
+ 
+-@triton.jit
+-def _ft_arrive(counter, FENCE: tl.constexpr):
+-    # Every thread releases its stores, then one ticket per CTA.
+-    _ft_fence(FENCE)
+-    tl.debug_barrier()
+-    return tl.atomic_add(counter, 1, sem="acq_rel", scope="gpu")
+-
+-
+-@triton.jit
+-def _ft_take(counter, FENCE: tl.constexpr):
+-    # Called by the last arrival: re-arm the counter and acquire.
+-    tl.atomic_xchg(counter, 0, sem="relaxed", scope="gpu")
+-    _ft_fence(FENCE)
+-
+-
+ @triton.jit
+ def _ft_store_residual(residual, n0, n1, n2, n3, t, col, H: tl.constexpr):
+     rb = residual + t * 4 * H
+@@ -1060,9 +1061,116 @@ def _ft_store_residual(residual, n0, n1, n2, n3, t, col, H: tl.constexpr):
+     tl.store(rb + 3 * H + col, n3)
+ 
+ 
++@triton.jit
++def _ft_dot(w, col, n0, n1, n2, n3, H: tl.constexpr):
++    # parts3's row expression (same operand order; no FMA contraction).
++    return (
++        tl.load(w + 0 * H + col) * n0
++        + tl.load(w + 1 * H + col) * n1
++        + tl.load(w + 2 * H + col) * n2
++        + tl.load(w + 3 * H + col) * n3
++    )
++
++
++@triton.jit
++def _ft_norm_block(cbuf, norm, out, t, inv, b, H: tl.constexpr, BLOCK: tl.constexpr):
++    cc = b * BLOCK + tl.arange(0, BLOCK)
++    v = tl.load(cbuf + t * H + cc, cache_modifier=".cg") * inv * tl.load(norm + cc)
++    tl.store(out + t * H + cc, v.to(tl.float16))
++
++
++@triton.jit
++def _ft_norm(
++    csquares,
++    cbuf,
++    norm,
++    out,
++    t,
++    H: tl.constexpr,
++    CHUNKS: tl.constexpr,
++    NORM_EPS: tl.constexpr,
++    BLOCK: tl.constexpr,
++    PAIRS: tl.constexpr,
++):
++    # finish3's collapse for the whole row: csquares summed in chunk order,
++    # then (cbuf * inv) * norm per element, in 1024-column blocks.
++    total = tl.full((), 0, tl.float32)
++    for c in tl.static_range(CHUNKS):
++        total += tl.load(csquares + t * CHUNKS + c, cache_modifier=".cg")
++    inv = tl.rsqrt(total / H + NORM_EPS)
++    BLOCKS: tl.constexpr = H // BLOCK
++    if PAIRS:
++        # Both blocks' loads precede both stores (a load after a store to an
++        # unknown address waits for it).
++        cols = tl.arange(0, BLOCK)
++        for b in tl.static_range(0, BLOCKS - 1, 2):
++            ca = b * BLOCK + cols
++            cb = ca + BLOCK
++            va = tl.load(cbuf + t * H + ca, cache_modifier=".cg")
++            na = tl.load(norm + ca)
++            vb = tl.load(cbuf + t * H + cb, cache_modifier=".cg")
++            nb = tl.load(norm + cb)
++            tl.store(out + t * H + ca, (va * inv * na).to(tl.float16))
++            tl.store(out + t * H + cb, (vb * inv * nb).to(tl.float16))
++        if BLOCKS % 2 == 1:
++            _ft_norm_block(cbuf, norm, out, t, inv, BLOCKS - 1, H, BLOCK)
++    else:
++        for b in tl.static_range(BLOCKS):
++            _ft_norm_block(cbuf, norm, out, t, inv, b, H, BLOCK)
++
++
++@triton.jit
++def _ft_sinkhorn_quad(
++    v00, v01, v10, v11, comb, t, l00, HC_EPS: tl.constexpr, ITERS: tl.constexpr
++):
++    # finish3's Sinkhorn on the 4x4 matrix held as four 2x2 quadrants,
++    # v_ab[r][c] = value[r + 2a][c + 2b]. In finish3 (TTGIR/SASS, sm_70) a row
++    # sum is a 4-lane butterfly over j (shuffle xor 2, then xor 1), so every
++    # lane gets (v[i][0] + v[i][2]) + (v[i][1] + v[i][3]); a column sum is the
++    # same over i (xor 8, then xor 4): (v[0][j] + v[2][j]) + (v[1][j] + v[3][j]).
++    # Here the inner pair is one elementwise add of two quadrants and the outer
++    # pair a 2-element sum, so the sums (and every other operation) are the
++    # same: one shuffle level per half-step instead of two. Max is exact.
++    mx0 = tl.maximum(tl.max(v00, 1), tl.max(v01, 1))
++    mx1 = tl.maximum(tl.max(v10, 1), tl.max(v11, 1))
++    v00 = tl.exp(v00 - mx0[:, None])
++    v01 = tl.exp(v01 - mx0[:, None])
++    v10 = tl.exp(v10 - mx1[:, None])
++    v11 = tl.exp(v11 - mx1[:, None])
++    s0 = tl.sum(v00 + v01, 1)[:, None]
++    s1 = tl.sum(v10 + v11, 1)[:, None]
++    v00 = v00 / s0 + HC_EPS
++    v01 = v01 / s0 + HC_EPS
++    v10 = v10 / s1 + HC_EPS
++    v11 = v11 / s1 + HC_EPS
++    c0 = tl.sum(v00 + v10, 0)[None, :] + HC_EPS
++    c1 = tl.sum(v01 + v11, 0)[None, :] + HC_EPS
++    v00 = v00 / c0
++    v10 = v10 / c0
++    v01 = v01 / c1
++    v11 = v11 / c1
++    for _ in range(ITERS - 1):
++        s0 = tl.sum(v00 + v01, 1)[:, None] + HC_EPS
++        s1 = tl.sum(v10 + v11, 1)[:, None] + HC_EPS
++        v00 = v00 / s0
++        v01 = v01 / s0
++        v10 = v10 / s1
++        v11 = v11 / s1
++        c0 = tl.sum(v00 + v10, 0)[None, :] + HC_EPS
++        c1 = tl.sum(v01 + v11, 0)[None, :] + HC_EPS
++        v00 = v00 / c0
++        v10 = v10 / c0
++        v01 = v01 / c1
++        v11 = v11 / c1
++    cb = comb + t * 16
++    tl.store(cb + l00, v00)
++    tl.store(cb + l00 + 2, v01)
++    tl.store(cb + l00 + 8, v10)
++    tl.store(cb + l00 + 10, v11)
++
++
+ @triton.jit
+ def _ft_mix(
+-    counters,
+     dots,
+     squares,
+     scale,
+@@ -1076,32 +1184,71 @@ def _ft_mix(
+     NORM_EPS: tl.constexpr,
+     HC_EPS: tl.constexpr,
+     ITERS: tl.constexpr,
+-    MIX_AT: tl.constexpr,
+-    FENCE: tl.constexpr,
++    QUAD: tl.constexpr,
+ ):
+-    # One arrival per completed chunk of token t; the last runs finish3's MIX
+-    # block (same order), reading other CTAs' partials through L2.
+-    if _ft_arrive(counters + MIX_AT + t, FENCE) == CHUNKS - 1:
+-        _ft_take(counters + MIX_AT + t, FENCE)
+-        i = tl.arange(0, 4)
+-        sq = tl.full((), 0, tl.float32)
+-        for c in tl.static_range(CHUNKS):
+-            sq += tl.load(squares + t * CHUNKS + c, cache_modifier=".cg")
+-        rs = tl.rsqrt(sq / (4 * H) + NORM_EPS)
+-        p = tl.zeros((4,), tl.float32)
+-        q = tl.zeros((4,), tl.float32)
++    # finish3's MIX block (same arithmetic and order), reading other CTAs'
++    # partials via L2. The scale/base loads come first: in finish3 the comb
++    # ones follow the pre/post stores and wait for them (one more round trip).
++    i = tl.arange(0, 4)
++    scale_p = tl.load(scale)
++    scale_q = tl.load(scale + 1)
++    scale_m = tl.load(scale + 2)
++    base_p = tl.load(base + i)
++    base_q = tl.load(base + 4 + i)
++    if QUAD:
++        r2 = tl.arange(0, 2)
++        l00 = r2[:, None] * 4 + r2[None, :]
++        b00 = tl.load(base + 8 + l00)
++        b01 = tl.load(base + 10 + l00)
++        b10 = tl.load(base + 16 + l00)
++        b11 = tl.load(base + 18 + l00)
++    else:
+         location = i[:, None] * 4 + i[None, :]
++        base_m = tl.load(base + 8 + location)
++    sq = tl.full((), 0, tl.float32)
++    for c in tl.static_range(CHUNKS):
++        sq += tl.load(squares + t * CHUNKS + c, cache_modifier=".cg")
++    rs = tl.rsqrt(sq / (4 * H) + NORM_EPS)
++    p = tl.zeros((4,), tl.float32)
++    q = tl.zeros((4,), tl.float32)
++    if QUAD:
++        m00 = tl.zeros((2, 2), tl.float32)
++        m01 = tl.zeros((2, 2), tl.float32)
++        m10 = tl.zeros((2, 2), tl.float32)
++        m11 = tl.zeros((2, 2), tl.float32)
++        for c in tl.static_range(CHUNKS):
++            row = dots + (t * CHUNKS + c) * 24
++            p += tl.load(row + i, cache_modifier=".cg")
++            q += tl.load(row + 4 + i, cache_modifier=".cg")
++            m00 += tl.load(row + 8 + l00, cache_modifier=".cg")
++            m01 += tl.load(row + 10 + l00, cache_modifier=".cg")
++            m10 += tl.load(row + 16 + l00, cache_modifier=".cg")
++            m11 += tl.load(row + 18 + l00, cache_modifier=".cg")
++    else:
+         m = tl.zeros((4, 4), tl.float32)
+         for c in tl.static_range(CHUNKS):
+             row = dots + (t * CHUNKS + c) * 24
+             p += tl.load(row + i, cache_modifier=".cg")
+             q += tl.load(row + 4 + i, cache_modifier=".cg")
+             m += tl.load(row + 8 + location, cache_modifier=".cg")
+-        p = p * rs * tl.load(scale) + tl.load(base + i)
+-        q = q * rs * tl.load(scale + 1) + tl.load(base + 4 + i)
+-        tl.store(pre + t * 4 + i, tl.sigmoid(p) + HC_EPS)
+-        tl.store(post + t * 4 + i, 2.0 * tl.sigmoid(q))
+-        value = m * rs * tl.load(scale + 2) + tl.load(base + 8 + location)
++    p = p * rs * scale_p + base_p
++    q = q * rs * scale_q + base_q
++    tl.store(pre + t * 4 + i, tl.sigmoid(p) + HC_EPS)
++    tl.store(post + t * 4 + i, 2.0 * tl.sigmoid(q))
++    if QUAD:
++        _ft_sinkhorn_quad(
++            m00 * rs * scale_m + b00,
++            m01 * rs * scale_m + b01,
++            m10 * rs * scale_m + b10,
++            m11 * rs * scale_m + b11,
++            comb,
++            t,
++            l00,
++            HC_EPS,
++            ITERS,
++        )
++    else:
++        value = m * rs * scale_m + base_m
+         value = tl.exp(value - tl.max(value, 1)[:, None])
+         value = value / tl.sum(value, 1)[:, None] + HC_EPS
+         value = value / (tl.sum(value, 0)[None, :] + HC_EPS)
+@@ -1140,46 +1287,128 @@ def _transition_fused3(
+     NORM_EPS: tl.constexpr,
+     HC_EPS: tl.constexpr,
+     ITERS: tl.constexpr,
+-    NORM_AT: tl.constexpr,
+-    MIX_AT: tl.constexpr,
++    LINE: tl.constexpr,
++    CHUNK_AT: tl.constexpr,
++    EARLY: tl.constexpr,
++    NORM_BLOCK: tl.constexpr,
++    NORM_PAIRS: tl.constexpr,
++    QUAD: tl.constexpr,
+     FENCE: tl.constexpr,
+ ):
+     t, chunk, grp = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+     col = chunk * COLS + tl.arange(0, COLS)
+-    n0, n1, n2, n3 = _v3_new_residual(residual, y, post_in, comb_in, t, col, H)
+-    # Phase 1: _transition_parts3, unchanged.
+-    if grp == 0:
++    # Phase 1: _transition_parts3's values. With EARLY every load (fn rows,
++    # collapse weights) is issued before the first store, so the rows cost one
++    # L2/DRAM round trip instead of one per row.
++    if MIX and EARLY:
++        w = fn + (grp * ROWS) * 4 * H
++        a0 = tl.load(w + 0 * H + col)
++        a1 = tl.load(w + 1 * H + col)
++        a2 = tl.load(w + 2 * H + col)
++        a3 = tl.load(w + 3 * H + col)
++        b0 = tl.load(w + 4 * H + col)
++        b1 = tl.load(w + 5 * H + col)
++        b2 = tl.load(w + 6 * H + col)
++        b3 = tl.load(w + 7 * H + col)
++        c0 = tl.load(w + 8 * H + col)
++        c1 = tl.load(w + 9 * H + col)
++        c2 = tl.load(w + 10 * H + col)
++        c3 = tl.load(w + 11 * H + col)
++        # volatile: keeps these loads up here instead of sunk into the grp == 0
++        # branch, where they would cost group 0 one more round trip.
+         pc = cpre + t * 4
+-        coll = (
+-            n0 * tl.load(pc + 0)
+-            + n1 * tl.load(pc + 1)
+-            + n2 * tl.load(pc + 2)
+-            + n3 * tl.load(pc + 3)
+-        )
+-        tl.store(cbuf + t * H + col, coll)
+-        tl.store(csquares + t * CHUNKS + chunk, tl.sum(coll * coll, 0))
+-        if MIX:
++        p0 = tl.load(pc + 0, volatile=True)
++        p1 = tl.load(pc + 1, volatile=True)
++        p2 = tl.load(pc + 2, volatile=True)
++        p3 = tl.load(pc + 3, volatile=True)
++        n0, n1, n2, n3 = _v3_new_residual(residual, y, post_in, comb_in, t, col, H)
++        da = a0 * n0 + a1 * n1 + a2 * n2 + a3 * n3
++        db = b0 * n0 + b1 * n1 + b2 * n2 + b3 * n3
++        dc = c0 * n0 + c1 * n1 + c2 * n2 + c3 * n3
++        if grp == 0:
++            coll = n0 * p0 + n1 * p1 + n2 * p2 + n3 * p3
++            tl.store(cbuf + t * H + col, coll)
++            tl.store(csquares + t * CHUNKS + chunk, tl.sum(coll * coll, 0))
+             tl.store(
+                 squares + t * CHUNKS + chunk,
+                 tl.sum(n0 * n0 + n1 * n1 + n2 * n2 + n3 * n3, 0),
+             )
+-    if MIX:
+-        for i in tl.static_range(ROWS):
+-            r = grp * ROWS + i
+-            w = fn + r * 4 * H
+-            d = (
+-                tl.load(w + 0 * H + col) * n0
+-                + tl.load(w + 1 * H + col) * n1
+-                + tl.load(w + 2 * H + col) * n2
+-                + tl.load(w + 3 * H + col) * n3
++        row = dots + (t * CHUNKS + chunk) * 24 + grp * ROWS
++        tl.store(row + 0, tl.sum(da, 0))
++        tl.store(row + 1, tl.sum(db, 0))
++        tl.store(row + 2, tl.sum(dc, 0))
++    else:
++        n0, n1, n2, n3 = _v3_new_residual(residual, y, post_in, comb_in, t, col, H)
++        if grp == 0:
++            pc = cpre + t * 4
++            coll = (
++                n0 * tl.load(pc + 0)
++                + n1 * tl.load(pc + 1)
++                + n2 * tl.load(pc + 2)
++                + n3 * tl.load(pc + 3)
+             )
+-            tl.store(dots + (t * CHUNKS + chunk) * 24 + r, tl.sum(d, 0))
+-    # Residual chunk: written once every group has read the old values.
++            tl.store(cbuf + t * H + col, coll)
++            tl.store(csquares + t * CHUNKS + chunk, tl.sum(coll * coll, 0))
++            if MIX:
++                tl.store(
++                    squares + t * CHUNKS + chunk,
++                    tl.sum(n0 * n0 + n1 * n1 + n2 * n2 + n3 * n3, 0),
++                )
++        if MIX:
++            for i in tl.static_range(ROWS):
++                r = grp * ROWS + i
++                d = _ft_dot(fn + r * 4 * H, col, n0, n1, n2, n3, H)
++                tl.store(dots + (t * CHUNKS + chunk) * 24 + r, tl.sum(d, 0))
+     if GROUPS == 1:
++        # Sole reader of its residual chunk: store it now.
+         _ft_store_residual(residual, n0, n1, n2, n3, t, col, H)
+-        if MIX:
++    # One ticket per CTA. Release: CTA barrier, then fence, then relaxed
++    # atomics (lane 0: the token word; lane 1: the (token, chunk) count).
++    # Acquire: fence after the atomics; the reduction's barrier hands the
++    # result to every thread.
++    tl.debug_barrier()
++    _ft_fence(FENCE)
++    lane = tl.arange(0, 128)
++    token_word = t * LINE
++    chunk_word = CHUNK_AT + t * LINE + chunk
++    inc = tl.where(grp == 0, 65536, 0)
++    if MIX:
++        inc += 1
++    live = lane == 0 if GROUPS == 1 else lane < 2
++    seen = tl.atomic_add(
++        counters + tl.where(lane == 0, token_word, chunk_word),
++        tl.where(lane == 0, inc, 1),
++        mask=live,
++        sem="relaxed",
++        scope="gpu",
++    )
++    _ft_fence(FENCE)
++    packed = tl.sum(tl.where(lane == 0, seen * 8, tl.where(live, seen, 0)), 0)
++    tok = packed >> 3
++    if GROUPS > 1:  # noqa: SIM102
++        if (packed & 7) == GROUPS - 1:
++            _ft_store_residual(residual, n0, n1, n2, n3, t, col, H)
++            tl.atomic_add(counters + chunk_word, -GROUPS, sem="relaxed", scope="gpu")
++    if grp == 0:  # noqa: SIM102
++        if (tok >> 16) == CHUNKS - 1:
++            _ft_norm(
++                csquares,
++                cbuf,
++                norm,
++                out,
++                t,
++                H,
++                CHUNKS,
++                NORM_EPS,
++                NORM_BLOCK,
++                NORM_PAIRS,
++            )
++            tl.atomic_add(
++                counters + token_word, -(CHUNKS * 65536), sem="relaxed", scope="gpu"
++            )
++    if MIX:  # noqa: SIM102
++        if (tok & 65535) == CHUNKS * GROUPS - 1:
+             _ft_mix(
+-                counters,
+                 dots,
+                 squares,
+                 scale,
+@@ -1193,47 +1422,11 @@ def _transition_fused3(
+                 NORM_EPS,
+                 HC_EPS,
+                 ITERS,
+-                MIX_AT,
+-                FENCE,
++                QUAD,
++            )
++            tl.atomic_add(
++                counters + token_word, -(CHUNKS * GROUPS), sem="relaxed", scope="gpu"
+             )
+-    else:
+-        slot = counters + t * CHUNKS + chunk
+-        if _ft_arrive(slot, FENCE) == GROUPS - 1:
+-            _ft_take(slot, FENCE)
+-            _ft_store_residual(residual, n0, n1, n2, n3, t, col, H)
+-            if MIX:
+-                _ft_mix(
+-                    counters,
+-                    dots,
+-                    squares,
+-                    scale,
+-                    base,
+-                    pre,
+-                    post,
+-                    comb,
+-                    t,
+-                    H,
+-                    CHUNKS,
+-                    NORM_EPS,
+-                    HC_EPS,
+-                    ITERS,
+-                    MIX_AT,
+-                    FENCE,
+-                )
+-    # Normalized collapse: finish3's sum order and expression, all chunks.
+-    # (Nested on purpose: only group-0 CTAs may take a ticket.)
+-    if grp == 0:  # noqa: SIM102
+-        if _ft_arrive(counters + NORM_AT + t, FENCE) == CHUNKS - 1:
+-            _ft_take(counters + NORM_AT + t, FENCE)
+-            total = tl.full((), 0, tl.float32)
+-            for c in tl.static_range(CHUNKS):
+-                total += tl.load(csquares + t * CHUNKS + c, cache_modifier=".cg")
+-            inv = tl.rsqrt(total / H + NORM_EPS)
+-            for c in tl.static_range(CHUNKS):
+-                cc = c * COLS + tl.arange(0, COLS)
+-                v = tl.load(cbuf + t * H + cc, cache_modifier=".cg") * inv
+-                v = v * tl.load(norm + cc)
+-                tl.store(out + t * H + cc, v.to(tl.float16))
+ 
+ 
+ def _ft_counters(device):
+@@ -1265,9 +1458,9 @@ def _hc_transition_fused(
+     global _FT_LOGGED, _FT_CAPTURE_WARNED
+     tokens = residual.shape[0]
+     device = residual.device
+-    counters = _ft_counters(device)
++    counters = _ft_counters(device) if 0 < tokens <= _FT_TOKENS else None
+     if counters is None:
+-        if not _FT_CAPTURE_WARNED:
++        if 0 < tokens <= _FT_TOKENS and not _FT_CAPTURE_WARNED:
+             _FT_CAPTURE_WARNED = True
+             logger.warning(
+                 "VLLM_V41_FUSE_TRANSITION=1: first use is inside CUDA-graph "
+@@ -1294,7 +1487,8 @@ def _hc_transition_fused(
+         _FT_LOGGED = True
+         logger.info(
+             "VLLM_V41_FUSE_TRANSITION=1: HC transition parts3+finish3 fused "
+-            "into one launch (last-arrival finish, groups=%d).",
++            "into one launch (one ticket per CTA, last-arrival finish, "
++            "groups=%d).",
+             _V3_GROUPS,
+         )
+     cbuf = torch.empty(tokens, H, dtype=torch.float32, device=device)
+@@ -1308,6 +1502,7 @@ def _hc_transition_fused(
+     else:
+         dots = sq = pre = post_n = comb_n = csq
+     out = torch.empty(tokens, H, dtype=torch.float16, device=device)
++    rows = 24 // groups
+     _transition_fused3[(tokens, CHUNKS, groups)](
+         residual,
+         y,
+@@ -1331,13 +1526,17 @@ def _hc_transition_fused(
+         H=H,
+         COLS=COLS,
+         CHUNKS=CHUNKS,
+-        ROWS=24 // groups,
++        ROWS=rows,
+         GROUPS=groups,
+         NORM_EPS=norm_eps,
+         HC_EPS=hc_eps,
+         ITERS=iters,
+-        NORM_AT=_FT_NORM_AT,
+-        MIX_AT=_FT_MIX_AT,
++        LINE=_FT_LINE,
++        CHUNK_AT=_FT_CHUNK_AT,
++        EARLY=_FT_EARLY and rows == 3,
++        NORM_BLOCK=_FT_NORM_BLOCK,
++        NORM_PAIRS=_FT_NORM_PAIRS,
++        QUAD=_FT_QUAD,
+         FENCE=_FT_FENCE,
+         num_warps=4,
+         enable_fp_fusion=False,

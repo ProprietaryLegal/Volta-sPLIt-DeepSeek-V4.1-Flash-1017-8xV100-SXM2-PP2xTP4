@@ -1,0 +1,228 @@
+diff --git a/tests/tool_use/test_parallel_tool_calls_false_grammar.py b/tests/tool_use/test_parallel_tool_calls_false_grammar.py
+new file mode 100644
+index 000000000..221f5a272
+--- /dev/null
++++ b/tests/tool_use/test_parallel_tool_calls_false_grammar.py
+@@ -0,0 +1,130 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""parallel_tool_calls=false limits the required-tool grammar to one call.
++
++Before, the flag only dropped extra calls after generation, so the model could
++still generate (and the client pay for) several calls. An explicit null keeps
++the default (parallel calls allowed), as in the OpenAI API.
++"""
++
++import json
++
++import pytest
++
++from vllm.entrypoints.openai.chat_completion.protocol import (
++    ChatCompletionRequest,
++    ChatCompletionResponseChoice,
++    ChatMessage,
++)
++from vllm.entrypoints.openai.engine.protocol import FunctionCall, ToolCall
++from vllm.entrypoints.openai.utils import maybe_filter_parallel_tool_calls
++from vllm.tool_parsers.abstract_tool_parser import ToolParser
++from vllm.tool_parsers.utils import get_json_schema_from_tools
++
++pytestmark = pytest.mark.cpu_test
++
++TOOL = {
++    "type": "function",
++    "function": {
++        "name": "f",
++        "parameters": {"type": "object", "properties": {"x": {"type": "string"}}},
++    },
++}
++CALL = {"name": "f", "parameters": {"x": "v"}}
++
++
++def _request(**kwargs):
++    return ChatCompletionRequest(
++        model="test",
++        messages=[{"role": "user", "content": "call f"}],
++        tools=[TOOL],
++        **kwargs,
++    )
++
++
++def _adjusted(**kwargs):
++    request = _request(**kwargs)
++    return ToolParser.adjust_request(ToolParser.__new__(ToolParser), request)
++
++
++@pytest.mark.parametrize(
++    "parallel, max_items", [(False, 1), (True, None), (None, None)]
++)
++def test_required_schema_limits_calls_only_when_false(parallel, max_items):
++    request = _adjusted(tool_choice="required", parallel_tool_calls=parallel)
++    schema = request.structured_outputs.json
++    assert schema.get("maxItems") == max_items
++    assert schema["minItems"] == 1
++
++
++def test_required_schema_default_is_unchanged():
++    schema = _adjusted(tool_choice="required").structured_outputs.json
++    assert schema == get_json_schema_from_tools("required", _request().tools)
++    assert "maxItems" not in schema
++
++
++@pytest.mark.parametrize(
++    "choice", ["auto", {"type": "function", "function": {"name": "f"}}]
++)
++def test_other_tool_choices_are_unchanged(choice):
++    for parallel in (True, False):
++        request = _adjusted(tool_choice=choice, parallel_tool_calls=parallel)
++        if choice == "auto":
++            assert request.structured_outputs is None
++        else:
++            assert "maxItems" not in request.structured_outputs.json
++
++
++def test_xgrammar_accepts_one_call_and_rejects_two():
++    xgr = pytest.importorskip("xgrammar")
++    from xgrammar.testing import _is_grammar_accept_string
++
++    schema = _adjusted(
++        tool_choice="required", parallel_tool_calls=False
++    ).structured_outputs.json
++    grammar = xgr.Grammar.from_json_schema(json.dumps(schema))
++    assert _is_grammar_accept_string(grammar, json.dumps([CALL]))
++    assert not _is_grammar_accept_string(grammar, json.dumps([CALL, CALL]))
++
++    unlimited = _adjusted(tool_choice="required").structured_outputs.json
++    grammar = xgr.Grammar.from_json_schema(json.dumps(unlimited))
++    assert _is_grammar_accept_string(grammar, json.dumps([CALL, CALL]))
++
++
++def _choice(n):
++    calls = [
++        ToolCall(id=f"call_{i}", function=FunctionCall(name="f", arguments="{}"))
++        for i in range(n)
++    ]
++    return ChatCompletionResponseChoice(
++        index=0,
++        message=ChatMessage(role="assistant", content="", tool_calls=calls),
++        finish_reason="tool_calls",
++    )
++
++
++@pytest.mark.parametrize("parallel, kept", [(False, 1), (True, 2), (None, 2)])
++def test_post_filter_treats_null_as_default(parallel, kept):
++    request = _request(tool_choice="auto", parallel_tool_calls=parallel)
++    choice = maybe_filter_parallel_tool_calls(_choice(2), request)
++    assert len(choice.message.tool_calls) == kept
++
++
++def test_responses_echoes_default_for_null_parallel_tool_calls():
++    from vllm.entrypoints.openai.responses.protocol import (
++        ResponsesRequest,
++        ResponsesResponse,
++    )
++    from vllm.sampling_params import SamplingParams
++
++    request = ResponsesRequest(model="test", input="hi", parallel_tool_calls=None)
++    response = ResponsesResponse.from_request(
++        request,
++        SamplingParams(max_tokens=8),
++        model_name="test",
++        created_time=0,
++        output=[],
++        status="completed",
++        usage=None,
++    )
++    assert response.parallel_tool_calls is True
+diff --git a/vllm/entrypoints/openai/responses/protocol.py b/vllm/entrypoints/openai/responses/protocol.py
+index 370ed9a82..a41afd379 100644
+--- a/vllm/entrypoints/openai/responses/protocol.py
++++ b/vllm/entrypoints/openai/responses/protocol.py
+@@ -715,7 +715,9 @@ class ResponsesResponse(OpenAIBaseModel):
+             output=output,
+             input_messages=input_messages,
+             output_messages=output_messages,
+-            parallel_tool_calls=request.parallel_tool_calls,
++            parallel_tool_calls=request.parallel_tool_calls
++            if request.parallel_tool_calls is not None
++            else ResponsesRequest.model_fields["parallel_tool_calls"].default,
+             temperature=sampling_params.temperature,
+             tool_choice=request.tool_choice,
+             tools=request.tools,
+diff --git a/vllm/entrypoints/openai/utils.py b/vllm/entrypoints/openai/utils.py
+index 55e59510f..f2d6b6908 100644
+--- a/vllm/entrypoints/openai/utils.py
++++ b/vllm/entrypoints/openai/utils.py
+@@ -22,9 +22,12 @@ _ChatCompletionResponseChoiceT = TypeVar(
+ def maybe_filter_parallel_tool_calls(
+     choice: _ChatCompletionResponseChoiceT, request: ChatCompletionRequest
+ ) -> _ChatCompletionResponseChoiceT:
+-    """Filter to first tool call only when parallel_tool_calls is False."""
++    """Filter to the first tool call only when parallel_tool_calls is False.
+ 
+-    if request.parallel_tool_calls:
++    An explicit null means the default (true), as in the OpenAI API.
++    """
++
++    if request.parallel_tool_calls is not False:
+         return choice
+ 
+     if isinstance(choice, ChatCompletionResponseChoice) and choice.message.tool_calls:
+diff --git a/vllm/tool_parsers/abstract_tool_parser.py b/vllm/tool_parsers/abstract_tool_parser.py
+index c3438082a..fc5be9e86 100644
+--- a/vllm/tool_parsers/abstract_tool_parser.py
++++ b/vllm/tool_parsers/abstract_tool_parser.py
+@@ -120,7 +120,9 @@ class ToolParser:
+         # Step 2: set structured output params when tool constraints are
+         # derived from the tool schema.
+         json_schema_from_tool = get_json_schema_from_tools(
+-            tool_choice=request.tool_choice, tools=request.tools
++            tool_choice=request.tool_choice,
++            tools=request.tools,
++            parallel_tool_calls=request.parallel_tool_calls,
+         )
+         # Set structured output params for tool calling
+         if json_schema_from_tool is not None:
+diff --git a/vllm/tool_parsers/utils.py b/vllm/tool_parsers/utils.py
+index 1c7830b32..42be5494a 100644
+--- a/vllm/tool_parsers/utils.py
++++ b/vllm/tool_parsers/utils.py
+@@ -202,8 +202,9 @@ def _get_tool_schema_defs(
+ 
+ def _get_json_schema_from_tools(
+     tools: list[Tool],
++    parallel_tool_calls: bool | None = None,
+ ) -> dict:
+-    json_schema = {
++    json_schema: dict[str, Any] = {
+         "type": "array",
+         "minItems": 1,
+         "items": {
+@@ -211,6 +212,10 @@ def _get_json_schema_from_tools(
+             "anyOf": [_get_tool_schema_from_tool(tool) for tool in tools],
+         },
+     }
++    # Only an explicit `false` asks for a single call; `None` means the field
++    # was not set and the default (parallel calls allowed) applies.
++    if parallel_tool_calls is False:
++        json_schema["maxItems"] = 1
+     json_schema_defs = _get_tool_schema_defs(tools)
+     if json_schema_defs:
+         json_schema["$defs"] = json_schema_defs
+@@ -220,6 +225,7 @@ def _get_json_schema_from_tools(
+ def get_json_schema_from_tools(
+     tool_choice: str | ToolChoiceFunction | ChatCompletionNamedToolChoiceParam,
+     tools: list[Tool] | None,
++    parallel_tool_calls: bool | None = None,
+ ) -> str | dict | None:
+     # tool_choice: "none"
+     if tool_choice in ("none", None) or tools is None:
+@@ -248,7 +254,7 @@ def get_json_schema_from_tools(
+         return tool_map[tool_name].function.parameters
+     # tool_choice: "required"
+     if tool_choice == "required":
+-        return _get_json_schema_from_tools(tools)
++        return _get_json_schema_from_tools(tools, parallel_tool_calls)
+     # tool_choice: "auto"
+     return None
+ 

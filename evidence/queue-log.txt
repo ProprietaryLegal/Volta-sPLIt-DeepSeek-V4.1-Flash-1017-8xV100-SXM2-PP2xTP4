@@ -1,0 +1,320 @@
+2026-11-02T23:15:26Z START build 1.5.2.dev1343+pp2up.g45183f0
+2026-11-02T23:29:06Z BUILT OK   pp_split_problem
+2026-11-02T23:29:07Z STAGED cache env.sh run_serve.sh run_tool.sh serve-v41pkg-nospec.yaml serve-v41pkg-phase3.yaml serve-v41pkg-pp2-eager.yaml serve-v41pkg-pp2-off030.yaml serve-v41pkg-pp2.yaml state tools
+2026-11-02T23:37:07Z COPY NVMe copy sizes match (2026-11-02T23:37:01Z COPY OK in 1627 s)
+2026-11-02T23:44:31Z FAILED serve: server exited during startup (see ${ENGINE_HOME}/run-pp2/state/serve-pp2.log)
+2026-11-02T23:47:34Z RESUME fix: PP unwrap accepts V4.1 hidden/pre
+2026-11-02T23:50:10Z FAILED serve: server exited during startup (see ${ENGINE_HOME}/run-pp2/state/serve-pp2.log)
+2026-11-02T23:52:30Z RESUME2 fix: v41k.so restored in src-pp2 (stale pp2v41k marker)
+2026-11-02T23:54:51Z FAILED serve: server exited during startup (see ${ENGINE_HOME}/run-pp2/state/serve-pp2.log)
+2026-11-02T23:57:26Z RESUME3 fix: stage-2 compressed anchor keeps a window ring
+2026-11-02T23:59:57Z UP 2026-11-02T23:59:57Z group 400530 port 18042 ids 0,4,1,5,6,2,3,7 profile serve-v41pkg-pp2.yaml
+2026-11-03T00:06:13Z RESUME4 fix: PP batch queue takes drafts after the producing step is applied
+2026-11-03T00:09:44Z UP 2026-11-03T00:09:44Z group 486218 port 18042 ids 0,4,1,5,6,2,3,7 profile serve-v41pkg-pp2.yaml
+2026-11-03T00:09:48Z CHECKED FAIL
+2026-11-03T00:11:27Z RESUME5 fix: scheduler skips in-flight verify (negative token count)
+2026-11-03T00:13:38Z UP 2026-11-03T00:13:38Z group 555176 port 18042 ids 0,4,1,5,6,2,3,7 profile serve-v41pkg-pp2.yaml
+2026-11-03T00:17:16Z CHECKED FAIL
+2026-11-03T00:26:43Z RESUME6 fix: stage-1 token history keeps accepted drafts under PP spec decode
+2026-11-03T00:29:32Z UP 2026-11-03T00:29:32Z group 714445 port 18042 ids 0,4,1,5,6,2,3,7 profile serve-v41pkg-pp2.yaml
+2026-11-03T00:30:59Z CHECKED PASS
+2026-11-03T01:01:14Z PROF1103 restart with torch profiler for the
+2026-11-03T01:06:56Z PROF1103 restart with torch profiler, PR344 port
+2026-11-03T01:10:15Z UP-PROF 2026-11-03T01:10:15Z group 923642 port 18042 ids 0,4,1,5,6,2,3,7 profile serve-v41pkg-pp2-prof.yaml
+2026-11-03T01:18:09Z AB-L2 lever2 top-p ABBA start
+2026-11-03T01:35:47Z AB-L2 done
+2026-11-03T01:36:06Z QUEUE-D1 start: ASYNC-B1, K4, K3
+2026-11-03T01:40:39Z QUEUE-D1 done (server left on the K3 profile)
+2026-11-03T01:40:59Z QUEUE-D2 lever1 69208ad deployed: runner 7a16d820d4e35a4a
+T1 COMPARE 12 vs 12 prompts: DIFFER ['t1-01', 't1-02', 't1-03', 't1-05', 't1-06', 't1-08', 't1-11']
+2026-11-03T01:56:19Z QUEUE-D2 done (server left on L1-ON10)
+2026-11-03T01:56:24Z QUEUE-DA start: DEPTH-SYNC, DEPTH-ASYNC (32K/64K, 2 reps, 512 tok)
+2026-11-03T02:04:38Z QUEUE-DA done
+2026-11-03T02:04:44Z QUEUE-D3 combo be56649 deployed: model.py ab90d1f224d10d17 router 76b83e3296fbafc4
+2026-11-03T02:04:44Z QUEUE-D3 v41k.so -> TOK1103 build 556c632e7d227fc7 (old kept as v41k.so.orig-947041b)
+2026-11-03T02:13:45Z QUEUE-D3 IDX-B bank lines: 8
+2026-11-03T02:23:28Z QUEUE-D3 router floor check rc=0 ok="ok": true
+2026-11-03T02:34:55Z QUEUE-D3 done (server left on the last arm)
+2026-11-03T02:35:05Z QUEUE-D4 start: stop server, build plan v41k.so, plan_fuse_check 16/17/29
+2026-11-03T02:35:25Z QUEUE-D4 plan v41k build FAILED; arms skipped
+2026-11-03T02:35:25Z QUEUE-D4 done
+2026-11-03T02:35:36Z QUEUE-D5 combo 24e6229 (lever 1 fused) deployed: runner ca7a6d777977c41c markov_coupled be71cc52567b8307
+determinism ON10 vs ON10b: T1 COMPARE 12 vs 12 prompts: DIFFER ['t1-05', 't1-06', 't1-08', 't1-11']
+2026-11-03T03:04:41Z QUEUE-D5 trace compare: T1 COMPARE 12 vs 12 prompts: DIFFER ['t1-01', 't1-02', 't1-03', 't1-05', 't1-06', 't1-08', 't1-11'] (details t1-compare-TR05-TR10.txt, traces bench5/trace/)
+2026-11-03T03:04:41Z QUEUE-D5 done (server left on L1F-TR10, trace on: re-boot before any timing)
+2026-11-03T03:04:54Z QUEUE-D6 start: stop server, build dmvx v41k.so, bench_dmv_x gate
+2026-11-03T03:06:32Z QUEUE-D6 dmvx v41k.so built 69c4857ec8d4e12b
+2026-11-03T03:06:58Z QUEUE-D6 bench_dmv_x rc=0 bitwise gate: PASS; suggested config: qkv=8,6,1;q_b=2,1,1;wo_a=8,1,1;head=2,1,2
+2026-11-03T03:06:58Z QUEUE-D6 combo eaa3a3e deployed: dense_tm 575d6d1fb09ee616 envs e7020b2ea5bfedf7; v41k.so -> dmvx build 69c4857ec8d4e12b (old kept as v41k.so.orig-plan1103)
+2026-11-03T03:15:11Z QUEUE-D6 DMVX-ON dmv13_x missing-op warnings in serve log: 0
+2026-11-03T03:26:41Z QUEUE-D6 done (server left on the last arm)
+2026-11-03T03:26:43Z QUEUE-D7 start: stop server, plan_fuse_check 16/17/29
+2026-11-03T03:27:01Z QUEUE-D7 plan check library ${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k-dmvx1103/build/v41k.so 69c4857ec8d4e12b
+2026-11-03T03:27:05Z QUEUE-D7 plan_fuse_check gtype 16 rc=1 "ok": false
+2026-11-03T03:27:09Z QUEUE-D7 plan_fuse_check gtype 17 rc=1 "ok": false
+2026-11-03T03:27:13Z QUEUE-D7 plan_fuse_check gtype 29 rc=1 "ok": false
+2026-11-03T03:27:13Z QUEUE-D7 plan_fuse_check FAILED; PLAN arms skipped
+2026-11-03T03:29:50Z QUEUE-D7 done (server left on ASYNC-C1)
+2026-11-03T03:30:01Z QUEUE-D8 combo f54308f deployed: runner a228a4202c65a7d5 query_graph cbd5b0260a372e88; v41k.so 69c4857ec8d4e12b
+2026-11-03T03:32:52Z QUEUE-D8 warm boot up
+2026-11-03T03:54:05Z QUEUE-D8 S8-D shard log lines: 4
+2026-11-03T04:17:34Z QUEUE-D8 S8-CHK self-check lines:       4 0 mismatched of 1000 steps;      4 0 mismatched of 1200 steps;      4 0 mismatched of 1400 steps;      4 0 mismatched of 1600 steps;      4 0 mismatched of 1800 steps;      4 0 mismatched of 2000 steps;      4 0 mismatched of 200 steps;      4 0 mismatched of 2200 steps;      4 0 mismatched of 2400 steps;      4 0 mismatched of 400 steps;      4 0 mismatched of 600 steps;      4 0 mismatch
+2026-11-03T04:23:15Z QUEUE-D8 done (server left on S8-BASE0)
+2026-11-03T04:24:11Z QUEUE-D9 start: depth ABBA S8D/BASE0/BASE0b/S8Db
+2026-11-03T04:44:35Z QUEUE-D9 done (server left on the S8-D stack)
+2026-11-03T04:45:33Z QUEUE-D10 profile mbt16384: 1 line(s) changed
+2026-11-03T04:45:33Z QUEUE-D10 profile mbt32768: 1 line(s) changed
+2026-11-03T05:06:38Z QUEUE-D10 server up on the unchanged profile + S8-D stack
+2026-11-03T05:06:38Z QUEUE-D10 done
+2026-11-03T05:06:57Z QUEUE-D11 profile mbt4096: 1 line(s) changed
+2026-11-03T05:06:57Z QUEUE-D11 profile mbt2048: 1 line(s) changed
+2026-11-03T05:24:49Z QUEUE-D11 server up on the unchanged profile + S8-D stack
+2026-11-03T05:24:49Z QUEUE-D11 done
+2026-11-03T05:49:02Z QUEUE-D12 server up on the unchanged profile + S8-D stack
+2026-11-03T05:49:02Z QUEUE-D12 done
+2026-11-03T05:53:04Z QUEUE-D13 start: PLAN ABBA on S8-D, then knobs-off T=1 replicate
+2026-11-03T06:11:32Z QUEUE-D13 PLAN pairs: T0 P13-ON - P13-OFF: mean -0.367 ms/round, negative 3/3;T1 P13-ON - P13-OFF: mean -0.119 ms/round, negative 8/11 texts same 11/11;T0 P13-ON2 - P13-OFF2: mean -0.361 ms/round, negative 3/3;T1 P13-ON2 - P13-OFF2: mean -0.418 ms/round, negative 11/11 texts same 11/11;T0 P13-OFF2 - P13-OFF: mean +0.094 ms/round, negative 0/3;T1 P13-OFF2 - P13-OFF: mean +0.017 ms/round, negative 5/11 texts same 11/11;
+2026-11-03T06:15:39Z QUEUE-D13 BASE0 T=1 replicate: T1 COMPARE 12 vs 12 prompts: DIFFER ['t1-00', 't1-02', 't1-03', 't1-06', 't1-08', 't1-10', 't1-11']
+2026-11-03T06:17:43Z QUEUE-D13 server up on S8-D
+2026-11-03T06:17:43Z QUEUE-D13 done
+2026-11-03T06:17:49Z QUEUE-D14 start: SPINLOOP ABBA on S8-D+PLAN
+2026-11-03T06:36:32Z QUEUE-D14 SPIN pairs: T0 SP-ON - SP-OFF: mean +0.093 ms/round, negative 0/3;T1 SP-ON - SP-OFF: mean +0.074 ms/round, negative 3/11 texts same 11/11;T0 SP-ON2 - SP-OFF2: mean +0.068 ms/round, negative 0/3;T1 SP-ON2 - SP-OFF2: mean +0.042 ms/round, negative 4/11 texts same 11/11;T0 SP-OFF2 - SP-OFF: mean +0.184 ms/round, negative 0/3;T1 SP-OFF2 - SP-OFF: mean +0.010 ms/round, negative 4/11 texts same 11/11;T0 SP-OFF - P13-ON2: mean -0.191 ms/round, negative 3/3;T1 SP-OFF - P13-ON2: mean -0.060 ms/round, negative 7/11 texts same 11/11;
+2026-11-03T06:38:46Z QUEUE-D14 server up on S8-D+PLAN
+2026-11-03T06:38:46Z QUEUE-D14 done
+2026-11-03T06:38:47Z QUEUE-D15 start: profiled boot of S8-D+PLAN -> ${BENCH_DIR}/prof-20261103b
+2026-11-03T06:41:17Z QUEUE-D15 profile: PROF REQ {'prompt_tokens': 13, 'total_tokens': 109, 'completion_tokens': 96, 'prompt_tokens_details': None} 2.02 s; traces 8/8
+2026-11-03T06:43:31Z QUEUE-D15 server up on S8-D+PLAN
+2026-11-03T06:43:31Z QUEUE-D15 done
+2026-11-03T06:46:53Z QUEUE-D16 combo 49cb1b7 deployed: envs.py=11cef5edc224 gguf_v41_moe.py=6d50ce7af79f model.py=7d57ca60773a pp_keep_batch.py=a386c1b0355c scheduler.py=6e9a5410c8db rejection_sampler.py=d5260c39e8d3 gpu_model_runner.py=fab7bfda0638 
+2026-11-03T06:46:53Z QUEUE-D16 start: KEEP_BATCH short pair + depth ABBA
+2026-11-03T06:51:49Z QUEUE-D16 KB-OFF KB lines: active 0, kept 0, ignored 0, raise 0, unknown 0, not-avail 0, plan-fuse-log 8, markov-unknown 0
+2026-11-03T06:57:50Z QUEUE-D16 KB-ON KB lines: active 9, kept 9, ignored 0, raise 0, unknown 0, not-avail 0, plan-fuse-log 8, markov-unknown 0
+2026-11-03T06:57:50Z QUEUE-D16 KB short pairs: T0 KB-ON - KB-OFF: mean -0.172 ms/round, negative 3/3;T1 KB-ON - KB-OFF: mean -0.300 ms/round, negative 11/11 texts same 11/11;T0 KB-OFF - SP-OFF2: mean -0.171 ms/round, negative 3/3;T1 KB-OFF - SP-OFF2: mean +0.080 ms/round, negative 2/11 texts same 11/11;
+2026-11-03T07:03:21Z QUEUE-D16 DKB-OFF KB lines: active 0, kept 0, ignored 0, raise 0, unknown 0, not-avail 0, plan-fuse-log 8, markov-unknown 0
+2026-11-03T07:08:27Z QUEUE-D16 DKB-ON KB lines: active 9, kept 9, ignored 0, raise 0, unknown 0, not-avail 0, plan-fuse-log 8, markov-unknown 0
+2026-11-03T07:13:39Z QUEUE-D16 DKB-ON2 KB lines: active 9, kept 9, ignored 0, raise 0, unknown 0, not-avail 0, plan-fuse-log 8, markov-unknown 0
+2026-11-03T07:18:49Z QUEUE-D16 DKB-OFF2 KB lines: active 0, kept 0, ignored 0, raise 0, unknown 0, not-avail 0, plan-fuse-log 8, markov-unknown 0
+2026-11-03T07:18:49Z QUEUE-D16 depth DKB-OFF: L32768 ttft 22.217 ms 32.32 sha cdf3cf;L65536 ttft 44.524 ms 37.24 sha 06fd9f;L131072 ttft 95.205 ms 45.14 sha e70897;
+2026-11-03T07:18:49Z QUEUE-D16 depth DKB-ON: L32768 ttft 22.181 ms 29.38 sha cdf3cf;L65536 ttft 44.347 ms 30.7 sha 06fd9f;L131072 ttft 95.095 ms 33.58 sha e70897;
+2026-11-03T07:18:49Z QUEUE-D16 depth DKB-ON2: L32768 ttft 22.412 ms 29.63 sha cdf3cf;L65536 ttft 44.325 ms 30.75 sha 06fd9f;L131072 ttft 94.833 ms 33.65 sha e70897;
+2026-11-03T07:18:49Z QUEUE-D16 depth DKB-OFF2: L32768 ttft 22.362 ms 33.05 sha cdf3cf;L65536 ttft 44.717 ms 37.14 sha 06fd9f;L131072 ttft 95.33 ms 44.32 sha e70897;
+2026-11-03T07:20:58Z QUEUE-D16 server up on S8-D+PLAN (KEEP_BATCH off)
+2026-11-03T07:20:58Z QUEUE-D16 done
+2026-11-03T07:21:09Z QUEUE-D17 start: stop server, build ef1103 v41k.so, expert_fast_check + sanitizers
+2026-11-03T07:22:54Z QUEUE-D17 ef1103 v41k.so built b3f6aa9e9c4ecc01 (5520376 B)
+2026-11-03T07:23:00Z QUEUE-D17 expert_fast_check rc=0: ok True failing 0 | g16 M6 saved 11.33 us x1.18; M1 x1.064 g17 M6 saved 3.37 us x1.046; M1 x1.061 g29 M6 saved 31.05 us x1.522; M1 x1.366
+2026-11-03T07:23:12Z QUEUE-D17 sanitizer memcheck rc=0: ========= ERROR SUMMARY: 0 errors
+2026-11-03T07:24:29Z QUEUE-D17 sanitizer racecheck rc=0: ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)
+2026-11-03T07:24:33Z QUEUE-D17 sanitizer synccheck rc=0: ========= ERROR SUMMARY: 0 errors
+2026-11-03T07:24:33Z QUEUE-D17 EF deployed: v41k.so b3f6aa9e9c4ecc01 envs.py=fd37a92a5a8c gguf_v41_moe.py=438ceca81a09 
+2026-11-03T07:29:05Z QUEUE-D17 EF-OFF lines: ef-active 0, ef-error 0, kb-active 9, plan-fuse 8
+2026-11-03T07:33:53Z QUEUE-D17 EF-ON lines: ef-active 1, ef-error 0, kb-active 9, plan-fuse 8
+2026-11-03T07:37:42Z QUEUE-D17 EF-ON2 lines: ef-active 1, ef-error 0, kb-active 9, plan-fuse 8
+2026-11-03T07:41:38Z QUEUE-D17 EF-OFF2 lines: ef-active 0, ef-error 0, kb-active 9, plan-fuse 8
+2026-11-03T07:41:39Z QUEUE-D17 EF pairs: T0 EF-ON - EF-OFF: mean -0.675 ms/round, negative 3/3;T1 EF-ON - EF-OFF: mean -0.616 ms/round, negative 11/11 texts same 11/11;T0 EF-ON2 - EF-OFF2: mean -0.842 ms/round, negative 3/3;T1 EF-ON2 - EF-OFF2: mean -0.631 ms/round, negative 11/11 texts same 11/11;T0 EF-OFF2 - EF-OFF: mean +0.151 ms/round, negative 1/3;T1 EF-OFF2 - EF-OFF: mean -0.049 ms/round, negative 7/11 texts same 11/11;
+2026-11-03T07:43:42Z QUEUE-D17 server up on S8-D+PLAN+KB (EXPERT_FAST off)
+2026-11-03T07:43:42Z QUEUE-D17 done
+2026-11-03T07:43:48Z QUEUE-D18 start: depth arm REC-D on the recommended stack
+2026-11-03T07:49:04Z QUEUE-D18 depth REC-D: L32768 ttft 22.159 dec 141.74 tok/s ms 28.84 sha cdf3cf;L65536 ttft 44.282 dec 151.86 tok/s ms 30.05 sha 06fd9f;L131072 ttft 94.776 dec 114.56 tok/s ms 32.8 sha e70897;
+2026-11-03T07:49:04Z QUEUE-D18 server left up on the recommended stack (REC)
+2026-11-03T07:49:04Z QUEUE-D18 done
+2026-11-03T08:08:45Z QUEUE-D19 start: stop server; build gu1103 v41k.so; expert_fast_check + sanitizers; small_fuse_check
+2026-11-03T08:10:31Z QUEUE-D19 gu1103 v41k.so built aad82b0f288e9a98 (5638760 B)
+2026-11-03T08:10:41Z QUEUE-D19 expert_fast_check rc=0: ok True failing 0 g29 gate_up M6 saved 15.74 us x1.162 g29 down M6 saved 23.75 us x1.401 g16 gate_up M6 saved 1.79 us x1.018 g16 down M6 saved 13.91 us x1.221 g17 gate_up M6 saved 1.02 us x1.009 g17 down M6 saved 11.18 us x1.151
+2026-11-03T08:11:18Z QUEUE-D19 sanitizer memcheck rc=0: ========= ERROR SUMMARY: 0 errors
+2026-11-03T08:14:11Z QUEUE-D19 sanitizer racecheck rc=0: ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)
+2026-11-03T08:14:17Z QUEUE-D19 sanitizer synccheck rc=0: ========= ERROR SUMMARY: 0 errors
+2026-11-03T08:14:17Z QUEUE-D19 GU gate: EFOK=1
+2026-11-03T08:14:40Z QUEUE-D19 small_fuse_check rc=0: failures 0 | keys device,capability,torch,triton,hc_v3_groups,transition_maxnreg,transition_cases,prep_cases,post_cases,graph_cases,mismatches,failures | round_saving_ms {'M=1': -0.34, 'M=2': -0.32, 'M=3': -0.3, 'M=4': -0.19, 'M=5': 0.01, 'M=6': 0.01}
+2026-11-03T08:14:40Z QUEUE-D19 FU gate: FUOK=1
+2026-11-03T08:14:40Z QUEUE-D19 deployed: v41k.so aad82b0f288e9a98 envs.py=417b22889b00/417b22889b00 deepseek_v41_fused.py=41273d0f145f/41273d0f145f gguf_v41_moe.py=5ddf5af324ed/5ddf5af324ed attn_fuse.py=969ce1b4d08e/969ce1b4d08e model.py=1d91c3360fe1/1d91c3360fe1 
+2026-11-03T08:14:40Z QUEUE-D19 gguf_v41_moe.py <- old-ecf14bb (438ceca81a09 / 438ceca81a09)
+2026-11-03T08:21:16Z QUEUE-D19 GU-OFF lines: ef-both 0, ef-down-only 1, ef-error 0, fuse-trans 0, fuse-capture-warn 0, fuse-prep 0, fuse-post 0, kb 9, tracebacks 0
+2026-11-03T08:21:16Z QUEUE-D19 gguf_v41_moe.py <- new-c2d83a0 (5ddf5af324ed / 5ddf5af324ed)
+2026-11-03T08:26:27Z QUEUE-D19 GU-ON lines: ef-both 1, ef-down-only 0, ef-error 0, fuse-trans 0, fuse-capture-warn 0, fuse-prep 0, fuse-post 0, kb 9, tracebacks 0
+2026-11-03T08:30:44Z QUEUE-D19 GU-ON2 lines: ef-both 1, ef-down-only 0, ef-error 0, fuse-trans 0, fuse-capture-warn 0, fuse-prep 0, fuse-post 0, kb 9, tracebacks 0
+2026-11-03T08:30:44Z QUEUE-D19 gguf_v41_moe.py <- old-ecf14bb (438ceca81a09 / 438ceca81a09)
+2026-11-03T08:35:03Z QUEUE-D19 GU-OFF2 lines: ef-both 0, ef-down-only 1, ef-error 0, fuse-trans 0, fuse-capture-warn 0, fuse-prep 0, fuse-post 0, kb 9, tracebacks 0
+2026-11-03T08:35:03Z QUEUE-D19 GU pairs: T0 GU-ON - GU-OFF: mean -0.821 ms/round, negative 3/3;T1 GU-ON - GU-OFF: mean -0.644 ms/round, negative 11/11 texts same 11/11;T0 GU-ON2 - GU-OFF2: mean -0.525 ms/round, negative 3/3;T1 GU-ON2 - GU-OFF2: mean -0.575 ms/round, negative 11/11 texts same 11/11;T0 GU-OFF2 - GU-OFF: mean -0.212 ms/round, negative 3/3;T1 GU-OFF2 - GU-OFF: mean -0.323 ms/round, negative 11/11 texts same 11/11;
+2026-11-03T08:35:03Z QUEUE-D19 GU verdict: WIN means [-0.821, -0.644, -0.525, -0.575] avg -0.641 t1-texts-same True
+2026-11-03T08:35:03Z QUEUE-D19 gguf_v41_moe.py <- new-c2d83a0 (5ddf5af324ed / 5ddf5af324ed)
+2026-11-03T08:40:09Z QUEUE-D19 FU-OFF lines: ef-both 1, ef-down-only 0, ef-error 0, fuse-trans 0, fuse-capture-warn 0, fuse-prep 0, fuse-post 0, kb 9, tracebacks 0
+2026-11-03T08:45:30Z QUEUE-D19 FU-ON lines: ef-both 1, ef-down-only 0, ef-error 0, fuse-trans 8, fuse-capture-warn 0, fuse-prep 8, fuse-post 8, kb 9, tracebacks 0
+2026-11-03T08:49:47Z QUEUE-D19 FU-ON2 lines: ef-both 1, ef-down-only 0, ef-error 0, fuse-trans 8, fuse-capture-warn 0, fuse-prep 8, fuse-post 8, kb 9, tracebacks 0
+2026-11-03T08:53:58Z QUEUE-D19 FU-OFF2 lines: ef-both 1, ef-down-only 0, ef-error 0, fuse-trans 0, fuse-capture-warn 0, fuse-prep 0, fuse-post 0, kb 9, tracebacks 0
+2026-11-03T08:53:58Z QUEUE-D19 FU pairs: T0 FU-ON - FU-OFF: mean -0.104 ms/round, negative 3/3;T1 FU-ON - FU-OFF: mean +0.149 ms/round, negative 1/11 texts same 11/11;T0 FU-ON2 - FU-OFF2: mean +0.055 ms/round, negative 0/3;T1 FU-ON2 - FU-OFF2: mean +0.035 ms/round, negative 3/11 texts same 11/11;T0 FU-OFF2 - FU-OFF: mean -0.231 ms/round, negative 3/3;T1 FU-OFF2 - FU-OFF: mean +0.029 ms/round, negative 2/11 texts same 11/11;
+2026-11-03T08:53:58Z QUEUE-D19 FU verdict: LOSE means [-0.104, 0.149, 0.055, 0.035] avg +0.034 t1-texts-same True
+2026-11-03T08:56:22Z QUEUE-D19 server up: REC, gate_up_fast on, fusions off
+2026-11-03T08:56:22Z QUEUE-D19 done
+2026-11-03T08:56:46Z QUEUE-D20 start: PREP+POST ABBA (gguf_v41_moe.py 5ddf5af324ed, model.py 1d91c3360fe1)
+2026-11-03T09:02:02Z QUEUE-D20 FP-OFF lines: fuse-trans 0, fuse-prep 0, fuse-post 0, ef-both 1, ef-down-only 0, kb 9, tracebacks 0
+2026-11-03T09:07:22Z QUEUE-D20 FP-ON lines: fuse-trans 0, fuse-prep 8, fuse-post 8, ef-both 1, ef-down-only 0, kb 9, tracebacks 0
+2026-11-03T09:11:28Z QUEUE-D20 FP-ON2 lines: fuse-trans 0, fuse-prep 8, fuse-post 8, ef-both 1, ef-down-only 0, kb 9, tracebacks 0
+2026-11-03T09:15:39Z QUEUE-D20 FP-OFF2 lines: fuse-trans 0, fuse-prep 0, fuse-post 0, ef-both 1, ef-down-only 0, kb 9, tracebacks 0
+2026-11-03T09:15:39Z QUEUE-D20 FP pairs: T0 FP-ON - FP-OFF: mean -0.175 ms/round, negative 3/3;T1 FP-ON - FP-OFF: mean -0.116 ms/round, negative 7/11 texts same 11/11;T0 FP-ON2 - FP-OFF2: mean -0.198 ms/round, negative 2/3;T1 FP-ON2 - FP-OFF2: mean -0.288 ms/round, negative 11/11 texts same 11/11;T0 FP-OFF2 - FP-OFF: mean -0.091 ms/round, negative 2/3;T1 FP-OFF2 - FP-OFF: mean -0.073 ms/round, negative 7/11 texts same 11/11;
+2026-11-03T09:15:39Z QUEUE-D20 FP verdict: WIN means [-0.175, -0.116, -0.198, -0.288] avg -0.194 t1-texts-same True
+2026-11-03T09:18:13Z QUEUE-D20 server up: REC + ATTN_PREP/POST (gguf 5ddf5af324ed)
+2026-11-03T09:18:13Z QUEUE-D20 done
+2026-11-03T09:30:29Z QUEUE-D21 start: stop server; build pf1103 v41k.so; expert_fast_check + sanitizers; ncu old/new
+2026-11-03T09:32:15Z QUEUE-D21 pf1103 v41k.so built 811e63b75309491f (5712488 B)
+2026-11-03T09:32:25Z QUEUE-D21 expert_fast_check rc=0: ok True failing 0 g29 gate_up M1 x1.371 M3 x1.257 M6 x1.273 g29 down M1 x1.411 M3 x1.587 M6 x1.322 g16 gate_up M1 x1.142 M3 x0.995 M6 x1.034 g16 down M1 x1.111 M3 x1.253 M6 x1.118 g17 gate_up M1 x1.167 M3 x1.074 M6 x1.056 g17 down M1 x1.109 M3 x1.174 M6 x1.08
+2026-11-03T09:33:02Z QUEUE-D21 sanitizer memcheck rc=0: ========= ERROR SUMMARY: 0 errors
+2026-11-03T09:35:55Z QUEUE-D21 sanitizer racecheck rc=0: ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)
+2026-11-03T09:36:00Z QUEUE-D21 sanitizer synccheck rc=0: ========= ERROR SUMMARY: 0 errors
+2026-11-03T09:36:12Z QUEUE-D21 ncu old rc=0 rows 24
+2026-11-03T09:36:25Z QUEUE-D21 ncu new rc=0 rows 24
+2026-11-03T09:36:25Z QUEUE-D21 PF gate: OK=1
+2026-11-03T09:36:25Z QUEUE-D21 deployed gguf_v41_moe.py afda00a005aa/afda00a005aa; old .so kept as v41k.so.pre-pf1103 aad82b0f288e9a98
+2026-11-03T09:36:25Z QUEUE-D21 v41k.so <- old-aad82b0f (aad82b0f288e9a98)
+2026-11-03T09:42:26Z QUEUE-D21 PF-OFF lines: ef-both 8, ef-error 0, fuse-prep 8, fuse-post 8, kb 9, tracebacks 0
+2026-11-03T09:42:26Z QUEUE-D21 v41k.so <- new-pf1103 (811e63b75309491f)
+2026-11-03T09:47:35Z QUEUE-D21 PF-ON lines: ef-both 8, ef-error 0, fuse-prep 8, fuse-post 8, kb 9, tracebacks 0
+2026-11-03T09:51:45Z QUEUE-D21 PF-ON2 lines: ef-both 8, ef-error 0, fuse-prep 8, fuse-post 8, kb 9, tracebacks 0
+2026-11-03T09:51:45Z QUEUE-D21 v41k.so <- old-aad82b0f (aad82b0f288e9a98)
+2026-11-03T09:56:11Z QUEUE-D21 PF-OFF2 lines: ef-both 8, ef-error 0, fuse-prep 8, fuse-post 8, kb 9, tracebacks 0
+2026-11-03T09:56:11Z QUEUE-D21 PF pairs: T0 PF-ON - PF-OFF: mean +0.001 ms/round, negative 2/3;T1 PF-ON - PF-OFF: mean -0.066 ms/round, negative 5/11 texts same 11/11;T0 PF-ON2 - PF-OFF2: mean -0.020 ms/round, negative 1/3;T1 PF-ON2 - PF-OFF2: mean -0.069 ms/round, negative 6/11 texts same 11/11;T0 PF-OFF2 - PF-OFF: mean +0.011 ms/round, negative 1/3;T1 PF-OFF2 - PF-OFF: mean -0.084 ms/round, negative 4/11 texts same 11/11;
+2026-11-03T09:56:11Z QUEUE-D21 PF verdict: LOSE means [0.001, -0.066, -0.02, -0.069] avg -0.038 t1-texts-same True
+2026-11-03T09:58:45Z QUEUE-D21 server up: REC + ATTN_PREP/POST, old .so (v41k.so aad82b0f288e9a98)
+2026-11-03T09:58:45Z QUEUE-D21 done
+2026-11-03T10:24:22Z QUEUE-D22 start: build scratch v41k.so + v41k_sweep.so (CPU, server idle)
+2026-11-03T10:26:35Z QUEUE-D22 builds: v41k rc=0 ae26fafad954b820 sweep rc=0 8648112 B
+2026-11-03T10:27:13Z QUEUE-D22 sweep rc=0 (144 table lines)
+2026-11-03T10:27:37Z QUEUE-D22 ncu rc=0 kernels 7
+2026-11-03T10:29:48Z QUEUE-D22 server up: REC + ATTN_PREP/POST (aad82b0f288e9a98)
+2026-11-03T10:29:48Z QUEUE-D22 done
+2026-11-03T10:32:56Z QUEUE-D23 start: stop server; TRANSITION v2 variants + default check
+2026-11-03T10:34:06Z QUEUE-D23 variants rc=0 default rc=0: NO old {'M=1': 13.19, 'M=2': 11.85, 'M=3': 12.41, 'M=4': 13.07, 'M=5': 14.26, 'M=6': 16.53} | v2 {'M=1': 14.96, 'M=2': 13.43, 'M=3': 16.53, 'M=4': 18.76, 'M=5': 22.29, 'M=6': 26.8} | fastest_clean v2_no_early {'v2': 26.8, 'v2_maxnreg32': 27.26, 'v2_maxnreg_none': 26.69, 'v2_no_early': 15.03, 'v2_no_pairs': 26.18, 'v2_no_quad': 24.9, 'v2_groups4': 17.13} | probes M6 {'old_parts3': 7.32, 'old_finish3': 8.34, 'old_parts3_nomix': 2.32, 'old_finish3_nomix': 2.81, 'old_transition_nomix': 5.17, 'v2_transition_nomix': 7.01}
+2026-11-03T10:34:06Z QUEUE-D23 TRANSITION v2 not deployed
+2026-11-03T10:40:02Z QUEUE-D23 AR-OFF lines: fuse-trans 0, capture-warn 0, fuse-prep 8, ef 8, sum2 22, kb 9, tracebacks 0
+2026-11-03T10:45:19Z QUEUE-D23 AR-ON lines: fuse-trans 0, capture-warn 0, fuse-prep 8, ef 8, sum2 22, kb 9, tracebacks 0
+2026-11-03T10:49:25Z QUEUE-D23 AR-ON2 lines: fuse-trans 0, capture-warn 0, fuse-prep 8, ef 8, sum2 22, kb 9, tracebacks 0
+2026-11-03T10:53:41Z QUEUE-D23 AR-OFF2 lines: fuse-trans 0, capture-warn 0, fuse-prep 8, ef 8, sum2 22, kb 9, tracebacks 0
+2026-11-03T10:53:41Z QUEUE-D23 AR pairs: T0 AR-ON - AR-OFF: mean +0.294 ms/round, negative 0/3;T1 AR-ON - AR-OFF: mean +0.323 ms/round, negative 0/11 texts same 11/11;T0 AR-ON2 - AR-OFF2: mean +0.183 ms/round, negative 1/3;T1 AR-ON2 - AR-OFF2: mean +0.337 ms/round, negative 0/11 texts same 11/11;T0 AR-OFF2 - AR-OFF: mean +0.099 ms/round, negative 1/3;T1 AR-OFF2 - AR-OFF: mean +0.055 ms/round, negative 5/11 texts same 11/11;
+2026-11-03T10:53:41Z QUEUE-D23 AR verdict: LOSE means [0.294, 0.323, 0.183, 0.337] avg +0.284 t1-texts-same True
+2026-11-03T10:56:20Z QUEUE-D23 server up: REC + ATTN_PREP/POST +[ ]
+2026-11-03T10:56:20Z QUEUE-D23 done
+2026-11-03T10:56:48Z QUEUE-D24 start: stop server; dmvx window 73941c4 (no nvidia-smi; clocks unlocked)
+2026-11-03T10:58:31Z QUEUE-D24 window rc=0: time rc=0 chain rc=0 scan rc=0 ncu rc=0 ncu-src rc=0 dmvx-raw rc=0 dmvx-details rc=0 dmvx-src-raw rc=0 dmvx-src-details rc=0 src-sass rc=0 summary rc=0 src-summary rc=0 
+2026-11-03T11:01:57Z QUEUE-D24 server up: REC + ATTN_PREP/POST +[ ] (aad82b0f288e9a98)
+2026-11-03T11:01:57Z QUEUE-D24 done
+2026-11-03T11:25:22Z QUEUE-D25 start: power ABBA 150/200/200/150 W on Boards B+C (runtime -pl), recommended stack
+2026-11-03T11:25:38Z QUEUE-D25 power limit -> 150 W rc=0 (8 of 8 set)
+2026-11-03T11:25:54Z QUEUE-D25 pre counters: cap_us 23763605653 swthermal_us 0 hwthermal_us 0 maxtemp_C 46 limits 150.00x8 
+2026-11-03T11:32:10Z QUEUE-D25 PW-OFF lines: fuse-prep 8, ef 8, kb 9, tracebacks 0
+2026-11-03T11:32:26Z QUEUE-D25 PW-OFF counters: cap_us 23932951679 swthermal_us 0 hwthermal_us 0 maxtemp_C 55 limits 150.00x8 
+2026-11-03T11:32:58Z QUEUE-D25 power limit -> 200 W rc=0 (8 of 8 set)
+2026-11-03T11:38:09Z QUEUE-D25 PW-ON lines: fuse-prep 8, ef 8, kb 9, tracebacks 0
+2026-11-03T11:38:25Z QUEUE-D25 PW-ON counters: cap_us 23933717252 swthermal_us 0 hwthermal_us 0 maxtemp_C 57 limits 200.00x8 
+2026-11-03T11:43:02Z QUEUE-D25 PW-ON2 lines: fuse-prep 8, ef 8, kb 9, tracebacks 0
+2026-11-03T11:43:18Z QUEUE-D25 PW-ON2 counters: cap_us 23933717252 swthermal_us 0 hwthermal_us 0 maxtemp_C 56 limits 200.00x8 
+2026-11-03T11:43:50Z QUEUE-D25 power limit -> 150 W rc=0 (8 of 8 set)
+2026-11-03T11:48:06Z QUEUE-D25 PW-OFF2 lines: fuse-prep 8, ef 8, kb 9, tracebacks 0
+2026-11-03T11:48:22Z QUEUE-D25 PW-OFF2 counters: cap_us 23945768920 swthermal_us 0 hwthermal_us 0 maxtemp_C 55 limits 150.00x8 
+2026-11-03T11:48:38Z QUEUE-D25 PW pairs: T0 PW-ON - PW-OFF: mean -0.086 ms/round, negative 2/3;T1 PW-ON - PW-OFF: mean +0.026 ms/round, negative 5/11 texts same 11/11;T0 PW-ON2 - PW-OFF2: mean -0.103 ms/round, negative 3/3;T1 PW-ON2 - PW-OFF2: mean -0.086 ms/round, negative 8/11 texts same 11/11;T0 PW-OFF2 - PW-OFF: mean +0.030 ms/round, negative 0/3;T1 PW-OFF2 - PW-OFF: mean +0.020 ms/round, negative 4/11 texts same 11/11;
+2026-11-03T11:48:38Z QUEUE-D25 PW verdict: LOSE means [-0.086, 0.026, -0.103, -0.086] avg -0.062 t1-texts-same True
+2026-11-03T11:48:38Z QUEUE-D25 kept 150 W
+2026-11-03T11:48:38Z QUEUE-D25 done
+2026-11-03T11:48:52Z QUEUE-D26 start: stop server; dmvx window 2 fe107c6 (CPU build l2pf, probe l2, chain hot-x; no nvidia-smi)
+2026-11-03T11:50:18Z QUEUE-D26 window rc=0: build-l2pf rc=0 l2 rc=0 chain-hotx rc=0 chain rc=0 
+2026-11-03T11:52:29Z QUEUE-D26 server up: REC + ATTN_PREP/POST (aad82b0f288e9a98)
+2026-11-03T11:52:29Z QUEUE-D26 done
+2026-11-03T12:36:53Z QUEUE-D27A start: warm-up, then bench2 ctx 0x3, 32000x2, 150000x2, 256000x1, 300000x1 (aad82b0f288e9a98)
+2026-11-03T12:36:55Z QUEUE-D27A warm-up rc=0
+2026-11-03T12:37:56Z QUEUE-D27A ctx 0 rc=0
+2026-11-03T12:39:21Z QUEUE-D27A ctx 32000 rc=0
+2026-11-03T12:43:54Z QUEUE-D27A ctx 150000 rc=0
+2026-11-03T12:53:19Z QUEUE-D27A ctx 256000/300000 rc=0
+2026-11-03T12:53:19Z QUEUE-D27A summary: 0: n3 ttft 0.4s dec 84.6 | 32000: n2 ttft 22.4s dec 87.0 | 150000: n2 ttft 111.4s dec 80.1 | 256000: n1 ttft 215.5s dec 65.5 | 300000: n1 ttft 264.9s dec 71.8
+2026-11-03T12:53:19Z QUEUE-D27A done
+2026-11-03T12:53:38Z QUEUE-D28 start: #1341 probe OFF (old code), then window 3a eb1c3df, deploy hotrefill dd522db, boot, probe ON
+2026-11-03T12:58:33Z QUEUE-D28 probe OFF rc=0: "n": 36000 "verdict": "PASS" "hit_a_equals_cold": true "n": 40000 "verdict": "PASS" "hit_a_equals_cold": true "n": 45000 "verdict": "PASS" "hit_a_equals_cold": true "n": 64000 "verdict": "PASS" "hit_a_equals_cold": true  SUMMARY PASS 4 FLAG 0 FAIL 0
+2026-11-03T13:02:47Z QUEUE-D28 window 3a rc=0: build-l2pf rc=0 build-par rc=0 build-full rc=0 build-sel rc=0 build-ngrp rc=0 build-red rc=0 build-stage rc=0 build-xoff rc=0 build-ldb rc=0 build-sync rc=0 resource rc=0 check rc=0 time rc=0 pairs rc=0 
+2026-11-03T13:02:47Z QUEUE-D28 hotrefill deploy ok=1 (7e0fabdf6518; backup ${BENCH_DIR}/backup-d28)
+2026-11-03T13:06:08Z QUEUE-D28 server up: REC + hotrefill (aad82b0f288e9a98)
+2026-11-03T13:11:05Z QUEUE-D28 probe ON rc=0: "n": 36000 "verdict": "PASS" "hit_a_equals_cold": true "n": 40000 "verdict": "PASS" "hit_a_equals_cold": true "n": 45000 "verdict": "PASS" "hit_a_equals_cold": true "n": 64000 "verdict": "PASS" "hit_a_equals_cold": true  SUMMARY PASS 4 FLAG 0 FAIL 0
+2026-11-03T13:11:05Z QUEUE-D28 ON log: hot-refill lines 0, tracebacks 0; 
+2026-11-03T13:11:05Z QUEUE-D28 done
+2026-11-03T13:11:17Z QUEUE-D29 start: needle 450000/498000 x2, bench2 500000 x1, prefix 250000/500000
+2026-11-03T13:44:49Z QUEUE-D29 needle rc=0: ctx   450,000 rep 0 slot 0: 6/6 OK;ctx   450,000 rep 1 slot 0: 6/6 OK;ctx   498,000 rep 0 slot 0: 6/6 OK;ctx   498,000 rep 1 slot 0: 6/6 OK;
+2026-11-03T13:54:51Z QUEUE-D29 ctx 500000 rc=0: occ 500000 ttft 536.0s dec 61.7 err None
+2026-11-03T14:11:49Z QUEUE-D30 replaced by queue-d30b.sh (owner the owner session): hotrefill now deploys into .venv-pp2 site-packages, which env.sh imports; D28 and D30 had deployed into src-pp2 only, so the refill never ran
+2026-11-03T14:20:20Z QUEUE-D29 prefix rc=0: "n": 250000 "verdict": "PASS" "hit_a_equals_cold": true "n": 500000 "verdict": "PASS" "hit_a_equals_cold": true  SUMMARY PASS 2 FLAG 0 FAIL 0
+2026-11-03T14:20:20Z QUEUE-D29 done
+2026-11-03T14:20:47Z QUEUE-D30 start: stop, D30b: deploy hotrefill 7e9a156 (4 files) into site-packages, boot, probe, prefix 250K/500K
+2026-11-03T14:21:14Z QUEUE-D30 deployed ok=1 to site-packages+src-pp2; import check: ${ENGINE_HOME}/.venv-pp2/lib/python3.12/site-packages/vllm/models/deepseek_v41/model.py True True
+2026-11-03T14:25:00Z QUEUE-D30 server up: REC + hotrefill 7e9a156
+2026-11-03T14:29:58Z QUEUE-D30 probe ON2 rc=0: SUMMARY PASS 4 FLAG 0 FAIL 0; restore lines 8, refill lines 8, tracebacks 0
+2026-11-03T14:29:58Z QUEUE-D30 log:       4 HOT_REFILL=1 active: session hit at 35584 refilled 32768 hot rows (stage layers 20-40);      4 HOT_REFILL=1 active: session hit at 35584 refilled 49152 hot rows (stage layers 0-20);      4 restore_prefix: first session hit at 35584 (stage layers 0-20, packed store True, VLLM_V41_HOT_REFILL=1);      4 restore_prefix: first session hit at 35584 (stage layers 20-40, packed store True, VLLM_V41_HOT_REFILL=1);
+2026-11-03T14:55:29Z QUEUE-D30 prefix CARD2 rc=0: "n": 250000 "verdict": "PASS" "hit_a_equals_cold": true "n": 500000 "verdict": "PASS" "hit_a_equals_cold": true  SUMMARY PASS 2 FLAG 0 FAIL 0; refill lines now 8, tracebacks 0
+2026-11-03T14:55:29Z QUEUE-D30 GUARD: both probes clean; hotrefill stays deployed
+2026-11-03T14:55:29Z QUEUE-D30 done
+2026-11-03T14:55:43Z QUEUE-D31 start: longctx profile window (LC_HOT=1), then C3 ABBA hot ring 524288 vs 32768 at 150K/300K
+2026-11-03T14:55:43Z LC-PROF base: profiled boot ()
+2026-11-03T15:05:44Z LC-PROF base rc=0: PROF {"target": 0, "prompt_tokens": 9, "hit_tokens": 0.0, "tokens": 96, "rounds": 33.0, "ms_round": 27.96, "ttft_s": 0.55, "files": 16} PROF {"target": 150000, "prompt_tokens": 150041, "hit_tokens": 150016.0, "tokens": 96, "rounds": 36.0, "ms_round": 32.09, "ttft_s": 0.98, "files": 16} PROF {"target": 300000, "prompt_tokens": 299223, "hit_tokens": 299200.0, "tokens": 96, "rounds": 19.0, "ms_round": 34.25, "ttft_s": 1.31, "files": 16} 
+2026-11-03T15:05:44Z LC-PROF hot: profiled boot (VLLM_V41_KV_HOT_POSITIONS=524288)
+2026-11-03T15:13:01Z LC-PROF hot rc=0: PROF {"target": 300000, "prompt_tokens": 299223, "hit_tokens": 299200.0, "tokens": 96, "rounds": 19.0, "ms_round": 32.71, "ttft_s": 1.42, "files": 16} 
+2026-11-03T15:16:35Z LC-PROF server up (recommended stack)
+2026-11-03T15:16:35Z LC-PROF done
+2026-11-03T15:16:35Z QUEUE-D31 profile window rc=0: LC-PROF base: profiled boot ();LC-PROF base rc=0: PROF {"target": 0, "prompt_tokens": 9, "hit_tokens": 0.0, "tokens": 96, "rounds": 33.0, "ms_round": 27.96, "ttft_s": 0.55, "files": 16} PROF {"target": 150000, ;LC-PROF hot: profiled boot (VLLM_V41_KV_HOT_POSITIONS=524288);LC-PROF hot rc=0: PROF {"target": 300000, "prompt_tokens": 299223, "hit_tokens": 299200.0, "tokens": 96, "rounds": 19.0, "ms_round": 32.71, "ttft_s": 1.42, "files": 16} ;LC-PROF server up (recommended stack);LC-PROF done;
+2026-11-03T15:25:33Z QUEUE-D31 HOT-OFF rc=0: DEPTH HOT-OFF L=150000 rep 0: prompt 150038 TTFT 110.935 s decode 115.2 tok/s rounds 139 tok/round 3.68 ms/round 31.91 sha 847272616b85 DEPTH HOT-OFF L=300000 rep 0: prompt 299227 TTFT 264.2 s decode 155.52 tok/s rounds 89 tok/round 5.75 ms/round 36.92 sha 4053a2742490 
+2026-11-03T15:34:42Z QUEUE-D31 HOT-ON rc=0: DEPTH HOT-ON L=150000 rep 0: prompt 150038 TTFT 111.31 s decode 115.13 tok/s rounds 140 tok/round 3.66 ms/round 31.7 sha 847272616b85 DEPTH HOT-ON L=300000 rep 0: prompt 299227 TTFT 264.703 s decode 159.51 tok/s rounds 89 tok/round 5.75 ms/round 35.99 sha 4053a2742490 
+2026-11-03T15:43:44Z QUEUE-D31 HOT-ON2 rc=0: DEPTH HOT-ON2 L=150000 rep 0: prompt 150038 TTFT 111.79 s decode 115.57 tok/s rounds 139 tok/round 3.68 ms/round 31.81 sha 847272616b85 DEPTH HOT-ON2 L=300000 rep 0: prompt 299227 TTFT 265.555 s decode 160.04 tok/s rounds 89 tok/round 5.75 ms/round 35.88 sha 4053a2742490 
+2026-11-03T15:52:58Z QUEUE-D31 HOT-OFF2 rc=0: DEPTH HOT-OFF2 L=150000 rep 0: prompt 150038 TTFT 111.726 s decode 114.52 tok/s rounds 139 tok/round 3.68 ms/round 32.1 sha 847272616b85 DEPTH HOT-OFF2 L=300000 rep 0: prompt 299227 TTFT 265.514 s decode 154.66 tok/s rounds 89 tok/round 5.75 ms/round 37.12 sha 4053a2742490 
+2026-11-03T15:52:58Z QUEUE-D31 server: up (last arm HOT-OFF2 = recommended stack)
+2026-11-03T15:52:58Z QUEUE-D31 done
+2026-11-03T15:52:58Z QUEUE-D32 start: MRV2 port ae8e0cb33 GPU plan (A/B/AS ABBA + depth + prefix)
+2026-11-03T15:53:17Z QUEUE-D32 MRV2 deploy ok=1 (14 files; model_runner.py b3c8891dc32a)
+2026-11-03T15:58:31Z QUEUE-D32 MVS-OFF lines: mrv2-state 0, commit-hooks 0, dspark-mrv2 0, exact-graphs 0, coupled-shard 0, coupled-local 0, FALLBACK-loop 0, FALLBACK-gathered 0, unsupported 0, async Asynchronous scheduling is disabled, tracebacks 0, device-assert 0
+2026-11-03T16:01:14Z QUEUE-D32 MVS-ON lines: mrv2-state 8, commit-hooks 4, dspark-mrv2 4, exact-graphs 1, coupled-shard 0, coupled-local 0, FALLBACK-loop 0, FALLBACK-gathered 0, unsupported 1, async Asynchronous scheduling is disabled, tracebacks 26, device-assert 12
+2026-11-03T16:01:14Z QUEUE-D32 MVS-ON (MRV2 sync) failed or incomplete rc=1: 2026-11-03T16:01:14Z AB MVS-ON BOOT FAILED: server exited during startup (see ${ENGINE_HOME}/run-pp2/state/serve-pp2.log); serve log tail: (APIServer pid=2307423) Traceback (most recent call last):;(APIServer pid=2307423)     raise RuntimeError(;(APIServer pid=2307423) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {};
+2026-11-03T16:01:15Z QUEUE-D32 rollback of MRV2 files ok=1
+2026-11-03T16:03:56Z QUEUE-D32 server up: REC (V1)
+2026-11-03T16:03:56Z QUEUE-D32 done
+2026-11-03T16:04:09Z QUEUE-D33 start: MIX_STREAM GPU checks + ABBA (kit 89e44b940e6b)
+2026-11-03T16:04:10Z VERDICT-VOID D28 hotrefill probe ON (13:11:05Z): deployed into src-pp2 only, the engine imports .venv-pp2 site-packages; "hot-refill lines 0" confirms the code never ran. Superseded by the D30b run (state 14:21:14Z: deploy into site-packages + src-pp2; 14:29:58Z: refill lines 8).
+2026-11-03T16:04:10Z VERDICT-VOID D30 (queue-d30.sh 13:14 version): replaced by queue-d30b.sh before it ran (state 14:11:49Z); the D30 state lines from 14:20:47Z on are the D30b run and stand.
+2026-11-03T16:04:10Z VERDICT-NOTE D7: no .so verdict was recorded (plan_fuse_check failed, PLAN arms skipped, state 03:27:13Z); nothing to void.
+2026-11-03T16:04:35Z QUEUE-D33 single-GPU check rc=1: CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.;For debugging consider passing CUDA_LAUNCH_BLOCKING=1;Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.;;
+2026-11-03T16:04:35Z QUEUE-D33 checks not clean: no deploy, no ABBA
+2026-11-03T16:07:16Z QUEUE-D33 server up: REC
+2026-11-03T16:07:16Z QUEUE-D33 done
+2026-11-03T16:07:26Z QUEUE-D34 start: stop server, build diet1103 v41k.so, expert_diet_check + sanitizers (base env: no MIX_STREAM)
+2026-11-03T16:09:20Z QUEUE-D34 diet1103 v41k.so built 54c1a0e1cc6b5d4a (6616136 B)
+2026-11-03T16:09:34Z QUEUE-D34 expert_diet_check rc=0: ok True failing 0 | {"29": {"gate_up": {"mismatch": {"M1": {"plan_fuse": {"hq": 0, "hd": 0, "past_hd": 0, "plan": 0, "nan_old": 0, "nan_new": 0}, "build_plan": {"hq": 0, "hd": 0, "past_hd": 0, "plan": 0, "nan_old": 0, "nan_new": 0}}, "M2": {"plan_fuse": {"hq": 0, "hd": 0, "past_hd": 0, "plan": 0, "nan_old": 0, "nan_new": 0}, "build_plan": {"hq": 0, "hd": 0, "past_hd": 0, "plan": 0, "nan_old": 0, "nan_new": 0}}, "M3": {"plan_fuse": {"hq": 0, "hd": 0, "past_hd": 0, "plan": 0, "nan_old": 0, "nan_new": 0}, "build_plan": {"hq": 0, "hd": 0, "past_hd": 0, "plan": 0, "nan_old": 0, "nan_new": 0}}, "M4": {"plan_fuse": {"hq
+2026-11-03T16:09:58Z QUEUE-D34 sanitizer memcheck rc=0: ========= ERROR SUMMARY: 0 errors
+2026-11-03T16:13:41Z QUEUE-D34 sanitizer racecheck rc=0: ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)
+2026-11-03T16:13:47Z QUEUE-D34 sanitizer synccheck rc=0: ========= ERROR SUMMARY: 0 errors
+2026-11-03T16:13:47Z QUEUE-D34 DIET .so deployed 54c1a0e1cc6b5d4a (backup v41k.so.pre-diet1103 aad82b0f288e9a98)
+2026-11-03T16:19:10Z QUEUE-D34 DT-OFF lines: ef-active 0, mix-stream 0, diet-mentions 0, tracebacks 0
+2026-11-03T16:24:17Z QUEUE-D34 DT-ON lines: ef-active 0, mix-stream 0, diet-mentions 1, tracebacks 0
+2026-11-03T16:28:42Z QUEUE-D34 DT-ON2 lines: ef-active 0, mix-stream 0, diet-mentions 1, tracebacks 0
+2026-11-03T16:33:03Z QUEUE-D34 DT-OFF2 lines: ef-active 0, mix-stream 0, diet-mentions 0, tracebacks 0
+2026-11-03T16:33:03Z QUEUE-D34 DT pairs: T0 DT-ON - DT-OFF: mean -0.739 ms/round, negative 3/3;T1 DT-ON - DT-OFF: mean -0.793 ms/round, negative 11/11 texts same 11/11;T0 DT-ON2 - DT-OFF2: mean -1.019 ms/round, negative 3/3;T1 DT-ON2 - DT-OFF2: mean -0.934 ms/round, negative 10/11 texts same 11/11;T0 DT-OFF2 - DT-OFF: mean +0.465 ms/round, negative 0/3;T1 DT-OFF2 - DT-OFF: mean +0.591 ms/round, negative 0/11 texts same 11/11;
+2026-11-03T16:33:03Z QUEUE-D34 DT verdict: WIN means [-0.739, -0.793, -1.019, -0.934] avg -0.871 t1-texts-same True
+2026-11-03T16:33:03Z QUEUE-D34 DT-ON greedy: 2026-11-03T16:23:06Z AB DT-ON GREEDY rc=0: run 1 row 0 IDENTICAL    run 1 row 1 IDENTICAL    run 1 row 2 IDENTICAL    run 1 row 3 IDENTICAL    run 1 row 4 IDENTICAL    run 1 row 5 IDENTICAL    run 1 row 6 IDENTICAL    run 1 row 7 NEAR-TIE 33 0.1094  GREEDY CHECK AB-DT-ON: PASS identical 7/8 near-tie
+2026-11-03T16:35:33Z QUEUE-D34 server up: REC + VLLM_V41_EXPERT_DIET=3 (54c1a0e1cc6b5d4a)
+2026-11-03T16:35:33Z QUEUE-D34 done (diet .so stays deployed; inert with VLLM_V41_EXPERT_DIET unset)
+2026-11-03T16:36:03Z QUEUE-D34R start: ROUTE_FAST w4 ABBA (base extras: EXPERT_DIET=3)
+2026-11-03T16:41:23Z QUEUE-D34R RF4-OFF lines: tracebacks 0
+2026-11-03T16:46:31Z QUEUE-D34R RF4-ON lines: tracebacks 0
+2026-11-03T16:50:47Z QUEUE-D34R RF4-ON2 lines: tracebacks 0
+2026-11-03T16:55:04Z QUEUE-D34R RF4-OFF2 lines: tracebacks 0
+2026-11-03T16:55:04Z QUEUE-D34R RF4 pairs: T0 RF4-ON - RF4-OFF: mean -0.184 ms/round, negative 2/3;T1 RF4-ON - RF4-OFF: mean +0.275 ms/round, negative 2/11 texts same 11/11;T0 RF4-ON2 - RF4-OFF2: mean -0.602 ms/round, negative 3/3;T1 RF4-ON2 - RF4-OFF2: mean -0.151 ms/round, negative 7/11 texts same 11/11;T0 RF4-OFF2 - RF4-OFF: mean +0.831 ms/round, negative 0/3;T1 RF4-OFF2 - RF4-OFF: mean +0.691 ms/round, negative 0/11 texts same 11/11;
+2026-11-03T16:55:04Z QUEUE-D34R RF4 verdict: LOSE means [-0.184, 0.275, -0.602, -0.151] avg -0.165 t1-texts-same True
+2026-11-03T16:55:04Z QUEUE-D34R RF4-ON greedy: GREEDY rc=0, tracebacks 0, avg -0.165
+2026-11-03T16:55:04Z QUEUE-D34R not a WIN but faster on average (-0.165), bitwise greedy, 0 tracebacks: keep on
+2026-11-03T16:57:50Z QUEUE-D34R server up: REC + VLLM_V41_ROUTE_FAST=1 VLLM_V41_ROUTE_WARPS=4
+2026-11-03T16:57:50Z QUEUE-D34R done
+2026-11-03T16:58:03Z QUEUE-D35 start: PREFILL_SKIP kit pick + deploy + d35 window (base env extras: EXPERT_DIET=3,ROUTE_FAST=1)
+2026-11-03T16:58:21Z QUEUE-D35 kit picked: kit
+2026-11-03T16:58:21Z QUEUE-D35 PREFILL_SKIP deploy ok=1 (kit, backup ${BENCH_DIR}/backup-d35)
+2026-11-03T16:58:21Z QUEUE-D35 D35 kit installed: kit (out /path/to/scratch/d35-20261103T165821Z)
+2026-11-03T17:02:31Z QUEUE-D35 D35 SK-OFF up + warm in 250 s
+2026-11-03T17:09:17Z QUEUE-D35 D35 SK-OFF depth: L=32768 rep 0: prompt 32718 TTFT 22.634 s sha 0f978a2a2be1 L=150000 rep 0: prompt 150038 TTFT 111.054 s sha 4abc59ca4487 L=300000 rep 0: prompt 299227 TTFT 263.925 s sha bc9678598a26
+2026-11-03T17:09:17Z QUEUE-D35 D35 SK-OFF activation: boot_line 0 first_skip_line 0 per_request_lines 0 all_knob_lines 0
+2026-11-03T17:11:49Z QUEUE-D35 D35 SK-ON up + warm in 152 s
+2026-11-03T17:16:49Z QUEUE-D35 D35 SK-ON depth: L=32768 rep 0: prompt 32718 TTFT 20.678 s sha 0f978a2a2be1 L=150000 rep 0: prompt 150038 TTFT 88.453 s sha 4abc59ca4487 L=300000 rep 0: prompt 299227 TTFT 181.321 s sha bc9678598a26
+2026-11-03T17:16:49Z QUEUE-D35 D35 SK-ON vs SK-OFF sha: IDENTICAL
+2026-11-03T17:18:51Z QUEUE-D35 D35 SK-ON guard: GUARD L=150000 prompt 150017 abort_after 20 s early False hits_abort 0 hits_resend 0 sha c2a41f6f0f0d 91.26 s
+2026-11-03T17:29:34Z QUEUE-D35 D35 SK-ON mc_prefix rc=0: "n": 36000 "verdict": "PASS" "hit_a_equals_cold": true "elapsed_s": 23.04 "elapsed_s": 0.68 "elapsed_s": 22.93 "elapsed_s": 0.65 "n": 64000 "verdict": "PASS" "hit_a_equals_cold": true "elapsed_s": 37.22 "elapsed_s": 0.78 "elapsed_s": 37.01 "elapsed_s": 0.78 "n": 150000 "verdict": "PASS" "hit_a_equals_cold": true "elapsed_s": 88.98 "elapsed_s": 1.04 "elapsed_s": 88.73 "elapsed_s": 1.04 "n": 250000 "verdict": "PASS" "hit_a_equals_cold": true "elapsed_s": 148.94 "elapsed_s": 1.39 "elapsed_s": 148.5 SUMMARY PASS 4 FLAG 0 FAIL 0
+2026-11-03T17:29:34Z QUEUE-D35 D35 SK-ON activation: boot_line 1 first_skip_line 1 per_request_lines 12 all_knob_lines 16

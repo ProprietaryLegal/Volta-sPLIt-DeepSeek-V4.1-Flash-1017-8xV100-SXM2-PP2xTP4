@@ -1,0 +1,1747 @@
+diff --git a/benchmarks/deepseek_v41/small_fuse_check.py b/benchmarks/deepseek_v41/small_fuse_check.py
+new file mode 100644
+index 000000000..8e9ba2bec
+--- /dev/null
++++ b/benchmarks/deepseek_v41/small_fuse_check.py
+@@ -0,0 +1,554 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""GPU check for the V4.1 small-kernel fusions (one GPU, synthetic inputs).
++
++    VLLM_V41_FUSE_TRANSITION  _transition_parts3 + _transition_finish3
++                              -> _transition_fused3 (last-arrival finish)
++    VLLM_V41_FUSE_ATTN_PREP   _rotate(q), _short_rms(kv), _rotate(kv), _qdq
++                              -> _attn_prep
++    VLLM_V41_FUSE_ATTN_POST   _ring_insert, _rotate(inverse), _qdq
++                              -> _attn_post
++
++1. Bit equality, old vs new, every output into fresh NaN-poisoned buffers:
++   transition for M = 1..8, with mixes (the attention and FFN boundaries)
++   and without (a stage's final norm), fn-row groups = VLLM_V41_HC_V3_GROUPS
++   (8 unless set) and 1/2/4; PREP for M = 1..6 on the window and compressed
++   RoPE tables; POST for M = 1..8 with and without a window ring. Positions
++   inside the 16K table, at its end, beyond it (cos/sin on the fly) and 0;
++   zero rows, sub-floor QDQ groups and near-FP16-max values; invalid ring
++   tokens. The fused transition's counters must be zero after every call.
++2. CUDA graphs: each fused op captured at several M, replayed with new
++   inputs and interleaved across M (shared counters), against graphs of the
++   old kernels.
++3. Time per call inside a CUDA graph (--reps calls per replay, median of
++   --trials), old vs new, for M = --time-tokens; the per-layer and per-round
++   estimate uses 2 transitions + 1 PREP + 1 POST per layer, --layers layers.
++   Transition register caps (maxnreg None/40/32) are timed too.
++
++Loads the kernel modules from this script's tree (no vllm install or build
++needed). Exit status 1 on any difference.
++
++    CUDA_VISIBLE_DEVICES=0 python benchmarks/deepseek_v41/small_fuse_check.py \\
++        --json /tmp/small_fuse.json
++"""
++
++import argparse
++import contextlib
++import importlib.util
++import json
++import statistics
++import sys
++import types
++from pathlib import Path
++
++import torch
++
++_HERE = Path(__file__).resolve().parent
++_spec = importlib.util.spec_from_file_location(
++    "small_fuse_sm70_check", _HERE / "small_fuse_sm70_check.py"
++)
++_loader = importlib.util.module_from_spec(_spec)
++_spec.loader.exec_module(_loader)
++
++FUSED, ATTN, ROPE, NORM, OPS = _loader.load_modules()
++H = FUSED.H
++HEADS, GROUPS = 16, 2  # per TP rank
++TABLE_LENGTH = 16384
++DEV = "cuda"
++
++
++class _PoisonTorch(types.ModuleType):
++    def __getattr__(self, name):
++        return getattr(torch, name)
++
++    @staticmethod
++    def _poison(t):
++        return t.fill_(float("nan") if t.is_floating_point() else -1)
++
++    def empty(self, *args, **kwargs):
++        return self._poison(torch.empty(*args, **kwargs))
++
++    def empty_like(self, x, **kwargs):
++        return self._poison(torch.empty_like(x, **kwargs))
++
++
++_MODULES = (FUSED, ATTN, ROPE, NORM, OPS)
++
++
++@contextlib.contextmanager
++def poisoned():
++    saved = [m.torch for m in _MODULES]
++    for m in _MODULES:
++        m.torch = _PoisonTorch("torch")
++    try:
++        yield
++    finally:
++        for m, t in zip(_MODULES, saved):
++            m.torch = t
++
++
++def _bits(x):
++    x = x.contiguous()
++    return x.view({4: torch.int32, 2: torch.int16, 1: torch.int8}[x.element_size()])
++
++
++def compare(failures, name, old, new):
++    """Bitwise; records a failure (with a short diagnosis) on any difference."""
++    ok = (
++        old.shape == new.shape
++        and old.dtype == new.dtype
++        and torch.equal(_bits(old), _bits(new))
++    )
++    if ok and old.is_floating_point() and torch.isnan(new).any():
++        ok = False  # finite inputs: a NaN is a buffer the new kernel never wrote
++    if not ok:
++        info = {"check": name, "shape": list(new.shape)}
++        if old.shape == new.shape and old.is_floating_point():
++            differ = _bits(old) != _bits(new)
++            info["differ"] = int(differ.sum())
++            info["nan_new"] = int(torch.isnan(new).sum())
++            d = (old.float() - new.float()).abs()
++            info["max_abs"] = float(d[torch.isfinite(d)].max()) if differ.any() else 0
++        failures.append(info)
++    return ok
++
++
++# ---------------------------------------------------------------- inputs --
++
++
++def _gen(seed):
++    return torch.Generator(device=DEV).manual_seed(seed)
++
++
++def _doubly_stochastic(x):
++    # Sinkhorn-like comb: repeated expansion stays bounded (timing graphs).
++    for _ in range(8):
++        x = x / x.sum(-1, keepdim=True)
++        x = x / x.sum(-2, keepdim=True)
++    return x
++
++
++def transition_inputs(tokens, mix, seed):
++    g = _gen(seed)
++    r = dict(
++        residual=torch.randn(tokens, 4, H, device=DEV, generator=g) * 0.7,
++        y=(torch.randn(tokens, H, device=DEV, generator=g) * 0.5).half(),
++        post=2.0 * torch.sigmoid(torch.randn(tokens, 4, device=DEV, generator=g)),
++        comb=_doubly_stochastic(
++            torch.softmax(torch.randn(tokens, 4, 4, device=DEV, generator=g), -1)
++        ),
++        collapse_pre=torch.sigmoid(torch.randn(tokens, 4, device=DEV, generator=g))
++        + 1e-6,
++        norm_weight=1.0 + 0.1 * torch.randn(H, device=DEV, generator=g),
++        fn=None,
++        scale=None,
++        base=None,
++    )
++    if tokens > 1:
++        r["y"][1] = 0  # a token whose sublayer output is zero
++    if tokens > 2:
++        r["residual"][2, :, :256] *= 1e-4  # one tiny chunk
++    if mix:
++        r["fn"] = torch.randn(24, 4 * H, device=DEV, generator=g) * 0.02
++        r["scale"] = 0.5 + torch.rand(3, device=DEV, generator=g)
++        r["base"] = 0.5 * torch.randn(24, device=DEV, generator=g)
++    return r
++
++
++def _transition(path, x, residual=None):
++    residual = x["residual"].clone() if residual is None else residual
++    out, mixes = path(
++        residual,
++        x["y"],
++        x["post"],
++        x["comb"],
++        x["collapse_pre"],
++        x["norm_weight"],
++        x["fn"],
++        x["scale"],
++        x["base"],
++        1e-20,
++        1e-6,
++        20,
++    )
++    return residual, out, mixes
++
++
++def compare_transition(failures, tag, old, new):
++    ok = compare(failures, tag + " residual", old[0], new[0])
++    ok &= compare(failures, tag + " collapse", old[1], new[1])
++    if old[2] is not None:
++        for name, a, b in zip(("pre", "post", "comb"), old[2], new[2]):
++            ok &= compare(failures, f"{tag} {name}", a, b)
++    for counters in FUSED._FT_COUNTERS.values():
++        if int(counters.abs().sum()):
++            failures.append({"check": tag + " counters not re-armed"})
++            counters.zero_()
++            ok = False
++    return ok
++
++
++def rows(tokens, width, seed, scale=1.0):
++    g = _gen(seed)
++    x = torch.randn(tokens, width, device=DEV, generator=g) * scale
++    x[0, 128:256] *= 1e-5  # one QDQ group under the amax floor
++    if tokens > 1:
++        x[1] = 0  # all-zero row: RMS eps and the QDQ floor
++    if tokens > 2:
++        x[2, ::5] *= 2000.0  # near the FP16 top
++    return x.clamp(-65000, 65000).half()
++
++
++def position_sets(tokens):
++    # Consecutive decode positions; table end and beyond (on-the-fly
++    # cos/sin); zero and mixed.
++    picks = [0, TABLE_LENGTH - 1, TABLE_LENGTH, TABLE_LENGTH + 4093, 7, 5000]
++    yield "decode", torch.arange(tokens, device=DEV) + 4000
++    yield (
++        "edges",
++        torch.tensor([picks[i % len(picks)] for i in range(tokens)], device=DEV),
++    )
++    yield "beyond", torch.arange(tokens, device=DEV) + TABLE_LENGTH - 2
++
++
++TABLES = {}
++
++
++def table(compressed):
++    if compressed not in TABLES:
++        TABLES[compressed] = ROPE.rope_table(
++            TABLE_LENGTH, compressed=compressed, device=DEV
++        )
++    return TABLES[compressed]
++
++
++def prep_old(q, kv, w, positions, tab):
++    query = ROPE.apply_rope(q, positions, tab)
++    window = ROPE.attention_qdq(
++        ROPE.apply_rope(NORM.short_rms_norm(kv, w, 1e-20), positions, tab)
++    )
++    return query, window
++
++
++def prep_new(q, kv, w, positions, tab):
++    result = ATTN.attn_prep(q, kv, w, 1e-20, positions, tab)
++    if result is None:
++        raise RuntimeError("attn_prep declined a decode-shaped call")
++    return result
++
++
++def post_old(output, positions, tab, ring, values, valid):
++    if ring is not None:
++        OPS.insert_window_ring(ring, values, positions, valid)
++    output = ROPE.apply_rope(output, positions, tab, inverse=True)
++    return ROPE.attention_qdq(output.reshape(output.shape[0], GROUPS, 4096))
++
++
++def post_new(output, positions, tab, ring, values, valid):
++    result = ATTN.attn_post(output, positions, tab, GROUPS, ring, values, valid)
++    if result is None:
++        raise RuntimeError("attn_post declined a decode-shaped call")
++    return result
++
++
++def post_inputs(tokens, ring, seed):
++    output = rows(tokens, HEADS * 512, seed).view(tokens, HEADS, 512)
++    if not ring:
++        return output, None, None, None
++    g = _gen(seed + 1)
++    values = rows(tokens, 512, seed + 2)
++    valid = torch.ones(tokens, dtype=torch.bool, device=DEV)
++    if tokens >= 3:
++        valid[tokens // 2] = False  # a padded token: not written
++    ring_buf = torch.randn(OPS.WINDOW_RING, 512, device=DEV, generator=g).half()
++    return output, ring_buf, values, valid
++
++
++# ------------------------------------------------------------ bit checks --
++
++
++def check_transition(failures, report, groups_list):
++    n = 0
++    for groups in groups_list:
++        FUSED._V3_GROUPS = groups
++        for mix in (True, False):
++            if not mix and groups != groups_list[0]:
++                continue  # groups only apply with mixes
++            for tokens in range(1, 9):
++                for seed in range(2):
++                    x = transition_inputs(tokens, mix, 1000 * tokens + seed)
++                    with poisoned():
++                        old = _transition(FUSED._hc_transition3, x)
++                        new = _transition(FUSED._hc_transition_fused, x)
++                    tag = f"transition M={tokens} mix={mix} groups={groups}"
++                    compare_transition(failures, tag, old, new)
++                    n += 1
++    report["transition_cases"] = n
++
++
++def check_prep(failures, report):
++    n = 0
++    for tokens in range(1, 7):
++        for compressed in (False, True):
++            tab = table(compressed)
++            for pname, positions in position_sets(tokens):
++                seed = 100 * tokens + 10 * compressed + len(pname)
++                q = rows(tokens, HEADS * 512, seed).view(tokens, HEADS, 512)
++                kv = rows(tokens, 512, seed + 1, scale=0.4)
++                w = 1.0 + 0.2 * torch.randn(512, device=DEV, generator=_gen(seed))
++                with poisoned():
++                    old = prep_old(q, kv, w, positions, tab)
++                    new = prep_new(q, kv, w, positions, tab)
++                tag = f"prep M={tokens} compressed={compressed} {pname}"
++                compare(failures, tag + " query", old[0], new[0])
++                compare(failures, tag + " window", old[1], new[1])
++                n += 1
++    report["prep_cases"] = n
++
++
++def check_post(failures, report):
++    n = 0
++    tab = table(False)
++    for tokens in range(1, 9):
++        for ring in (False, True):
++            for pname, positions in position_sets(tokens):
++                if ring and pname == "edges":
++                    continue  # repeated ring slots race in the old kernel too
++                seed = 300 * tokens + 10 * ring + len(pname)
++                output, ring_buf, values, valid = post_inputs(tokens, ring, seed)
++                ring_old = ring_buf.clone() if ring else None
++                with poisoned():
++                    old = post_old(output, positions, tab, ring_old, values, valid)
++                    new = post_new(output, positions, tab, ring_buf, values, valid)
++                tag = f"post M={tokens} ring={ring} {pname}"
++                compare(failures, tag + " output", old, new)
++                if ring:
++                    compare(failures, tag + " ring", ring_old, ring_buf)
++                n += 1
++    report["post_cases"] = n
++
++
++# ----------------------------------------------------------- CUDA graphs --
++
++
++def _capture(fn):
++    # Poisoned inside the graph too: every replay refills fresh buffers with
++    # NaN before the kernels run, so an unwritten element shows.
++    with poisoned():
++        fn()  # eager warm-up (compiles; allocates the transition counters)
++        torch.cuda.synchronize()
++        graph = torch.cuda.CUDAGraph()
++        with torch.cuda.graph(graph):
++            result = fn()
++    return graph, result
++
++
++def check_graphs(failures, report):
++    n = 0
++    # Transition: graphs at several M share one counter buffer; replay them
++    # interleaved with fresh inputs copied into the static buffers.
++    graphs = {}
++    for tokens in (6, 3, 1, 8):
++        x = transition_inputs(tokens, True, 77 + tokens)
++        res_old, res_new = x["residual"].clone(), x["residual"].clone()
++        g_old, out_old = _capture(
++            lambda x=x, r=res_old: _transition(FUSED._hc_transition3, x, r)[1:]
++        )
++        g_new, out_new = _capture(
++            lambda x=x, r=res_new: _transition(FUSED._hc_transition_fused, x, r)[1:]
++        )
++        graphs[tokens] = (x, res_old, res_new, g_old, out_old, g_new, out_new)
++    for step, tokens in enumerate((6, 3, 6, 1, 8, 3, 6)):
++        x, res_old, res_new, g_old, out_old, g_new, out_new = graphs[tokens]
++        fresh = transition_inputs(tokens, True, 5000 + step)
++        for key in ("y", "post", "comb", "collapse_pre"):
++            x[key].copy_(fresh[key])
++        res_old.copy_(fresh["residual"])
++        res_new.copy_(fresh["residual"])
++        g_old.replay()
++        g_new.replay()
++        torch.cuda.synchronize()
++        tag = f"graph transition step={step} M={tokens}"
++        compare_transition(
++            failures,
++            tag,
++            (res_old, out_old[0], out_old[1]),
++            (res_new, out_new[0], out_new[1]),
++        )
++        n += 1
++    # PREP / POST: replays with new inputs.
++    tab = table(True)
++    for tokens in (6, 2):
++        positions = torch.arange(tokens, device=DEV) + 9000
++        q = rows(tokens, HEADS * 512, 1).view(tokens, HEADS, 512)
++        kv = rows(tokens, 512, 2, scale=0.4)
++        w = 1.0 + 0.2 * torch.randn(512, device=DEV, generator=_gen(3))
++        g_old, o_old = _capture(lambda: prep_old(q, kv, w, positions, tab))
++        g_new, o_new = _capture(lambda: prep_new(q, kv, w, positions, tab))
++        for step in range(3):
++            q.copy_(rows(tokens, HEADS * 512, 40 + step).view(tokens, HEADS, 512))
++            kv.copy_(rows(tokens, 512, 50 + step, scale=0.4))
++            positions.add_(1)
++            g_old.replay()
++            g_new.replay()
++            torch.cuda.synchronize()
++            tag = f"graph prep step={step} M={tokens}"
++            compare(failures, tag + " query", o_old[0], o_new[0])
++            compare(failures, tag + " window", o_old[1], o_new[1])
++            n += 1
++    for tokens in (8, 6):
++        positions = torch.arange(tokens, device=DEV) + 9000
++        output, ring_new, values, valid = post_inputs(tokens, True, 7)
++        ring_old = ring_new.clone()
++        g_old, o_old = _capture(
++            lambda: post_old(output, positions, table(False), ring_old, values, valid)
++        )
++        g_new, o_new = _capture(
++            lambda: post_new(output, positions, table(False), ring_new, values, valid)
++        )
++        for step in range(3):
++            fresh = post_inputs(tokens, True, 60 + step)
++            output.copy_(fresh[0])
++            values.copy_(fresh[2])
++            ring_old.copy_(fresh[1])
++            ring_new.copy_(fresh[1])
++            positions.add_(tokens)
++            g_old.replay()
++            g_new.replay()
++            torch.cuda.synchronize()
++            tag = f"graph post step={step} M={tokens}"
++            compare(failures, tag + " output", o_old, o_new)
++            compare(failures, tag + " ring", ring_old, ring_new)
++            n += 1
++    report["graph_cases"] = n
++
++
++# ---------------------------------------------------------------- timing --
++
++
++def graph_us(fn, reps, trials):
++    fn()
++    torch.cuda.synchronize()
++    graph = torch.cuda.CUDAGraph()
++    with torch.cuda.graph(graph):
++        for _ in range(reps):
++            fn()
++    graph.replay()
++    torch.cuda.synchronize()
++    times = []
++    for _ in range(trials):
++        start = torch.cuda.Event(enable_timing=True)
++        end = torch.cuda.Event(enable_timing=True)
++        start.record()
++        for _ in range(10):
++            graph.replay()
++        end.record()
++        end.synchronize()
++        times.append(start.elapsed_time(end) * 1000.0 / (10 * reps))
++    del graph
++    return statistics.median(times)
++
++
++def timing(report, tokens_list, reps, trials, layers, groups):
++    FUSED._V3_GROUPS = groups
++    out = {}
++    for tokens in tokens_list:
++        row = {}
++        x = transition_inputs(tokens, True, 31)
++        res = x["residual"].clone()
++        row["transition_old"] = graph_us(
++            lambda: _transition(FUSED._hc_transition3, x, res), reps, trials
++        )
++        cap = FUSED._FT_MAXNREG
++        for maxnreg in (cap, None, 40, 32):
++            key = f"transition_new_maxnreg{maxnreg}"
++            if key in row:
++                continue
++            FUSED._FT_MAXNREG = maxnreg
++            row[key] = graph_us(
++                lambda: _transition(FUSED._hc_transition_fused, x, res), reps, trials
++            )
++        FUSED._FT_MAXNREG = cap
++        row["transition_new"] = row[f"transition_new_maxnreg{cap}"]
++        tab = table(False)
++        positions = torch.arange(tokens, device=DEV) + 4000
++        q = rows(tokens, HEADS * 512, 5).view(tokens, HEADS, 512)
++        kv = rows(tokens, 512, 6, scale=0.4)
++        w = torch.ones(512, device=DEV)
++        if tokens <= 6:
++            row["prep_old"] = graph_us(
++                lambda: prep_old(q, kv, w, positions, tab), reps, trials
++            )
++            row["prep_new"] = graph_us(
++                lambda: prep_new(q, kv, w, positions, tab), reps, trials
++            )
++        output, ring, values, valid = post_inputs(tokens, True, 8)
++        row["post_old"] = graph_us(
++            lambda: post_old(output, positions, tab, ring, values, valid), reps, trials
++        )
++        row["post_new"] = graph_us(
++            lambda: post_new(output, positions, tab, ring, values, valid), reps, trials
++        )
++        saving = 2 * (row["transition_old"] - row["transition_new"]) + (
++            row["post_old"] - row["post_new"]
++        )
++        if "prep_old" in row:
++            saving += row["prep_old"] - row["prep_new"]
++        row["layer_saving_us"] = saving
++        row["round_saving_ms"] = saving * layers / 1000.0
++        out[f"M={tokens}"] = {k: round(v, 2) for k, v in row.items()}
++    report["timing_us"] = out
++    report["timing_note"] = (
++        f"median of {trials} x 10 replays of a {reps}-call graph; per layer = 2 "
++        f"transitions (mixes on) + PREP + POST (ring on); round = {layers} layers"
++    )
++
++
++def main():
++    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
++    ap.add_argument("--device", type=int, default=0)
++    ap.add_argument("--time-tokens", default="1,2,3,4,5,6")
++    ap.add_argument("--reps", type=int, default=40)
++    ap.add_argument("--trials", type=int, default=7)
++    ap.add_argument("--layers", type=int, default=40)
++    ap.add_argument("--skip-timing", action="store_true")
++    ap.add_argument("--json", default=None)
++    args = ap.parse_args()
++    torch.cuda.set_device(args.device)
++    prod_groups = FUSED._V3_GROUPS
++    groups_list = [prod_groups] + [g for g in (1, 2, 4) if g != prod_groups]
++    report = {
++        "device": torch.cuda.get_device_name(),
++        "capability": list(torch.cuda.get_device_capability()),
++        "torch": torch.__version__,
++        "triton": _loader.triton.__version__,
++        "hc_v3_groups": prod_groups,
++        "transition_maxnreg": FUSED._FT_MAXNREG,
++    }
++    failures = []
++    check_transition(failures, report, groups_list)
++    FUSED._V3_GROUPS = prod_groups
++    check_prep(failures, report)
++    check_post(failures, report)
++    check_graphs(failures, report)
++    report["mismatches"] = len(failures)
++    report["failures"] = failures[:40]
++    if not args.skip_timing:
++        timing(
++            report,
++            [int(t) for t in args.time_tokens.split(",")],
++            args.reps,
++            args.trials,
++            args.layers,
++            prod_groups,
++        )
++    report["ok"] = not failures
++    text = json.dumps(report, indent=1)
++    print(text)
++    if args.json:
++        Path(args.json).write_text(text)
++    return 0 if not failures else 1
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/benchmarks/deepseek_v41/small_fuse_sm70_check.py b/benchmarks/deepseek_v41/small_fuse_sm70_check.py
+new file mode 100644
+index 000000000..62b7fa3e3
+--- /dev/null
++++ b/benchmarks/deepseek_v41/small_fuse_sm70_check.py
+@@ -0,0 +1,311 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""sm_70 compile check for the V4.1 small-kernel fusions (CPU only).
++
++Compiles the old kernels and their fused replacements with
++``triton.compile(..., target=GPUTarget("cuda", 70, 32))`` (no GPU, no driver)
++and checks:
++
++* every FP32 add-reduction (``tt.reduce`` + ``arith.addf``) in a fused kernel
++  has an operand layout and axis that the replaced kernels use, so the
++  in-thread / warp-shuffle / cross-warp summation tree is the same; max
++  reductions are exact in any order and are only listed;
++* ptxas (Triton's bundled CUDA 12.x one) reports no spills;
++* the fused transition stays within its register cap (one wave at 6 tokens).
++
++Prints one JSON report; exit 1 on any failure, 2 if this Triton cannot
++target sm_70.
++
++    CUDA_VISIBLE_DEVICES= python benchmarks/deepseek_v41/small_fuse_sm70_check.py
++"""
++
++import importlib
++import importlib.util
++import json
++import logging
++import os
++import re
++import subprocess
++import sys
++import tempfile
++import types
++from collections import Counter
++from pathlib import Path
++
++os.environ.pop("TRITON_INTERPRET", None)
++
++import triton  # noqa: E402
++import triton.language as tl  # noqa: E402
++from triton.backends.compiler import GPUTarget  # noqa: E402
++from triton.compiler import ASTSource  # noqa: E402
++
++ROOT = Path(__file__).resolve().parents[2]
++TARGET = GPUTarget("cuda", 70, 32)
++_ENV = {
++    "VLLM_V41_HC_WINDOW": "2048",
++    "VLLM_V41_HC_COLS": "32",
++    "VLLM_V41_HC_PW": "4",
++    "VLLM_V41_HC_FW": "4",
++    "VLLM_V41_HC_V3": "1",
++    "VLLM_V41_HC_V3_GROUPS": "8",
++}
++
++
++class _Envs(types.ModuleType):
++    def __getattr__(self, name):
++        if name.startswith("VLLM_"):  # the process env first, as vllm.envs
++            return os.environ.get(name, _ENV.get(name, "0"))
++        raise AttributeError(name)
++
++
++def _package(name, path=None):
++    mod = types.ModuleType(name)
++    mod.__path__ = [str(ROOT / path)] if path else []
++    sys.modules[name] = mod
++    return mod
++
++
++def load_modules():
++    # Load only the kernel modules (not vllm's or the model package's
++    # __init__), with vllm.envs / logger / triton_utils stubbed.
++    _package("vllm")
++    tu = types.ModuleType("vllm.triton_utils")
++    tu.tl, tu.triton = tl, triton
++    sys.modules[tu.__name__] = tu
++    lg = types.ModuleType("vllm.logger")
++    lg.init_logger = logging.getLogger
++    sys.modules[lg.__name__] = lg
++    envs = _Envs("vllm.envs")
++    sys.modules[envs.__name__] = envs
++    sys.modules["vllm"].envs = envs
++    _package("vllm.models", "vllm/models")
++    _package("vllm.models.deepseek_v4", "vllm/models/deepseek_v4")
++    _package("vllm.models.deepseek_v4.common", "vllm/models/deepseek_v4/common")
++    _package("vllm.models.deepseek_v4.common.ops", "vllm/models/deepseek_v4/common/ops")
++    bmm = types.ModuleType("vllm.models.deepseek_v4.common.ops.sparse_prefill_bmm")
++    bmm.attend_gathered_keys = None
++    sys.modules[bmm.__name__] = bmm
++    _package("vllm.models.deepseek_v41", "vllm/models/deepseek_v41")
++    spec = importlib.util.spec_from_file_location(
++        "v41_fused_sm70", ROOT / "vllm/model_executor/kernels/mhc/deepseek_v41_fused.py"
++    )
++    fused = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(fused)
++    attn, rope, norm, ops = (
++        importlib.import_module("vllm.models.deepseek_v41." + name)
++        for name in ("attn_fuse", "quant_rope", "norm", "attention_ops")
++    )
++    return fused, attn, rope, norm, ops
++
++
++def compile_sm70(fn, types_, constexprs, num_warps=4, maxnreg=None):
++    sig, attrs = {}, {}
++    for i, name in enumerate(fn.arg_names):
++        if name in constexprs:
++            sig[name] = "constexpr"
++        else:
++            sig[name] = types_[name]
++            if types_[name].startswith("*"):
++                attrs[(i,)] = [["tt.divisibility", 16]]
++    options = {"num_warps": num_warps, "enable_fp_fusion": False}
++    if maxnreg is not None:
++        options["maxnreg"] = maxnreg
++    kernel = triton.compile(
++        ASTSource(fn=fn, signature=sig, constexprs=constexprs, attrs=attrs),
++        target=TARGET,
++        options=options,
++    )
++    ptxas = Path(triton.__file__).parent / "backends" / "nvidia" / "bin" / "ptxas"
++    with tempfile.TemporaryDirectory() as d:
++        ptx = Path(d) / "k.ptx"
++        ptx.write_text(kernel.asm["ptx"])
++        run = subprocess.run(
++            [str(ptxas), "-arch=sm_70", "-v", str(ptx), "-o", str(ptx) + ".o"],
++            capture_output=True,
++            text=True,
++        )
++    info = run.stderr + run.stdout
++    regs = re.search(r"Used (\d+) registers", info)
++    spills = re.search(r"(\d+) bytes spill stores, (\d+) bytes spill loads", info)
++    if run.returncode or regs is None or spills is None:
++        raise RuntimeError("ptxas sm_70 failed:\n" + info)
++    return {
++        "ttgir": kernel.asm["ttgir"],
++        "ptx": kernel.asm["ptx"],
++        "regs": int(regs.group(1)),
++        "spill_bytes": int(spills.group(1)) + int(spills.group(2)),
++    }
++
++
++def reductions(ttgir):
++    """Counter of (combine op, axis, operand type with layouts spelled out)."""
++    aliases = {}
++    for line in ttgir.splitlines():
++        m = re.match(r"(#\w+) = (#ttg\.\w+<.*>)$", line.strip())
++        if m:
++            aliases[m.group(1)] = m.group(2)
++    lines = ttgir.splitlines()
++    found = Counter()
++    for idx, line in enumerate(lines):
++        m = re.search(r'"tt\.reduce"\(([^)]*)\) <\{axis = (\d+) : i32\}>', line)
++        if not m:
++            continue
++        combine = typ = None
++        for nxt in lines[idx + 1 : idx + 16]:
++            if combine is None and (c := re.search(r"arith\.(\w+)", nxt)):
++                combine = c.group(1)
++            if t := re.search(r"\}\) : \((tensor<[^)]*>)\)", nxt):
++                typ = t.group(1)
++                break
++        if typ is None:
++            raise RuntimeError("cannot parse tt.reduce at TTGIR line %d" % idx)
++        for alias, layout in aliases.items():
++            typ = re.sub(re.escape(alias) + r"\b", layout, typ)
++        found[(combine, int(m.group(2)), typ)] += 1
++    return found
++
++
++def _check_adds(name, old_kernels, new, report):
++    old = Counter()
++    for kernel in old_kernels:
++        old += reductions(kernel["ttgir"])
++    adds = Counter(
++        {k: v for k, v in reductions(new["ttgir"]).items() if k[0] == "addf"}
++    )
++    known = {k for k in old if k[0] == "addf"}
++    unmatched = [k for k in adds if k not in known]
++    report[name] = {
++        "fused_regs": new["regs"],
++        "old_regs": [k["regs"] for k in old_kernels],
++        "spill_bytes": new["spill_bytes"],
++        "add_reductions": [
++            f"{v} x axis {k[1]} {k[2]}" for k, v in sorted(adds.items())
++        ],
++        "max_reductions": sum(
++            v for k, v in reductions(new["ttgir"]).items() if k[0] != "addf"
++        ),
++        "unmatched_add_layouts": [str(k) for k in unmatched],
++    }
++    return not unmatched and new["spill_bytes"] == 0
++
++
++def main():
++    fused, attn, rope, norm, ops = load_modules()
++    p32, p16, pi, pi64, pb = "*fp32", "*fp16", "*i32", "*i64", "*i1"
++    report = {"triton": triton.__version__}
++    ok = True
++
++    # VLLM_V41_FUSE_TRANSITION
++    parts_t = dict(
++        residual=p32, y=p16, post=p32, comb=p32, fn=p32, cpre=p32,
++        cbuf=p32, dots=p32, squares=p32, csquares=p32,
++    )  # fmt: skip
++    finish_t = dict(
++        residual=p32, y=p16, post_in=p32, comb_in=p32, dots=p32, squares=p32,
++        csquares=p32, cbuf=p32, norm=p32, out=p16, scale=p32, base=p32,
++        pre=p32, post=p32, comb=p32,
++    )  # fmt: skip
++    fused_t = dict(finish_t, fn=p32, cpre=p32, counters=pi)
++    shape = dict(H=fused.H, COLS=fused.COLS, CHUNKS=fused.CHUNKS)
++    eps = dict(NORM_EPS=1e-20, HC_EPS=1e-6, ITERS=20)
++    for mix, groups in ((True, 8), (True, 4), (True, 1), (False, 1)):
++        rows = 24 // groups
++        old = [
++            compile_sm70(
++                fused._transition_parts3, parts_t, dict(shape, MIX=mix, ROWS=rows)
++            ),
++            compile_sm70(
++                fused._transition_finish3, finish_t, dict(shape, MIX=mix, **eps)
++            ),
++        ]
++        new = compile_sm70(
++            fused._transition_fused3,
++            fused_t,
++            dict(
++                shape, MIX=mix, ROWS=rows, GROUPS=groups, **eps,
++                NORM_AT=fused._FT_NORM_AT, MIX_AT=fused._FT_MIX_AT, FENCE=True,
++            ),
++            maxnreg=fused._FT_MAXNREG,
++        )  # fmt: skip
++        name = f"transition mix={mix} groups={groups}"
++        ok &= _check_adds(name, old, new, report)
++        cap = fused._FT_MAXNREG
++        report[name]["fences"] = new["ptx"].count("fence.acq_rel.gpu")
++        report[name]["atomics"] = new["ptx"].count("atom.global")
++        if cap is not None and new["regs"] > cap:
++            ok = False
++            report[name]["error"] = f"{new['regs']} registers > cap {cap}"
++
++    # VLLM_V41_FUSE_ATTN_PREP: _rotate(q), _short_rms(kv), _rotate(kv), _qdq.
++    rot_t = dict(x=p16, positions=pi64, table=p32, out=p16, LENGTH="i32")
++    rms_t = dict(x=p16, weight=p32, out=p16)
++    qdq_t = dict(x=p16, out=p16)
++    old_rot_q = compile_sm70(
++        rope._rotate, rot_t, dict(HEADS=16, D=512, INVERSE=False, BLOCK=512)
++    )
++    old_rms = compile_sm70(norm._short_rms, rms_t, dict(H=512, EPS=1e-20, BLOCK=512))
++    old_rot_kv = compile_sm70(
++        rope._rotate, rot_t, dict(HEADS=1, D=512, INVERSE=False, BLOCK=512)
++    )
++    old_qdq = compile_sm70(
++        rope._qdq, qdq_t, dict(GROUP=128, FP4=False, E4M3_SCALE=False)
++    )
++    prep_t = dict(
++        q=p16, kv=p16, kv_weight=p32, positions=pi64, table=p32, q_out=p16,
++        normed=p16, roped=p16, window=p16, LENGTH="i32",
++    )  # fmt: skip
++    prep = compile_sm70(
++        attn._attn_prep,
++        prep_t,
++        dict(HEADS=16, H=512, EPS=1e-20, BLOCK=512, GROUP=128),
++    )
++    ok &= _check_adds(
++        "attn_prep", [old_rot_q, old_rms, old_rot_kv, old_qdq], prep, report
++    )
++
++    # VLLM_V41_FUSE_ATTN_POST: _ring_insert, _rotate(inverse), _qdq.
++    old_rot_inv = compile_sm70(
++        rope._rotate, rot_t, dict(HEADS=16, D=512, INVERSE=True, BLOCK=512)
++    )
++    old_ring = compile_sm70(
++        ops._ring_insert,
++        dict(values=p16, positions=pi64, valid_tokens=pb, ring=p16, FIRST="i32"),
++        dict(RING=ops.WINDOW_RING),
++    )
++    post_t = dict(
++        x=p16, positions=pi64, table=p32, roped=p16, out=p16, values=p16,
++        valid_tokens=pb, ring=p16, LENGTH="i32",
++    )  # fmt: skip
++    for do_ring in (True, False):
++        post = compile_sm70(
++            attn._attn_post,
++            post_t,
++            dict(
++                HEADS=16,
++                H=512,
++                BLOCK=512,
++                GROUP=128,
++                RING=ops.WINDOW_RING,
++                DO_RING=do_ring,
++            ),
++        )
++        ok &= _check_adds(
++            f"attn_post ring={do_ring}", [old_rot_inv, old_qdq, old_ring], post, report
++        )
++    report["ok"] = bool(ok)
++    print(json.dumps(report, indent=1))
++    return 0 if ok else 1
++
++
++def _ptxas_targets_sm70():
++    ptxas = Path(triton.__file__).parent / "backends" / "nvidia" / "bin" / "ptxas"
++    version = subprocess.run([str(ptxas), "--version"], capture_output=True, text=True)
++    release = re.search(r"release (\d+)\.", version.stdout)
++    return release is not None and int(release.group(1)) <= 12  # 13 dropped Volta
++
++
++if __name__ == "__main__":
++    if not _ptxas_targets_sm70():
++        print(json.dumps({"ok": None, "skip": "Triton's ptxas cannot target sm_70"}))
++        sys.exit(2)
++    sys.exit(main())
+diff --git a/tests/models/test_deepseek_v41_small_fuse.py b/tests/models/test_deepseek_v41_small_fuse.py
+index 98f069fc7..d4a91802e 100644
+--- a/tests/models/test_deepseek_v41_small_fuse.py
++++ b/tests/models/test_deepseek_v41_small_fuse.py
+@@ -6,6 +6,10 @@
+   finish) must give ``_transition_parts3`` + ``_transition_finish3``'s residual,
+   FP16 collapse and mixes bit for bit, for 1..8 tokens, MIX on/off and every
+   fn-row grouping, and must leave its counters at zero.
++* VLLM_V41_FUSE_ATTN_PREP: ``_attn_prep`` must give ``_rotate`` (query) and
++  ``_short_rms`` -> ``_rotate`` -> ``_qdq`` (window) bit for bit.
++* VLLM_V41_FUSE_ATTN_POST: ``_attn_post`` must give ``_ring_insert`` ->
++  ``_rotate`` (inverse) -> ``_qdq`` bit for bit, ring included.
+ 
+ Scope: the interpreter runs programs one after another and ``tl.sum`` as a
+ numpy reduction, so these tests prove the kernels' logic (ticket counting,
+@@ -21,6 +25,7 @@ import os
+ 
+ os.environ["TRITON_INTERPRET"] = "1"  # before triton is imported
+ 
++import importlib  # noqa: E402
+ import importlib.util  # noqa: E402
+ import logging  # noqa: E402
+ import sys  # noqa: E402
+@@ -81,6 +86,50 @@ FUSED = _load(
+ )
+ 
+ 
++def _package(name, path=None):
++    if name not in sys.modules:
++        mod = types.ModuleType(name)
++        mod.__path__ = [str(ROOT / path)] if path else []
++        sys.modules[name] = mod
++    return sys.modules[name]
++
++
++def _load_attention():
++    # The model package's __init__ pulls in the whole model; load just the
++    # kernel modules, with the prefill BMM (unused here) stubbed out.
++    _package("vllm.models", "vllm/models")
++    _package("vllm.models.deepseek_v4", "vllm/models/deepseek_v4")
++    _package("vllm.models.deepseek_v4.common", "vllm/models/deepseek_v4/common")
++    _package("vllm.models.deepseek_v4.common.ops", "vllm/models/deepseek_v4/common/ops")
++    bmm = types.ModuleType("vllm.models.deepseek_v4.common.ops.sparse_prefill_bmm")
++    bmm.attend_gathered_keys = None
++    sys.modules.setdefault(bmm.__name__, bmm)
++    _package("vllm.models.deepseek_v41", "vllm/models/deepseek_v41")
++    return tuple(
++        importlib.import_module("vllm.models.deepseek_v41." + name)
++        for name in ("attn_fuse", "quant_rope", "norm", "attention_ops")
++    )
++
++
++ATTN, ROPE, NORM, OPS = _load_attention()
++
++
++@triton.jit
++def _round_nearest_even_i32(x):
++    # fp8_software's helper is one PTX cvt.rni, which the interpreter cannot
++    # run; this is the same round-half-even, exact for |x| < 2**23. Old and
++    # new kernels share it.
++    f = tl.floor(x)
++    d = x - f
++    fi = f.to(tl.int32)
++    return fi + ((d > 0.5) | ((d == 0.5) & ((fi & 1) == 1))).to(tl.int32)
++
++
++sys.modules[
++    "vllm.models.deepseek_v4.common.ops.fp8_software"
++]._round_nearest_even_i32 = _round_nearest_even_i32
++
++
+ class _PoisonTorch(types.ModuleType):
+     """``torch`` for the module under test: fresh buffers start as NaN / -1."""
+ 
+@@ -101,9 +150,14 @@ class _PoisonTorch(types.ModuleType):
+ @pytest.fixture(autouse=True)
+ def _poisoned(monkeypatch):
+     monkeypatch.setattr(FUSED, "torch", _PoisonTorch("torch"))
++    monkeypatch.setattr(ATTN, "torch", _PoisonTorch("torch"))
+     yield
+ 
+ 
++def _empty_like(x):
++    return _PoisonTorch._poison(torch.empty_like(x))
++
++
+ def _bits(x):
+     x = x.contiguous()
+     return x.view({4: torch.int32, 2: torch.int16}[x.element_size()])
+@@ -239,5 +293,140 @@ def test_transition_dispatch(monkeypatch):
+     _assert_transition_equal((residual_old, *old), (residual_new, *new))
+ 
+ 
++# ----------------------------------------------------------------------------
++# Attention PREP / POST. The old wrappers refuse CPU tensors, so the reference
++# below launches the old kernels exactly as apply_rope / short_rms_norm /
++# attention_qdq / insert_window_ring do.
++
++
++def _old_rope(x, positions, table, inverse=False):
++    result = _empty_like(x)
++    ROPE._rotate[(x.shape[0], x.shape[1])](
++        x,
++        positions,
++        table,
++        result,
++        table.shape[0] - 1,
++        HEADS=x.shape[1],
++        D=x.shape[-1],
++        INVERSE=inverse,
++        BLOCK=triton.next_power_of_2(x.shape[-1]),
++        num_warps=4,
++        enable_fp_fusion=False,
++    )
++    return result
++
++
++def _old_rms(x, weight, eps):
++    output = _empty_like(x)
++    NORM._short_rms[(x.shape[0],)](
++        x,
++        weight,
++        output,
++        H=x.shape[1],
++        EPS=eps,
++        BLOCK=triton.next_power_of_2(x.shape[1]),
++        num_warps=4,
++        enable_fp_fusion=False,
++    )
++    return output
++
++
++def _old_qdq(x):
++    result = _empty_like(x)
++    ROPE._qdq[(x.numel() // 128,)](
++        x,
++        result,
++        GROUP=128,
++        FP4=False,
++        E4M3_SCALE=False,
++        num_warps=4,
++        enable_fp_fusion=False,
++    )
++    return result
++
++
++def _old_ring(ring, values, positions, valid):
++    tokens = values.shape[0]
++    first = max(0, tokens - OPS.WINDOW_RING)
++    OPS._ring_insert[(tokens - first,)](
++        values, positions, valid, ring, first, RING=OPS.WINDOW_RING
++    )
++
++
++def _rows(tokens, width, g, scale=1.0):
++    x = torch.randn(tokens, width, generator=g) * scale
++    x[0, :7] = 0.0
++    x[0, 128:256] *= 1e-5  # a group under the QDQ amax floor
++    if tokens > 1:
++        x[1] = 0.0  # all-zero row: RMS eps and the QDQ amax floor
++    if tokens > 2:
++        x[2, ::3] *= 3000.0  # near the FP16 top
++    return x.clamp(-60000, 60000).half()
++
++
++def _positions(tokens, length, g):
++    # Inside the table, the last row, beyond it (cos/sin on the fly), and 0.
++    picks = [0, length - 1, length, length + 977, 5, 123456]
++    pos = torch.tensor([picks[i % len(picks)] for i in range(tokens)])
++    return (pos + torch.randint(0, 3, (tokens,), generator=g)).to(torch.int64)
++
++
++@pytest.mark.parametrize("compressed", [False, True])
++@pytest.mark.parametrize("tokens", [1, 2, 3, 4, 5, 6])
++def test_attn_prep_bitwise(tokens, compressed):
++    g = torch.Generator().manual_seed(500 + tokens + 50 * compressed)
++    length = 64
++    table = ROPE.rope_table(length, compressed=compressed, device="cpu")
++    q = _rows(tokens, 16 * 512, g).view(tokens, 16, 512)
++    kv = _rows(tokens, 512, g, scale=0.3)
++    weight = torch.rand(512, generator=g) + 0.5
++    positions = _positions(tokens, length, g)
++    query_old = _old_rope(q, positions, table)
++    window_old = _old_qdq(
++        _old_rope(_old_rms(kv, weight, 1e-20).unsqueeze(1), positions, table).view(
++            tokens, 512
++        )
++    )
++    query_new, window_new = ATTN._prep_launch(q, kv, weight, 1e-20, positions, table)
++    assert _same(query_old, query_new), "query"
++    assert _same(window_old, window_new), "window"
++    assert not torch.isnan(window_new.float()).any()
++
++
++@pytest.mark.parametrize("ring", [False, True])
++@pytest.mark.parametrize("tokens", [1, 2, 5, 6, 7, 8])
++def test_attn_post_bitwise(tokens, ring):
++    g = torch.Generator().manual_seed(900 + tokens + 50 * ring)
++    length = 64
++    table = ROPE.rope_table(length, device="cpu")
++    output = _rows(tokens, 16 * 512, g).view(tokens, 16, 512)
++    positions = _positions(tokens, length, g)
++    if ring:
++        # Consecutive decode positions (no ring slot is written twice).
++        positions = torch.arange(tokens, dtype=torch.int64) + 300 + tokens
++        valid = torch.ones(tokens, dtype=torch.bool)
++        valid[-1] = tokens < 3  # an invalid token: not written
++        values = _rows(tokens, 512, g)
++        ring_old = torch.randn(OPS.WINDOW_RING, 512, generator=g).half()
++        ring_new = ring_old.clone()
++        _old_ring(ring_old, values, positions, valid)
++    out_old = _old_qdq(
++        _old_rope(output, positions, table, inverse=True).reshape(tokens, 2, 4096)
++    )
++    out_new = ATTN._post_launch(
++        output,
++        positions,
++        table,
++        2,
++        ring_new if ring else None,
++        values if ring else None,
++        valid if ring else None,
++    )
++    assert _same(out_old, out_new), "output"
++    if ring:
++        assert _same(ring_old, ring_new), "ring"
++
++
+ if __name__ == "__main__":
+     sys.exit(pytest.main([__file__, "-q"]))
+diff --git a/tests/models/test_deepseek_v41_small_fuse_knob_off.py b/tests/models/test_deepseek_v41_small_fuse_knob_off.py
+new file mode 100644
+index 000000000..3f3c3848e
+--- /dev/null
++++ b/tests/models/test_deepseek_v41_small_fuse_knob_off.py
+@@ -0,0 +1,165 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Knob-off proof for the V4.1 small-kernel fusions (source level, CPU).
++
++With VLLM_V41_FUSE_TRANSITION / _ATTN_PREP / _ATTN_POST off, every fusion
++branch is an ``if <knob>[ and ...]:`` whose test is False, so the code that
++runs is what remains after replacing each such ``if`` by its ``else`` body.
++This test does that replacement on the AST and requires the result to equal
++the base commit's code:
++
++* deepseek_v41_fused.py: hc_transition equal after pruning; every other
++  function of the base (parts3, finish3, _hc_transition3, ...) unchanged;
++  the base's module-level statements all still there, in order;
++* model.py: V41Attention.forward equal after pruning; every other method of
++  the base V41Attention (project_output included) and every other top-level
++  function/class unchanged;
++* quant_rope.py, norm.py, attention_ops.py: unchanged;
++* the three knobs default to "0" in vllm/envs.py.
++
++Needs git and the base commit (skips otherwise).
++
++    python tests/models/test_deepseek_v41_small_fuse_knob_off.py   # or pytest
++"""
++
++import ast
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++
++ROOT = Path(__file__).resolve().parents[2]
++BASE = "49cb1b7"
++KNOBS = {"_FUSE_TRANSITION", "FUSE_ATTN_PREP", "FUSE_ATTN_POST"}
++
++
++def _source(rel, rev=None):
++    if rev is None:
++        return (ROOT / rel).read_text()
++    try:
++        return subprocess.run(
++            ["git", "-C", str(ROOT), "show", f"{rev}:{rel}"],
++            capture_output=True,
++            text=True,
++            check=True,
++        ).stdout
++    except (OSError, subprocess.CalledProcessError):
++        pytest.skip(f"git or base commit {rev} not available")
++
++
++def _is_knob(test):
++    if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And):
++        test = test.values[0]
++    return isinstance(test, ast.Name) and test.id in KNOBS
++
++
++class _KnobsOff(ast.NodeTransformer):
++    pruned = 0
++
++    def visit_If(self, node):
++        self.generic_visit(node)
++        if _is_knob(node.test):
++            self.pruned += 1
++            return node.orelse  # [] removes the statement
++        return node
++
++
++def _defs(tree):
++    out = {}
++    for node in tree.body:
++        if isinstance(node, ast.FunctionDef | ast.ClassDef):
++            out[node.name] = node
++    return out
++
++
++def _methods(cls):
++    return {
++        n.name: n
++        for n in cls.body
++        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
++    }
++
++
++def _dump(node):
++    return ast.dump(node, include_attributes=False)
++
++
++def _pruned(node):
++    pruner = _KnobsOff()
++    node = pruner.visit(ast.parse(ast.unparse(node)).body[0])
++    return node, pruner.pruned
++
++
++def _module_statements(tree):
++    return [
++        _dump(n) for n in tree.body if not isinstance(n, ast.FunctionDef | ast.ClassDef)
++    ]
++
++
++def _is_subsequence(small, big):
++    it = iter(big)
++    return all(any(x == y for y in it) for x in small)
++
++
++def test_fused_transition_module_knob_off():
++    rel = "vllm/model_executor/kernels/mhc/deepseek_v41_fused.py"
++    base, cur = ast.parse(_source(rel, BASE)), ast.parse(_source(rel))
++    base_defs, cur_defs = _defs(base), _defs(cur)
++    for name, node in base_defs.items():
++        if name == "hc_transition":
++            pruned, n = _pruned(cur_defs[name])
++            assert n == 1
++            assert _dump(pruned) == _dump(node), name
++        else:
++            assert _dump(cur_defs[name]) == _dump(node), name
++    assert _is_subsequence(_module_statements(base), _module_statements(cur))
++
++
++def test_attention_knob_off():
++    rel = "vllm/models/deepseek_v41/model.py"
++    base, cur = ast.parse(_source(rel, BASE)), ast.parse(_source(rel))
++    base_defs, cur_defs = _defs(base), _defs(cur)
++    for name, node in base_defs.items():
++        if name != "V41Attention":
++            assert _dump(cur_defs[name]) == _dump(node), name
++    base_m = _methods(base_defs["V41Attention"])
++    cur_m = _methods(cur_defs["V41Attention"])
++    for name, node in base_m.items():
++        if name == "forward":
++            pruned, n = _pruned(cur_m[name])
++            assert n == 4  # PREP x1; POST x3 (seed, deferred ring, return)
++            assert _dump(pruned) == _dump(node), name
++        else:
++            assert _dump(cur_m[name]) == _dump(node), name
++    assert set(cur_m) - set(base_m) == {
++        "_prep_fused",
++        "_post_fused",
++        "_project_quantized",
++    }
++    assert _is_subsequence(_module_statements(base), _module_statements(cur))
++
++
++@pytest.mark.parametrize(
++    "rel",
++    [
++        "vllm/models/deepseek_v41/quant_rope.py",
++        "vllm/models/deepseek_v41/norm.py",
++        "vllm/models/deepseek_v41/attention_ops.py",
++    ],
++)
++def test_old_kernels_untouched(rel):
++    assert _source(rel) == _source(rel, BASE)
++
++
++def test_knobs_default_off():
++    src = _source("vllm/envs.py")
++    for knob in ("FUSE_TRANSITION", "FUSE_ATTN_PREP", "FUSE_ATTN_POST"):
++        name = "VLLM_V41_" + knob
++        assert f'    {name}: str = "0"\n' in src
++        assert f'os.getenv("{name}", "0")' in src
++        assert f'        "{name}",\n' in src  # compile_factors ignore list
++
++
++if __name__ == "__main__":
++    sys.exit(pytest.main([__file__, "-q"]))
+diff --git a/tests/models/test_deepseek_v41_small_fuse_sm70.py b/tests/models/test_deepseek_v41_small_fuse_sm70.py
+new file mode 100644
+index 000000000..88766e901
+--- /dev/null
++++ b/tests/models/test_deepseek_v41_small_fuse_sm70.py
+@@ -0,0 +1,43 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""sm_70 compile check of the V4.1 small-kernel fusions (CPU, no GPU).
++
++Runs benchmarks/deepseek_v41/small_fuse_sm70_check.py in a clean process
++(no TRITON_INTERPRET, no visible GPU): the fused kernels compile for sm_70,
++their FP32 add-reductions use the replaced kernels' layouts, ptxas reports
++no spills, and the fused transition fits its register cap.
++
++    python tests/models/test_deepseek_v41_small_fuse_sm70.py   # or pytest
++"""
++
++import json
++import os
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++
++ROOT = Path(__file__).resolve().parents[2]
++CHECK = ROOT / "benchmarks" / "deepseek_v41" / "small_fuse_sm70_check.py"
++
++
++def test_small_fuse_sm70_compile():
++    env = {k: v for k, v in os.environ.items() if k != "TRITON_INTERPRET"}
++    env["CUDA_VISIBLE_DEVICES"] = ""
++    run = subprocess.run(
++        [sys.executable, str(CHECK)],
++        capture_output=True,
++        text=True,
++        env=env,
++        timeout=1800,
++    )
++    if run.returncode == 2:
++        pytest.skip(run.stdout.strip())
++    assert run.returncode == 0, run.stdout[-4000:] + run.stderr[-4000:]
++    report = json.loads(run.stdout)
++    assert report["ok"] is True
++
++
++if __name__ == "__main__":
++    sys.exit(pytest.main([__file__, "-q"]))
+diff --git a/vllm/models/deepseek_v41/attn_fuse.py b/vllm/models/deepseek_v41/attn_fuse.py
+new file mode 100644
+index 000000000..593b36f56
+--- /dev/null
++++ b/vllm/models/deepseek_v41/attn_fuse.py
+@@ -0,0 +1,314 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Bitwise one-launch folds of V4.1 decode attention's small kernels.
++
++VLLM_V41_FUSE_ATTN_PREP replaces, after wq_b,
++
++    query  = apply_rope(q, positions, table)                 # _rotate, (T, 16)
++    window = attention_qdq(apply_rope(kv_norm(kv_low), ...)) # _short_rms, (T,)
++                                                             # _rotate, (T, 1)
++                                                             # _qdq, (4T,)
++
++with one (T, 17) launch: programs 0..15 rotate a query head; program 16 runs
++the window chain for its token. VLLM_V41_FUSE_ATTN_POST replaces
++
++    insert_window_ring(ring, window, positions, valid)       # _ring_insert, (T,)
++    output = apply_rope(output, ..., inverse=True)           # _rotate, (T, 16)
++    attention_qdq(output.reshape(T, 2, 4096))                # _qdq, (64T,)
++
++with one (T, 16 + ring) launch: each head's program rotates and quantizes its
++512 values (four whole 128-groups); the extra program copies the ring row.
++
++Each stage is the original kernel's body with the original arithmetic. The
++FP16 intermediates the old launches wrote (normalized kv, rotated rows) are
++written and re-read the same way, through a scratch row and a CTA barrier, so
++every rounding happens where it did before. Calls the fused kernels do not
++cover return None and the caller runs the original kernels.
++"""
++
++import torch
++
++import vllm.envs as envs
++from vllm.logger import init_logger
++from vllm.models.deepseek_v4.common.ops.fp8_software import (
++    fp8_e4m3fn_bits_to_fp32_bitcast,
++    fp32_to_fp8_e4m3fn_bits,
++)
++from vllm.triton_utils import tl, triton
++
++from .attention_ops import WINDOW_RING
++from .quant_rope import _ceil_power_two
++
++logger = init_logger(__name__)
++
++FUSE_ATTN_PREP = envs.VLLM_V41_FUSE_ATTN_PREP == "1"
++FUSE_ATTN_POST = envs.VLLM_V41_FUSE_ATTN_POST == "1"
++_LOGGED: set = set()
++
++D = 512  # q/kv head and latent width
++GROUP = 128  # FP8 QDQ group
++
++
++def _log_once(name, message):
++    if name not in _LOGGED:
++        _LOGGED.add(name)
++        logger.info(message)
++
++
++@triton.jit
++def _rotate_row(
++    x,
++    positions,
++    table,
++    out,
++    LENGTH,
++    token,
++    head,
++    HEADS: tl.constexpr,
++    D: tl.constexpr,
++    INVERSE: tl.constexpr,
++    BLOCK: tl.constexpr,
++):
++    # quant_rope._rotate's body for one (token, head).
++    col = tl.arange(0, BLOCK)
++    base = (token * HEADS + head) * D
++    nonrotary = col < D - 64
++    tl.store(out + base + col, tl.load(x + base + col, nonrotary, 0), nonrotary)
++    i = tl.arange(0, 32)
++    position = tl.load(positions + token).to(tl.int64)
++    if position < LENGTH:
++        c, s = (
++            tl.load(table + position * 64 + i),
++            tl.load(table + position * 64 + 32 + i),
++        )
++    else:
++        angle = position.to(tl.float32) * tl.load(table + LENGTH * 64 + i)
++        c, s = tl.cos(angle), tl.sin(angle)
++    if INVERSE:
++        s = -s
++    a = tl.load(x + base + D - 64 + 2 * i).to(tl.float32)
++    b = tl.load(x + base + D - 64 + 2 * i + 1).to(tl.float32)
++    tl.store(out + base + D - 64 + 2 * i, a * c - b * s)
++    tl.store(out + base + D - 64 + 2 * i + 1, a * s + b * c)
++
++
++@triton.jit
++def _qdq_fp8_rows(x, out, base, GROUPS: tl.constexpr, GROUP: tl.constexpr):
++    # quant_rope._qdq's FP8 branch for GROUPS consecutive groups; the group
++    # max is order-independent, the rest is elementwise.
++    offs = base + tl.arange(0, GROUPS)[:, None] * GROUP + tl.arange(0, GROUP)[None, :]
++    value = tl.load(x + offs).to(tl.float32)
++    amax = tl.max(tl.abs(value), 1)
++    amax = tl.maximum(amax, 1e-4)
++    scale = _ceil_power_two(amax * (1.0 / 448.0))[:, None]
++    quant = fp8_e4m3fn_bits_to_fp32_bitcast(
++        fp32_to_fp8_e4m3fn_bits(tl.div_rn(value, scale))
++    )
++    tl.store(out + offs, quant * scale)
++
++
++@triton.jit
++def _attn_prep(
++    q,
++    kv,
++    kv_weight,
++    positions,
++    table,
++    q_out,
++    normed,
++    roped,
++    window,
++    LENGTH,
++    HEADS: tl.constexpr,
++    H: tl.constexpr,
++    EPS: tl.constexpr,
++    BLOCK: tl.constexpr,
++    GROUP: tl.constexpr,
++):
++    token, head = tl.program_id(0), tl.program_id(1)
++    if head < HEADS:
++        _rotate_row(
++            q, positions, table, q_out, LENGTH, token, head, HEADS, H, False, BLOCK
++        )
++    else:
++        # norm._short_rms for this token's kv row.
++        at = tl.arange(0, BLOCK)
++        value = tl.load(kv + token * H + at, at < H, 0).to(tl.float32)
++        variance = tl.sum(value * value, 0) / H
++        result = value * tl.rsqrt(variance + EPS) * tl.load(kv_weight + at, at < H, 0)
++        tl.store(normed + token * H + at, result, at < H)
++        tl.debug_barrier()
++        _rotate_row(
++            normed, positions, table, roped, LENGTH, token, 0, 1, H, False, BLOCK
++        )
++        tl.debug_barrier()
++        _qdq_fp8_rows(roped, window, token * H, H // GROUP, GROUP)
++
++
++@triton.jit
++def _attn_post(
++    x,
++    positions,
++    table,
++    roped,
++    out,
++    values,
++    valid_tokens,
++    ring,
++    LENGTH,
++    HEADS: tl.constexpr,
++    H: tl.constexpr,
++    BLOCK: tl.constexpr,
++    GROUP: tl.constexpr,
++    RING: tl.constexpr,
++    DO_RING: tl.constexpr,
++):
++    token, head = tl.program_id(0), tl.program_id(1)
++    if head < HEADS:
++        _rotate_row(
++            x, positions, table, roped, LENGTH, token, head, HEADS, H, True, BLOCK
++        )
++        tl.debug_barrier()
++        _qdq_fp8_rows(roped, out, (token * HEADS + head) * H, H // GROUP, GROUP)
++    elif DO_RING:
++        # attention_ops._ring_insert with FIRST = 0.
++        position = tl.load(positions + token).to(tl.int64)
++        valid = tl.load(valid_tokens + token) & (position >= 0)
++        col = tl.arange(0, 512)
++        data = tl.load(values + token * 512 + col, valid, 0)
++        tl.store(ring + (position % RING) * 512 + col, data, valid)
++
++
++def _rope_ok(x, positions, table):
++    # apply_rope's accepted inputs (3-D form, width 512).
++    return (
++        x.is_cuda
++        and x.dtype == torch.float16
++        and x.ndim == 3
++        and x.shape[-1] == D
++        and x.is_contiguous()
++        and positions.shape == (x.shape[0],)
++        and positions.dtype in (torch.int32, torch.int64)
++        and positions.device == x.device
++        and table.device == x.device
++        and table.ndim == 2
++        and table.shape[1] == 64
++        and table.dtype == torch.float32
++    )
++
++
++def attn_prep(q, kv, kv_weight, eps, positions, table):
++    """(query, window) as apply_rope(q) and attention_qdq(apply_rope(kv_norm(kv)))
++    compute them, in one launch; None if this call is not decode-shaped."""
++    tokens = q.shape[0]
++    if not (
++        1 <= tokens <= 6  # V41Norm's short_rms_norm route
++        and _rope_ok(q, positions, table)
++        and kv.is_cuda
++        and kv.dtype == torch.float16
++        and kv.shape == (tokens, D)
++        and kv.is_contiguous()
++        and kv_weight.shape == (D,)
++        and kv_weight.dtype == torch.float32
++        and kv_weight.device == kv.device
++        and kv_weight.is_contiguous()
++        and kv.device == q.device
++    ):
++        return None
++    _log_once(
++        "prep",
++        "VLLM_V41_FUSE_ATTN_PREP=1: query RoPE + kv_norm/RoPE/FP8 QDQ in one "
++        "launch per layer.",
++    )
++    return _prep_launch(q, kv, kv_weight, eps, positions, table)
++
++
++def _prep_launch(q, kv, kv_weight, eps, positions, table):
++    tokens, heads = q.shape[0], q.shape[1]
++    q_out = torch.empty_like(q)
++    normed = torch.empty_like(kv)
++    roped = torch.empty_like(kv)
++    window = torch.empty_like(kv)
++    _attn_prep[(tokens, heads + 1)](
++        q,
++        kv,
++        kv_weight,
++        positions,
++        table,
++        q_out,
++        normed,
++        roped,
++        window,
++        table.shape[0] - 1,
++        HEADS=heads,
++        H=D,
++        EPS=eps,
++        BLOCK=D,
++        GROUP=GROUP,
++        num_warps=4,
++        enable_fp_fusion=False,
++    )
++    return q_out, window
++
++
++def attn_post(output, positions, table, groups, ring=None, values=None, valid=None):
++    """attention_qdq(apply_rope(output, inverse=True).reshape(T, groups, 4096)),
++    after insert_window_ring(ring, values, positions, valid) when ring is given,
++    in one launch; None if this call is not decode-shaped."""
++    tokens = output.shape[0]
++    do_ring = ring is not None
++    if not (
++        1 <= tokens <= 8
++        and _rope_ok(output, positions, table)
++        and output.shape[1] * D == groups * 4096  # project_output's reshape
++    ):
++        return None
++    if do_ring and not (
++        tokens <= WINDOW_RING
++        and ring.shape == (WINDOW_RING, 512)
++        and ring.dtype == torch.float16
++        and ring.is_contiguous()
++        and ring.device == output.device
++        and values.shape == (tokens, 512)
++        and values.dtype == torch.float16
++        and values.is_contiguous()
++        and values.device == output.device
++        and valid.shape == (tokens,)
++        and valid.dtype == torch.bool
++        and valid.is_contiguous()
++        and valid.device == output.device
++    ):
++        return None
++    _log_once(
++        "post",
++        "VLLM_V41_FUSE_ATTN_POST=1: window ring insert + inverse RoPE + output "
++        "FP8 QDQ in one launch per layer.",
++    )
++    return _post_launch(output, positions, table, groups, ring, values, valid)
++
++
++def _post_launch(output, positions, table, groups, ring, values, valid):
++    tokens, heads = output.shape[0], output.shape[1]
++    do_ring = ring is not None
++    roped = torch.empty_like(output)
++    out = torch.empty(tokens, groups, 4096, dtype=torch.float16, device=output.device)
++    _attn_post[(tokens, heads + int(do_ring))](
++        output,
++        positions,
++        table,
++        roped,
++        out,
++        values if do_ring else output,
++        valid if do_ring else positions,
++        ring if do_ring else output,
++        table.shape[0] - 1,
++        HEADS=heads,
++        H=D,
++        BLOCK=D,
++        GROUP=GROUP,
++        RING=WINDOW_RING,
++        DO_RING=do_ring,
++        num_warps=4,
++        enable_fp_fusion=False,
++    )
++    return out
+diff --git a/vllm/models/deepseek_v41/model.py b/vllm/models/deepseek_v41/model.py
+index 7eb672693..967c036ed 100644
+--- a/vllm/models/deepseek_v41/model.py
++++ b/vllm/models/deepseek_v41/model.py
+@@ -72,6 +72,7 @@ from .attention_ops import (
+     select_compressed_positions,
+     select_packed_positions,
+ )
++from .attn_fuse import FUSE_ATTN_POST, FUSE_ATTN_PREP, attn_post, attn_prep
+ from .cache import V41LatentCache
+ from .contract import pp_split_problem, validate_runtime_geometry
+ from .expert_topp import active_rule, route_hook
+@@ -588,10 +589,15 @@ class V41Attention(nn.Module):
+         pair = dense_tm.fused(self.wq_a, x)
+         q_low, kv_low = pair if pair is not None else (self.wq_a(x), self.wkv(x))
+         qr = self.q_norm(q_low)
+-        query = apply_rope(
+-            self.wq_b(qr).view(tokens, self.heads, 512), positions, table
+-        )
+-        window = attention_qdq(apply_rope(self.kv_norm(kv_low), positions, table))
++        if FUSE_ATTN_PREP:
++            query, window = self._prep_fused(tokens, qr, kv_low, positions, table)
++        else:
++            query = apply_rope(
++                self.wq_b(qr).view(tokens, self.heads, 512), positions, table
++            )
++            window = attention_qdq(apply_rope(self.kv_norm(kv_low), positions, table))
++        if FUSE_ATTN_POST:
++            ring_values = None
+         metadata = (
+             self.shared.metadata if self.ring_window else self.window_cache.metadata()
+         )
+@@ -703,8 +709,13 @@ class V41Attention(nn.Module):
+                 **arguments,
+             )
+             if self.ring_window or self.anchor_ring:
+-                insert_window_ring(self.window_ring, window, positions, valid)
++                if FUSE_ATTN_POST:
++                    ring_values = (window, valid)
++                else:
++                    insert_window_ring(self.window_ring, window, positions, valid)
+         _tmark("a.out_proj", tokens)
++        if FUSE_ATTN_POST:
++            return self._post_fused(output, positions, table, ring_values)
+         output = apply_rope(output, positions, table, inverse=True)
+         return self.project_output(output)
+ 
+@@ -730,6 +741,52 @@ class V41Attention(nn.Module):
+             )
+         return self.wo_b(projected)
+ 
++    def _prep_fused(self, tokens, qr, kv_low, positions, table):
++        # VLLM_V41_FUSE_ATTN_PREP: forward's query and window lines, one launch.
++        q_high = self.wq_b(qr).view(tokens, self.heads, 512)
++        prepared = attn_prep(
++            q_high, kv_low, self.kv_norm.weight, self.kv_norm.eps, positions, table
++        )
++        if prepared is not None:
++            return prepared
++        query = apply_rope(q_high, positions, table)
++        window = attention_qdq(apply_rope(self.kv_norm(kv_low), positions, table))
++        return query, window
++
++    def _post_fused(self, output, positions, table, ring_values):
++        # VLLM_V41_FUSE_ATTN_POST: the deferred window ring insert, the inverse
++        # RoPE and project_output's QDQ in one launch, then its projections.
++        values, valid = ring_values if ring_values is not None else (None, None)
++        ring = self.window_ring if ring_values is not None else None
++        quantized = attn_post(
++            output, positions, table, self.groups, ring, values, valid
++        )
++        if quantized is not None:
++            return self._project_quantized(quantized)
++        if ring_values is not None:
++            insert_window_ring(self.window_ring, values, positions, valid)
++        output = apply_rope(output, positions, table, inverse=True)
++        return self.project_output(output)
++
++    def _project_quantized(self, output):
++        # project_output after its attention_qdq. A copy: project_output stays
++        # as it was for the knob-off path and V41DraftAttention.
++        projected = dense_tm.grouped_wo_a(self.wo_a, output)
++        grouped = getattr(self.wo_a.quant_method, "apply_grouped", None)
++        if projected is None and grouped is not None:
++            projected = grouped(self.wo_a, output)
++        if projected is None:
++            projected = torch.cat(
++                [
++                    self.wo_a(output[:, group].contiguous())[
++                        :, group * 1024 : (group + 1) * 1024
++                    ]
++                    for group in range(self.groups)
++                ],
++                dim=-1,
++            )
++        return self.wo_b(projected)
++
+ 
+ class V41Block(nn.Module):
+     attention_cls = V41Attention

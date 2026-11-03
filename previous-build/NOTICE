@@ -1,0 +1,16 @@
+PLI Labs — Volta sPLIce: DeepSeek-V4.1-Flash on 8x V100 (PP2 x TP4, resident Engram)
+Copyright 2026 Proprietary Legal Intelligence LLC
+
+Original PLI Labs code and documentation are licensed under Apache-2.0 (LICENSE; also LICENSES/Apache-2.0.txt).
+
+Third-party material in this tree:
+- philbert440/deepseek-v4.1-v100 (Apache-2.0): patches/0001, 0002 and 0003 are diffs against its files
+  (v100/serve_ds41.sh, v100/ds41_common.sh, csrc/sm70_turbomind/ops/exl3_moe_sm70.cu) at tag ds41-vision-20261025b,
+  commit 23cec6a9. The patch context lines are that project's code. patches/mp1-harness/ extracts the engine's tiled
+  kernel from the pinned file at build time and includes it unmodified; the harness itself is ours.
+- 1CatAI/1Cat-vLLM and vllm-project/vllm (Apache-2.0): the engine above is built on them.
+- tools/warmup.py is a port of the warm-up in ProprietaryLegal's DGX sPLIce repository (Apache-2.0, our own code).
+
+No model weights, wheels, compiled libraries or prompt corpora are distributed here. DeepSeek supplies the model, the
+DSpark drafter and the Engram tables (MIT); the EXL3 pack is philbert440's. See CREDITS.md for every project this work
+builds on.

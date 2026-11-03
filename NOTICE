@@ -1,0 +1,17 @@
+PLI Labs — Volta sPLIt: DeepSeek-V4.1-Flash-1017 on 8x V100-SXM2 (PP2 x TP4)
+Copyright 2026 Proprietary Legal Intelligence LLC
+
+Original PLI Labs code and documentation are licensed under Apache-2.0 (LICENSE; also LICENSES/Apache-2.0.txt).
+
+Third-party material in this tree:
+- 1CatAI/1Cat-vLLM and vllm-project/vllm (Apache-2.0): every patch under forks/ and engine/ is a diff against 1Cat-vLLM
+  (#1277, merge 899e9ed33). Their context lines are that project's code. Patches 0002-0027 of the series are 1Cat main
+  (6db9c81) and open 1Cat pull requests by their authors, carried unchanged so the tree rebuilds exactly.
+- Ports of other people's designs, re-implemented by us: coupled sampled drafts (Elevatormusic/TensorFold #25), keep-batch
+  (1Cat #1263), the hot-ring refill (1Cat issue #1341), expert top-p pruning (0rand / TensorFold), and the prefill
+  skip in testing (philbert440/deepseek-v4.1-v100, Apache-2.0).
+- previous-build/ is our earlier build's repository content; see previous-build/NOTICE for its third-party material.
+
+No model weights, wheels, compiled libraries or prompt corpora are distributed here. DeepSeek supplies the model, the
+DSpark drafter and the Engram design (MIT); ISTA-DASLab the GSQ-RCO GGUF quantization. See CREDITS.md for every project
+this work builds on.

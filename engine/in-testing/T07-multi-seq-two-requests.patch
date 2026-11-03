@@ -1,0 +1,3846 @@
+diff --git a/tests/models/sim_deepseek_v41_hot_refill.py b/tests/models/sim_deepseek_v41_hot_refill.py
+new file mode 100644
+index 000000000..ccb6f105a
+--- /dev/null
++++ b/tests/models/sim_deepseek_v41_hot_refill.py
+@@ -0,0 +1,47 @@
++"""CPU simulation of V41PackedKV.refill_hot (1Cat #1341 port): extracts the method from kv_store.py by AST."""
++import ast, sys, types, torch
++src = open(sys.argv[1]).read()
++fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "refill_hot")
++ns = {}; exec(compile(ast.Module([fn], []), "refill_hot", "exec"), ns); refill = ns["refill_hot"]
++C = 3
++def run(sources, hot_positions, prompt, answer, drafts=4, cached=None):
++    st = types.SimpleNamespace(sources=sources, hot_rows={s: max(1, hot_positions // r) for s, r in sources.items()})
++    total = prompt + answer + drafts + 1024
++    st.host = {s: torch.zeros(total // r + 1, C, dtype=torch.int32) for s, r in sources.items()}
++    st.hot = {s: torch.zeros(st.hot_rows[s], C, dtype=torch.int32) for s in sources}
++    def write(s, row, tag):
++        v = torch.tensor([row, tag, 7], dtype=torch.int32)
++        st.hot[s][row % st.hot_rows[s]] = v; st.host[s][row] = v
++    # previous request: prompt + answer + rejected drafts, tag 1 (host also written; rank 0 writes every row)
++    for s, r in sources.items():
++        for row in range((prompt + answer + drafts) // r): write(s, row, 1)
++    cached = prompt if cached is None else cached
++    # the old request's rows past the hit differ in content from what the new request will write: mark them stale
++    for s, r in sources.items():
++        for row in range(cached // r, (prompt + answer + drafts) // r):
++            st.hot[s][row % st.hot_rows[s]][1] = 99
++    n = refill(st, cached)
++    bad = 0
++    for s, r in sources.items():
++        hi = cached // r - 1; rows = st.hot_rows[s]
++        for c in range(max(0, hi - rows + 1), hi + 1):
++            if not torch.equal(st.hot[s][c % rows], st.host[s][c]): bad += 1
++    return n, bad
++srcs = {2: 4, 8: 128, 14: 4, 20: 4}
++fails = 0
++for prompt, answer, hp in [(40000, 64, 32768), (39560, 64, 32768), (250000, 64, 32768), (500000, 64, 32768),
++                           (37000, 1, 32768), (100, 64, 64), (2000, 300, 1024)]:
++    n, bad = run(srcs, hp, prompt, answer)
++    print(f"prompt {prompt} answer {answer} hot_positions {hp}: copied {n} rows, mismatched slots {bad}")
++    fails += bad != 0
++# guard: ring cannot wrap yet -> nothing copied, and nothing needed
++n, bad = run({2: 4}, 32768, 20000, 64)
++print(f"below ring (20000 tokens): copied {n}, mismatched {bad}"); fails += (n != 0) + (bad != 0)
++# without the refill the wrapped case must show stale slots (proves the check can fail)
++st_bad = None
++def norefill(st, cached): return 0
++ns["refill_hot"] = norefill
++saved = refill; refill = norefill
++_, bad = run(srcs, 32768, 40000, 64); refill = saved
++print(f"control without refill at 40000: mismatched {bad} (must be > 0)"); fails += bad == 0
++print("FAIL" if fails else "PASS"); sys.exit(1 if fails else 0)
+diff --git a/tests/models/test_deepseek_v41_multi_seq_knob_off.py b/tests/models/test_deepseek_v41_multi_seq_knob_off.py
+new file mode 100644
+index 000000000..05f4c6a99
+--- /dev/null
++++ b/tests/models/test_deepseek_v41_multi_seq_knob_off.py
+@@ -0,0 +1,392 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""VLLM_V41_MULTI_SEQ off: the code that runs is the base's, by AST.
++
++Every changed file under vllm/ is parsed at the base commit and in the work
++tree. The work tree is then evaluated with the knob off:
++
++- an ``if`` / conditional expression whose test is a knob test keeps only the
++  branch the knob-off value selects. Knob tests: ``multi_seq_requested()``, a
++  name or attribute ``v41_multi_seq*`` (None, False or 0 with the knob off),
++  ``<that> is None`` / ``is not None``, ``not <that>``, and ``<that> and ...``;
++- assignments to ``v41_multi_seq*`` names, ``v41_multi_seq*`` parameters and
++  keyword arguments, imports of the knob's own modules, and definitions named
++  ``v41_*`` / ``_v41_*`` / ``V41_*`` that the base does not have are dropped;
++- ``TYPE_CHECKING`` is dropped from ``typing`` imports on both sides, and an
++  ``if TYPE_CHECKING:`` block left empty is dropped;
++- vllm/envs.py: the ``VLLM_V41_MULTI_SEQ`` entries are dropped.
++
++The result must equal the base's AST exactly. The knob's own modules are
++imported with the knob off only for their definitions: their module level
++holds nothing that runs (checked below).
++"""
++
++import ast
++import re
++import subprocess
++from pathlib import Path
++
++import pytest
++
++# b9b0bc8 + 1Cat #1341 (v41pkg/hotrefill1103: dd522db, 7e9a156), the code
++# deployed on the 8-GPU host; this branch carries both commits unchanged.
++BASE = "7e9a1568655d"
++ROOT = Path(__file__).resolve().parents[2]
++ENV = "VLLM_V41_MULTI_SEQ"
++PREFIX = "v41_multi_seq"
++KNOB_MODULES = {
++    "vllm.v1.core.sched.v41_multi_seq",
++    "vllm.v1.worker.v41_multi_seq_runner",
++}
++NEW_FILES = {
++    "vllm/v1/core/sched/v41_multi_seq.py",
++    "vllm/v1/worker/v41_multi_seq_runner.py",
++    "vllm/models/deepseek_v41/slots.py",
++}
++CHANGED_FILES = {
++    "vllm/envs.py",
++    "vllm/models/deepseek_v41/kv_store.py",
++    "vllm/models/deepseek_v41/model.py",
++    "vllm/v1/core/kv_cache_manager.py",
++    "vllm/v1/core/sched/output.py",
++    "vllm/v1/core/sched/scheduler.py",
++    "vllm/v1/cudagraph_dispatcher.py",
++    "vllm/v1/engine/core.py",
++    "vllm/v1/outputs.py",
++    "vllm/v1/worker/gpu_input_batch.py",
++    "vllm/v1/worker/gpu_model_runner.py",
++}
++# Existing tests whose runner stubs gained the class default v41_multi_seq.
++CHANGED_TESTS = {"tests/models/test_deepseek_v41_runner_state.py"}
++# The small-fuse proof skips the two model.py classes this knob changed.
++SMALL_FUSE_PROOF = "tests/models/test_deepseek_v41_small_fuse_knob_off.py"
++NEW_NAME = re.compile(r"^_?v41_", re.IGNORECASE)
++
++
++def _git(*args):
++    return subprocess.run(
++        ["git", "-C", str(ROOT), *args], check=True, capture_output=True, text=True
++    ).stdout
++
++
++@pytest.fixture(scope="module")
++def base_available():
++    try:
++        _git("cat-file", "-e", f"{BASE}^{{commit}}")
++    except (OSError, subprocess.CalledProcessError):
++        pytest.skip(f"base commit {BASE} is not in this checkout")
++
++
++def _is_knob_ref(node):
++    if isinstance(node, ast.Name):
++        return node.id.startswith(PREFIX)
++    if isinstance(node, ast.Attribute):
++        return node.attr.startswith(PREFIX)
++    return False
++
++
++def _knob_value(test):
++    """The test's value with the knob off, or None for any other test."""
++    if _is_knob_ref(test):
++        return False
++    if (
++        isinstance(test, ast.Call)
++        and isinstance(test.func, ast.Name)
++        and test.func.id == "multi_seq_requested"
++        and not test.args
++    ):
++        return False
++    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
++        value = _knob_value(test.operand)
++        return None if value is None else not value
++    if (
++        isinstance(test, ast.Compare)
++        and len(test.ops) == 1
++        and _is_knob_ref(test.left)
++        and isinstance(test.comparators[0], ast.Constant)
++        and test.comparators[0].value is None
++    ):
++        if isinstance(test.ops[0], ast.IsNot):
++            return False
++        if isinstance(test.ops[0], ast.Is):
++            return True
++    if (
++        isinstance(test, ast.BoolOp)
++        and isinstance(test.op, ast.And)
++        and _knob_value(test.values[0]) is False
++    ):
++        return False
++    return None
++
++
++def _defined_name(node):
++    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
++        return node.name
++    if isinstance(node, ast.Assign) and len(node.targets) == 1:
++        target = node.targets[0]
++        if isinstance(target, ast.Name):
++            return target.id
++    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
++        return node.target.id
++    return None
++
++
++def _scope_names(tree):
++    """{scope: names defined at that scope} for the module and its classes."""
++    names = {"": {_defined_name(n) for n in tree.body} - {None}}
++
++    def walk(body, scope):
++        for node in body:
++            if isinstance(node, ast.ClassDef):
++                inner = f"{scope}.{node.name}"
++                names[inner] = {_defined_name(n) for n in node.body} - {None}
++                walk(node.body, inner)
++
++    walk(tree.body, "")
++    return names
++
++
++class KnobOff(ast.NodeTransformer):
++    def __init__(self, base_names):
++        self.base_names = base_names
++        self.scope = [""]
++
++    # -- definitions -----------------------------------------------------
++    def _drop_new(self, body):
++        scope = self.scope[-1]
++        known = self.base_names.get(scope, set())
++        kept = []
++        for node in body:
++            name = _defined_name(node)
++            if name is not None and NEW_NAME.match(name) and name not in known:
++                continue
++            kept.append(node)
++        return kept
++
++    def visit_Module(self, node):
++        node.body = self._drop_new(node.body)
++        self.generic_visit(node)
++        return node
++
++    def visit_ClassDef(self, node):
++        self.scope.append(f"{self.scope[-1]}.{node.name}")
++        node.body = self._drop_new(node.body)
++        self.generic_visit(node)
++        self.scope.pop()
++        return node
++
++    def visit_FunctionDef(self, node):
++        args = node.args
++        positional = args.posonlyargs + args.args
++        defaults = [None] * (len(positional) - len(args.defaults)) + args.defaults
++        keep = [i for i, a in enumerate(positional) if not a.arg.startswith(PREFIX)]
++        kept_args = [positional[i] for i in keep]
++        kept_defaults = [defaults[i] for i in keep]
++        num_posonly = len([a for a in args.posonlyargs if a in kept_args])
++        args.posonlyargs = kept_args[:num_posonly]
++        args.args = kept_args[num_posonly:]
++        args.defaults = [d for d in kept_defaults if d is not None]
++        kw = [
++            (a, d)
++            for a, d in zip(args.kwonlyargs, args.kw_defaults)
++            if not a.arg.startswith(PREFIX)
++        ]
++        args.kwonlyargs = [a for a, _ in kw]
++        args.kw_defaults = [d for _, d in kw]
++        self.generic_visit(node)
++        return node
++
++    visit_AsyncFunctionDef = visit_FunctionDef
++
++    # -- statements ------------------------------------------------------
++    def visit_If(self, node):
++        self.generic_visit(node)
++        value = _knob_value(node.test)
++        if value is False:
++            return node.orelse or None
++        if value is True:
++            return node.body
++        if (
++            isinstance(node.test, ast.Name)
++            and node.test.id == "TYPE_CHECKING"
++            and not node.body
++        ):
++            return node.orelse or None
++        if not node.body:
++            node.body = [ast.Pass()]
++        return node
++
++    def visit_Assign(self, node):
++        if any(_is_knob_ref(t) for t in node.targets):
++            return None
++        if any(
++            isinstance(t, ast.Tuple) and any(_is_knob_ref(e) for e in t.elts)
++            for t in node.targets
++        ):
++            raise AssertionError(f"tuple knob assignment: {ast.unparse(node)}")
++        self.generic_visit(node)
++        return node
++
++    def visit_AnnAssign(self, node):
++        if _is_knob_ref(node.target):
++            return None
++        if isinstance(node.target, ast.Name) and node.target.id == ENV:
++            return None
++        self.generic_visit(node)
++        return node
++
++    def visit_ImportFrom(self, node):
++        if node.module in KNOB_MODULES:
++            return None
++        if node.level == 1 and node.module == "slots":
++            return None
++        if node.module == "typing":
++            node.names = [a for a in node.names if a.name != "TYPE_CHECKING"]
++            if not node.names:
++                return None
++        return node
++
++    # -- expressions -----------------------------------------------------
++    def visit_IfExp(self, node):
++        self.generic_visit(node)
++        value = _knob_value(node.test)
++        if value is False:
++            return node.orelse
++        if value is True:
++            return node.body
++        return node
++
++    def visit_Call(self, node):
++        node.keywords = [
++            k for k in node.keywords if not (k.arg or "").startswith(PREFIX)
++        ]
++        self.generic_visit(node)
++        return node
++
++    def visit_Dict(self, node):
++        pairs = [
++            (k, v)
++            for k, v in zip(node.keys, node.values)
++            if not (isinstance(k, ast.Constant) and k.value == ENV)
++        ]
++        node.keys = [k for k, _ in pairs]
++        node.values = [v for _, v in pairs]
++        self.generic_visit(node)
++        return node
++
++    def _drop_env_items(self, node):
++        node.elts = [
++            e for e in node.elts if not (isinstance(e, ast.Constant) and e.value == ENV)
++        ]
++        self.generic_visit(node)
++        return node
++
++    visit_List = visit_Set = visit_Tuple = _drop_env_items
++
++
++def _normalized(source, base_names):
++    tree = KnobOff(base_names).visit(ast.parse(source))
++    ast.fix_missing_locations(tree)
++    return ast.dump(tree)
++
++
++def _changed_files():
++    status = _git("diff", "--name-status", BASE, "--", "vllm")
++    changed = set()
++    for line in status.splitlines():
++        kind, path = line.split("\t")[0], line.split("\t")[-1]
++        changed.add((kind[0], path))
++    untracked = _git("ls-files", "--others", "--exclude-standard", "--", "vllm")
++    for path in untracked.split():
++        changed.add(("A", path))
++    return changed
++
++
++def test_changed_files_are_the_expected_ones(base_available):
++    changed = _changed_files()
++    modified = {p for k, p in changed if k == "M"}
++    added = {p for k, p in changed if k == "A"}
++    assert not {p for k, p in changed if k not in "MA"}
++    assert modified == CHANGED_FILES
++    assert added == NEW_FILES
++    tests = _git("diff", "--name-only", "--diff-filter=M", BASE, "--", "tests")
++    assert set(tests.split()) == CHANGED_TESTS | {SMALL_FUSE_PROOF}
++
++
++@pytest.mark.parametrize("path", sorted(CHANGED_FILES | CHANGED_TESTS))
++def test_knob_off_ast_is_the_base(base_available, path):
++    base = _git("show", f"{BASE}:{path}")
++    head = (ROOT / path).read_text()
++    base_names = _scope_names(ast.parse(base))
++    assert _normalized(head, base_names) == _normalized(base, base_names), path
++
++
++@pytest.mark.parametrize("path", sorted(NEW_FILES))
++def test_new_module_level_runs_nothing(path):
++    """Only imports, definitions and constant assignments at module level."""
++    tree = ast.parse((ROOT / path).read_text())
++    allowed = (
++        ast.Import,
++        ast.ImportFrom,
++        ast.FunctionDef,
++        ast.ClassDef,
++    )
++    for node in tree.body:
++        if isinstance(node, allowed):
++            continue
++        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
++            continue  # docstring
++        if (
++            isinstance(node, ast.If)
++            and isinstance(node.test, ast.Name)
++            and node.test.id == "TYPE_CHECKING"
++        ):
++            continue
++        if isinstance(node, (ast.Assign, ast.AnnAssign)):
++            value = node.value
++            if isinstance(value, (ast.Constant, ast.Tuple)) or (
++                isinstance(value, ast.UnaryOp)
++                and isinstance(value.operand, ast.Constant)
++            ):
++                continue
++            if (
++                isinstance(value, ast.Call)
++                and isinstance(value.func, ast.Name)
++                and value.func.id == "init_logger"
++            ):
++                continue
++        raise AssertionError(f"{path}: module-level statement {ast.unparse(node)}")
++
++
++def test_env_default_is_off(monkeypatch):
++    import vllm.envs as envs
++
++    monkeypatch.delenv(ENV, raising=False)
++    assert envs.environment_variables[ENV]() == "0"
++    source = (ROOT / "vllm/envs.py").read_text()
++    assert f'os.getenv("{ENV}", "0")' in source
++
++
++def test_normalizer_catches_a_reachable_change(base_available):
++    """The proof is not vacuous: an unguarded edit is reported."""
++    path = "vllm/v1/core/sched/scheduler.py"
++    base = _git("show", f"{BASE}:{path}")
++    head = (ROOT / path).read_text()
++    names = _scope_names(ast.parse(base))
++    tampered = head.replace(
++        "self.prev_step_scheduled_req_ids.clear()\n"
++        "            self.prev_step_scheduled_req_ids"
++        ".update(num_scheduled_tokens.keys())",
++        "self.prev_step_scheduled_req_ids.clear()",
++        1,
++    )
++    assert tampered != head
++    assert _normalized(tampered, names) != _normalized(base, names)
++    # A knob test with the wrong polarity is not a guard.
++    tampered = head.replace(
++        "if self.v41_multi_seq is not None:\n            self._v41_begin_step()",
++        "if self.v41_multi_seq is None:\n            self._v41_begin_step()",
++        1,
++    )
++    assert tampered != head
++    assert _normalized(tampered, names) != _normalized(base, names)
+diff --git a/tests/models/test_deepseek_v41_runner_state.py b/tests/models/test_deepseek_v41_runner_state.py
+index 0ec5c97e2..263a44663 100644
+--- a/tests/models/test_deepseek_v41_runner_state.py
++++ b/tests/models/test_deepseek_v41_runner_state.py
+@@ -72,6 +72,7 @@ def test_single_v41_full_graphs_preserve_exact_target_and_draft_sizes(
+         kv_cache_config=None,
+         speculative_config=None,
+         cudagraph_dispatcher=SimpleNamespace(initialize_cudagraph_keys=dispatch),
++        v41_multi_seq=None,  # GPUModelRunner's class default
+     )
+     GPUModelRunner._check_and_update_cudagraph_mode(
+         cast(GPUModelRunner, runner), [], []
+diff --git a/tests/models/test_deepseek_v41_slots.py b/tests/models/test_deepseek_v41_slots.py
+new file mode 100644
+index 000000000..73b2f48d1
+--- /dev/null
++++ b/tests/models/test_deepseek_v41_slots.py
+@@ -0,0 +1,381 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""VLLM_V41_MULTI_SEQ: the model's per-slot state (deepseek_v41/slots.py).
++
++CPU only. The module tree is a stand-in with the real state classes' buffer
++names (checked against their sources below); the packed KV store is the real
++``V41PackedKV`` with a one-rank group and a host-memory shim for the CUDA
++registration, so ``v41_add_slot`` itself runs.
++"""
++
++import ast
++import inspect
++import textwrap
++from types import SimpleNamespace
++
++import pytest
++import torch
++from torch import nn
++
++from vllm.model_executor.kernels.deepseek_v41_compression import V41C2State
++from vllm.model_executor.layers import deepseek_v41_engram
++from vllm.model_executor.layers.quantization import gguf_expert_cache
++from vllm.models.deepseek_v41 import kv_store, slots
++from vllm.models.deepseek_v41 import model as v41_model
++from vllm.models.deepseek_v41.kv_pack import C_ROW, I_ROW
++from vllm.models.deepseek_v41.pp_commit import StageCommit
++from vllm.models.deepseek_v41.slots import V41Slots
++
++GROUP = SimpleNamespace(
++    rank_in_group=0, world_size=1, broadcast_object=lambda obj, src: obj
++)
++SOURCES = {0: 4, 3: 128}
++
++
++class Native:
++    def __init__(self):
++        self.registered = []
++
++    def host_register(self, pointer, size):
++        self.registered.append((pointer, size))
++
++    def mapped_view(self, host, device_index):
++        return host
++
++
++@pytest.fixture
++def native(monkeypatch):
++    shim = Native()
++    monkeypatch.setattr(gguf_expert_cache, "_native", lambda: shim)
++    return shim
++
++
++def _store(max_len=256):
++    return kv_store.V41PackedKV(SOURCES, max_len, torch.device("cpu"), GROUP)
++
++
++def _buffers(module, values):
++    for name, value in values.items():
++        module.register_buffer(name, value, persistent=False)
++    return module
++
++
++class Ring(nn.Module):
++    def __init__(self):
++        super().__init__()
++        self.weight = nn.Parameter(torch.ones(4))  # shared
++        self.register_buffer("window_ring", torch.zeros(8, 4), persistent=False)
++
++
++def _c2():
++    state = V41C2State.__new__(V41C2State)
++    nn.Module.__init__(state)
++    return _buffers(
++        state,
++        {
++            "norm_weight": torch.ones(512),  # shared
++            "partial": torch.zeros(2, 512),
++            "candidates": torch.zeros(7, 2, 512),
++            "metadata": torch.zeros(3, dtype=torch.int64),
++            "position": torch.zeros(1, dtype=torch.int64),
++        },
++    )
++
++
++def _hash():
++    state = deepseek_v41_engram.V41EngramHashState.__new__(
++        deepseek_v41_engram.V41EngramHashState
++    )
++    nn.Module.__init__(state)
++    return _buffers(
++        state,
++        {
++            "token_map": torch.arange(16),  # shared
++            "history": torch.tensor([-1, -1, -1, 0]),
++            "candidates": torch.zeros(5, 3, dtype=torch.int64),
++            "metadata": torch.zeros(3, dtype=torch.int64),
++        },
++    )
++
++
++class Model(nn.Module):
++    """The attributes V41Slots reads, laid out like DeepseekV41Model."""
++
++    v41_slots = None
++    v41_init_slots = v41_model.DeepseekV41Model.v41_init_slots
++    v41_bind_slot = v41_model.DeepseekV41Model.v41_bind_slot
++
++    def __init__(self, store, first_stage=True, pipelined=True):
++        super().__init__()
++        self.rings = nn.ModuleList([Ring(), Ring()])
++        self.compressors = nn.ModuleList([_c2(), _c2(), _c2()])
++        self.hash_state = _hash() if first_stage else None
++        _buffers(
++            self,
++            {
++                "pending_length": torch.zeros(1, dtype=torch.int64),
++                "pending_position": torch.zeros(1, dtype=torch.int64),
++                "pending_prefill": torch.ones(1, dtype=torch.bool),
++                "stage_commit_count": torch.zeros(1, dtype=torch.int64),  # shared
++            },
++        )
++        self.stage_commit = StageCommit() if first_stage and pipelined else None
++        self.start_layer = 0
++        shared = SimpleNamespace(store=store)
++        self.layers = [SimpleNamespace(attn=SimpleNamespace(shared=shared))]
++
++
++def _per_slot(model):
++    """Every per-slot object, read the way the model's code reads it."""
++    store = model.layers[0].attn.shared.store
++    out = {}
++    for i, ring in enumerate(model.rings):
++        out[f"ring{i}"] = ring.window_ring
++    for i, state in enumerate(model.compressors):
++        for name in slots._C2_FIELDS:
++            out[f"c2{i}.{name}"] = getattr(state, name)
++    if model.hash_state is not None:
++        for name in slots._HASH_FIELDS:
++            out[f"hash.{name}"] = getattr(model.hash_state, name)
++    for name in slots._PENDING_FIELDS:
++        out[name] = getattr(model, name)
++    if model.stage_commit is not None:
++        out["stage_commit"] = model.stage_commit
++    if store is not None:
++        out["arena"] = store.arena
++        out["host_cpu"] = store.host_cpu
++        out["mapped"] = store.mapped
++        for table in ("host", "hot", "index"):
++            for source, tensor in getattr(store, table).items():
++                out[f"{table}{source}"] = tensor
++    return out
++
++
++def _shared(model):
++    store = model.layers[0].attn.shared.store
++    out = {
++        "ring.weight": model.rings[0].weight,
++        "norm_weight": model.compressors[0].norm_weight,
++        "stage_commit_count": model.stage_commit_count,
++    }
++    if model.hash_state is not None:
++        out["token_map"] = model.hash_state.token_map
++    if store is not None:
++        out["staging"] = store.staging
++        out["selected"] = store.selected
++        out["native"] = store.native
++    return out
++
++
++def _fill(state, value):
++    for key, item in state.items():
++        if isinstance(item, torch.Tensor):
++            item.fill_(value if item.dtype != torch.bool else bool(value % 2))
++        elif isinstance(item, StageCommit):
++            item.after_forward(["r"], [5], [3])  # arm a decode forward
++
++
++def test_slots_hold_independent_state(native):
++    model = Model(_store())
++    first = _per_slot(model)
++    initial = {k: v.clone() for k, v in first.items() if isinstance(v, torch.Tensor)}
++    shared = _shared(model)
++    table = V41Slots(model, 3, GROUP)
++    assert table.current == 0 and table.store_slots == 3
++    assert all(_per_slot(model)[k] is v for k, v in first.items())
++
++    seen = [first]
++    for slot in (1, 2):
++        table.bind(slot)
++        state = _per_slot(model)
++        assert state.keys() == first.keys()
++        for key, value in state.items():
++            for other in seen:
++                assert value is not other[key], key
++                if isinstance(value, torch.Tensor) and value.numel():
++                    assert value.data_ptr() != other[key].data_ptr(), key
++            if key in initial:
++                # A new slot starts from the constructors' values.
++                assert torch.equal(value, initial[key]), key
++        assert isinstance(state["stage_commit"], StageCommit)
++        assert not state["stage_commit"].armed
++        assert all(_shared(model)[k] is v for k, v in shared.items())
++        seen.append(state)
++
++    # Writes through the bound slot stay in it.
++    for slot in range(3):
++        table.bind(slot)
++        _fill(_per_slot(model), 10 + slot)
++    for slot in (2, 0, 1, 1, 0):
++        table.bind(slot)
++        assert table.current == slot
++        for key, value in _per_slot(model).items():
++            if isinstance(value, torch.Tensor):
++                if value.dtype == torch.bool:
++                    expected = bool((10 + slot) % 2)
++                    assert bool(value.all()) == expected, (slot, key)
++                else:
++                    assert bool((value == 10 + slot).all()), (slot, key)
++            elif isinstance(value, StageCommit):
++                assert value.armed
++            else:
++                assert value is seen[slot][key], (slot, key)
++    assert all(_shared(model)[k] is v for k, v in shared.items())
++
++
++def test_store_slot_rows(native):
++    store = _store()
++    model = Model(store)
++    assert native.registered == [(store.host_cpu.data_ptr(), store.host_cpu.numel())]
++    table = V41Slots(model, 2, GROUP)
++    assert len(native.registered) == 2
++    table.bind(1)
++    pointer, size = native.registered[1]
++    assert (pointer, size) == (store.host_cpu.data_ptr(), store.host_cpu.numel())
++    assert set(store.host) == set(store.hot) == set(store.index) == set(SOURCES)
++    for source in SOURCES:
++        rows = store.rows[source]
++        assert store.host[source].shape == (rows, C_ROW)
++        assert store.hot[source].shape == (store.hot_rows[source], C_ROW)
++        assert store.index[source].shape == (rows, I_ROW)
++        # The slot's host rows are views of its own arena, at the source's offset.
++        start = store.host_cpu.data_ptr() + store.offsets[source]
++        assert store.host[source].data_ptr() == start
++    store.host[3][-1].fill_(9)
++    table.bind(0)
++    assert not bool(store.host_cpu.any())
++    table.bind(1)
++    assert int(store.host_cpu.sum()) == 9 * C_ROW
++
++
++def test_hot_refill_uses_the_bound_slot(native):
++    """1Cat #1341: refill_hot after a session hit rewrites the bound slot's hot
++    ring from that slot's own host arena and leaves every other slot alone."""
++    store = _store(40960)
++    table = V41Slots(Model(store), 2, GROUP)
++    for slot in (0, 1):
++        table.bind(slot)
++        for source in SOURCES:
++            host = store.host[source]
++            rows = torch.arange(host.shape[0]).unsqueeze(1) * (slot + 1)
++            host.copy_((rows + torch.arange(C_ROW)) % 251)
++            store.hot[source].fill_(0xEE)
++    table.bind(1)
++    cached = 40000  # past the hot ring of both sources
++    assert store.refill_hot(cached) > 0
++    for source, ratio in SOURCES.items():
++        size, hi = store.hot_rows[source], cached // ratio - 1
++        rows = torch.arange(max(0, hi - size + 1), hi + 1)
++        assert torch.equal(store.hot[source][rows % size], store.host[source][rows])
++    table.bind(0)
++    for source in SOURCES:
++        assert bool((store.hot[source] == 0xEE).all()), source
++
++
++def test_counts_and_bytes(native):
++    model = Model(_store())
++    table = V41Slots(model, 4, GROUP)
++    assert table.counts == {"ring": 2, "c2": 3, "hash": 1, "pending": 3, "commit": 1}
++    state = _per_slot(model)
++    tensors = [
++        v
++        for k, v in state.items()
++        if isinstance(v, torch.Tensor) and not k.startswith(("host", "mapped", "arena"))
++    ]
++    per_slot = sum(t.numel() * t.element_size() for t in tensors)
++    assert table.device_bytes == 3 * per_slot
++    assert table.host_bytes == 3 * state["host_cpu"].numel()
++
++
++def test_later_stage_and_single_slot(native):
++    model = Model(None, first_stage=False)
++    table = V41Slots(model, 2, GROUP)
++    assert table.counts["hash"] == table.counts["commit"] == 0
++    assert table.store_slots == 0 and not native.registered
++    ring = model.rings[0].window_ring
++    table.bind(1)
++    assert model.rings[0].window_ring is not ring and model.stage_commit is None
++    one = V41Slots(Model(None), 1, GROUP)
++    one.bind(0)
++    assert one.device_bytes == one.host_bytes == 0
++
++
++@pytest.mark.parametrize("num_slots", [0, 5])
++def test_slot_count_fails_closed(num_slots):
++    with pytest.raises(ValueError, match="supported 1..4"):
++        V41Slots(Model(None), num_slots, GROUP)
++
++
++@pytest.mark.parametrize("slot", [-1, 2, 4])
++def test_bind_outside_range_fails_closed(slot):
++    table = V41Slots(Model(None), 2, GROUP)
++    with pytest.raises(ValueError, match="outside 0..1"):
++        table.bind(slot)
++    assert table.current == 0
++
++
++def test_model_bind_resets_only_a_new_sequence(monkeypatch, native):
++    import vllm.distributed
++
++    monkeypatch.setattr(vllm.distributed, "get_tp_group", lambda: GROUP)
++    model = Model(_store())
++    model.v41_init_slots(3)
++    assert isinstance(model.v41_slots, V41Slots)
++    assert model.v41_slots.num_slots == 3
++    commits = []
++    for slot in range(3):
++        model.v41_bind_slot(slot, new_sequence=False)
++        model.stage_commit.after_forward([f"r{slot}"], [5], [3])
++        commits.append(model.stage_commit)
++    assert len({id(c) for c in commits}) == 3
++    model.v41_bind_slot(1, new_sequence=False)
++    assert model.stage_commit is commits[1] and commits[1].armed
++    model.v41_bind_slot(1, new_sequence=True)  # a new request in slot 1
++    assert not commits[1].armed
++    assert commits[0].armed and commits[2].armed
++    model.v41_bind_slot(2, new_sequence=True)
++    assert not commits[2].armed and commits[0].armed
++
++
++def test_model_bind_without_commit(monkeypatch):
++    import vllm.distributed
++
++    monkeypatch.setattr(vllm.distributed, "get_tp_group", lambda: GROUP)
++    model = Model(None, pipelined=False)
++    model.v41_init_slots(2)
++    model.v41_bind_slot(1, new_sequence=True)
++    assert model.v41_slots.current == 1
++
++
++def _registered_buffers(cls):
++    tree = ast.parse(textwrap.dedent(inspect.getsource(cls)))
++    return {
++        node.args[0].value
++        for node in ast.walk(tree)
++        if isinstance(node, ast.Call)
++        and isinstance(node.func, ast.Attribute)
++        and node.func.attr == "register_buffer"
++        and isinstance(node.args[0], ast.Constant)
++    }
++
++
++def test_stand_in_matches_the_real_state_classes():
++    """The fields slots.py swaps are registered buffers of the real classes."""
++    assert set(slots._C2_FIELDS) <= _registered_buffers(V41C2State)
++    assert set(slots._HASH_FIELDS) <= _registered_buffers(
++        deepseek_v41_engram.V41EngramHashState
++    )
++    model_buffers = _registered_buffers(v41_model.DeepseekV41Model)
++    assert set(slots._PENDING_FIELDS) <= model_buffers
++    assert "stage_commit_count" in model_buffers  # shared, not swapped
++    attention = [
++        cls
++        for cls in vars(v41_model).values()
++        if inspect.isclass(cls)
++        and cls.__module__ == v41_model.__name__
++        and "window_ring" in _registered_buffers(cls)
++    ]
++    assert attention, "no V4.1 module registers window_ring"
++    source = inspect.getsource(kv_store.V41PackedKV.__init__)
++    for name in kv_store.V41PackedKV.V41_SLOT_FIELDS:
++        assert f"self.{name} = " in source, name
+diff --git a/tests/models/test_deepseek_v41_small_fuse_knob_off.py b/tests/models/test_deepseek_v41_small_fuse_knob_off.py
+index 3f3c3848e..52b9c81f8 100644
+--- a/tests/models/test_deepseek_v41_small_fuse_knob_off.py
++++ b/tests/models/test_deepseek_v41_small_fuse_knob_off.py
+@@ -32,6 +32,11 @@ import pytest
+ ROOT = Path(__file__).resolve().parents[2]
+ BASE = "49cb1b7"
+ KNOBS = {"_FUSE_TRANSITION", "FUSE_ATTN_PREP", "FUSE_ATTN_POST"}
++# model.py classes changed after BASE by later work: 1Cat #1341 (hot refill in
++# DeepseekV41Model, on by default) and VLLM_V41_MULTI_SEQ (off by default;
++# with it off they equal 7e9a156, tests/models/test_deepseek_v41_multi_seq_knob_off.py).
++# Neither touches the small-fuse branches this test proves.
++MULTI_SEQ_CLASSES = {"DeepseekV41Model", "DeepseekV41ForCausalLM"}
+ 
+ 
+ def _source(rel, rev=None):
+@@ -121,7 +126,7 @@ def test_attention_knob_off():
+     base, cur = ast.parse(_source(rel, BASE)), ast.parse(_source(rel))
+     base_defs, cur_defs = _defs(base), _defs(cur)
+     for name, node in base_defs.items():
+-        if name != "V41Attention":
++        if name != "V41Attention" and name not in MULTI_SEQ_CLASSES:
+             assert _dump(cur_defs[name]) == _dump(node), name
+     base_m = _methods(base_defs["V41Attention"])
+     cur_m = _methods(cur_defs["V41Attention"])
+diff --git a/tests/v1/core/test_v41_multi_seq.py b/tests/v1/core/test_v41_multi_seq.py
+new file mode 100644
+index 000000000..e98032fa6
+--- /dev/null
++++ b/tests/v1/core/test_v41_multi_seq.py
+@@ -0,0 +1,699 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""VLLM_V41_MULTI_SEQ, scheduler side and the shared decision.
++
++The real scheduler runs through the PP=2 synchronous batch-queue cadence
++(``EngineCore.step_with_batch_queue`` with two steps in flight). With the knob
++on, every step schedules one request, two running requests alternate between
++the two pipeline stages, three or four take turns least-recently-scheduled
++first, every running request owns a slot, and no request's history is resent.
++With the knob off (or for a model other than V4.1) the default path runs.
++"""
++
++from collections import deque
++from types import SimpleNamespace
++
++import pytest
++
++from vllm.v1.core.sched import v41_multi_seq
++from vllm.v1.core.sched.v41_multi_seq import (
++    SLOT_VARIANT_BASE,
++    V41SchedulerMultiSeq,
++    V41SlotTable,
++    multi_seq_decision,
++    multi_seq_requested,
++    slot_variant,
++)
++from vllm.v1.outputs import DraftTokenIds, ModelRunnerOutput
++from vllm.v1.request import RequestStatus
++
++from .utils import create_requests, create_scheduler
++
++pytestmark = pytest.mark.cpu_test
++
++KNOB = "VLLM_V41_MULTI_SEQ"
++
++
++@pytest.fixture(autouse=True)
++def two_devices(monkeypatch):
++    # Scheduler bookkeeping is CPU-only; do not require two physical GPUs.
++    monkeypatch.setattr("vllm.config.parallel.current_platform.device_count", lambda: 2)
++
++
++@pytest.fixture
++def v41(monkeypatch):
++    """Knob on, and the small test model stands in for DeepSeek-V4.1."""
++    monkeypatch.setenv(KNOB, "1")
++    monkeypatch.setattr(v41_multi_seq, "is_v41_model", lambda vllm_config: True)
++
++
++def _output(scheduler_output, sampled_by_req):
++    req_ids = list(scheduler_output.num_scheduled_tokens)
++    return ModelRunnerOutput(
++        req_ids=req_ids,
++        req_id_to_index={req_id: i for i, req_id in enumerate(req_ids)},
++        sampled_token_ids=[sampled_by_req[req_id] for req_id in req_ids],
++        logprobs=None,
++        prompt_logprobs_dict={},
++        pooler_output=[],
++    )
++
++
++class Engine:
++    """EngineCore.step_with_batch_queue with a queue of two (PP=2), sync.
++
++    Schedule while the queue has room; a step with tokens returns early while
++    the queue is not full (its result is not ready yet); otherwise the oldest
++    step's output is applied, then its drafts (as the knob's runner returns
++    them with the output). ``accept(step, req_id, drafts)`` says how many of a
++    step's drafts are accepted.
++    """
++
++    def __init__(self, scheduler, num_drafts=0, accept=None, on_schedule=None):
++        self.scheduler = scheduler
++        self.queue = deque()
++        self.steps = []
++        self.applied = []
++        self.num_drafts = num_drafts
++        self.accept = accept or (lambda step, req_id, drafts: 0)
++        self.on_schedule = on_schedule
++        self.token = 1000
++
++    def step(self):
++        if len(self.queue) < 2 and self.scheduler.has_requests():
++            scheduled = self.scheduler.schedule()
++            self.steps.append(scheduled)
++            if self.on_schedule is not None:
++                self.on_schedule(scheduled)
++            self.queue.appendleft(scheduled)
++            if scheduled.total_num_scheduled_tokens and len(self.queue) < 2:
++                return
++        if not self.queue:
++            return
++        oldest = self.queue.pop()
++        sampled = {}
++        for req_id in oldest.num_scheduled_tokens:
++            drafts = list(oldest.scheduled_spec_decode_tokens.get(req_id, []))
++            num_accepted = self.accept(len(self.applied), req_id, drafts)
++            sampled[req_id] = drafts[:num_accepted] + [self.token]
++            self.token += 10
++        self.scheduler.update_from_output(oldest, _output(oldest, sampled))
++        self.applied.append(oldest)
++        if self.num_drafts and oldest.num_scheduled_tokens:
++            req_ids = list(oldest.num_scheduled_tokens)
++            self.scheduler.update_draft_token_ids(
++                DraftTokenIds(
++                    req_ids,
++                    [
++                        [self.token + 1 + k for k in range(self.num_drafts)]
++                        for _ in req_ids
++                    ],
++                )
++            )
++
++    def run(self, max_steps=400):
++        for _ in range(max_steps):
++            if not self.scheduler.has_requests() and not self.queue:
++                return
++            self.step()
++        raise AssertionError("the engine did not drain")
++
++
++def _scheduled_ids(steps):
++    return [list(s.num_scheduled_tokens) for s in steps]
++
++
++# -- the knob and the decision ---------------------------------------------
++@pytest.mark.parametrize(
++    ("value", "expected"), [(None, False), ("0", False), ("1", True), (" 1 ", True)]
++)
++def test_knob_values(monkeypatch, value, expected):
++    if value is None:
++        monkeypatch.delenv(KNOB, raising=False)
++    else:
++        monkeypatch.setenv(KNOB, value)
++    assert multi_seq_requested() is expected
++
++
++@pytest.mark.parametrize("value", ["2", "yes", "true", "on"])
++def test_knob_typo_fails(monkeypatch, value):
++    monkeypatch.setenv(KNOB, value)
++    with pytest.raises(ValueError, match=KNOB):
++        multi_seq_requested()
++
++
++def _config(**overrides):
++    speculative = SimpleNamespace(
++        use_ngram_gpu=lambda: False, use_dflash_ddtree=lambda: False
++    )
++    values = dict(
++        parallel_config=SimpleNamespace(
++            pipeline_parallel_size=2, distributed_executor_backend="mp"
++        ),
++        scheduler_config=SimpleNamespace(max_num_seqs=3, async_scheduling=False),
++        model_config=SimpleNamespace(enable_prompt_embeds=False),
++        speculative_config=speculative,
++        use_v2_model_runner=False,
++        kv_transfer_config=None,
++        ec_transfer_config=None,
++        lora_config=None,
++    )
++    values.update(overrides)
++    return SimpleNamespace(**values)
++
++
++def test_decision_knob_off(monkeypatch):
++    monkeypatch.delenv(KNOB, raising=False)
++    assert multi_seq_decision(_config()) == (False, "")
++
++
++def test_decision_inert_for_other_models(monkeypatch):
++    monkeypatch.setenv(KNOB, "1")
++    enabled, reason = multi_seq_decision(_config())
++    assert not enabled
++    assert "not DeepSeek-V4.1" in reason
++
++
++def test_decision_enabled(v41):
++    enabled, reason = multi_seq_decision(_config())
++    assert enabled
++    assert "3 slot(s)" in reason and "two pipeline stages" in reason
++    enabled, reason = multi_seq_decision(
++        _config(
++            parallel_config=SimpleNamespace(
++                pipeline_parallel_size=1, distributed_executor_backend="mp"
++            )
++        )
++    )
++    assert enabled and "PP=1" in reason
++
++
++@pytest.mark.parametrize(
++    ("overrides", "words"),
++    [
++        (
++            {
++                "scheduler_config": SimpleNamespace(
++                    max_num_seqs=5, async_scheduling=False
++                )
++            },
++            "max_num_seqs=5",
++        ),
++        (
++            {
++                "scheduler_config": SimpleNamespace(
++                    max_num_seqs=0, async_scheduling=False
++                )
++            },
++            "max_num_seqs=0",
++        ),
++        (
++            {
++                "scheduler_config": SimpleNamespace(
++                    max_num_seqs=2, async_scheduling=True
++                )
++            },
++            "async scheduling",
++        ),
++        (
++            {
++                "parallel_config": SimpleNamespace(
++                    pipeline_parallel_size=4, distributed_executor_backend="mp"
++                )
++            },
++            "pipeline_parallel_size=4",
++        ),
++        ({"use_v2_model_runner": True}, "V2 model runner"),
++        (
++            {
++                "parallel_config": SimpleNamespace(
++                    pipeline_parallel_size=2,
++                    distributed_executor_backend="external_launcher",
++                )
++            },
++            "external_launcher",
++        ),
++        ({"kv_transfer_config": object()}, "KV connector"),
++        ({"ec_transfer_config": object()}, "encoder-cache connector"),
++        ({"lora_config": object()}, "LoRA"),
++        (
++            {"model_config": SimpleNamespace(enable_prompt_embeds=True)},
++            "prompt embeddings",
++        ),
++        (
++            {
++                "speculative_config": SimpleNamespace(
++                    use_ngram_gpu=lambda: True, use_dflash_ddtree=lambda: False
++                )
++            },
++            "ngram_gpu",
++        ),
++        (
++            {
++                "speculative_config": SimpleNamespace(
++                    use_ngram_gpu=lambda: False, use_dflash_ddtree=lambda: True
++                )
++            },
++            "dflash_ddtree",
++        ),
++    ],
++)
++def test_decision_fails_closed(v41, overrides, words):
++    with pytest.raises(ValueError, match=KNOB) as error:
++        multi_seq_decision(_config(**overrides))
++    assert words in str(error.value)
++
++
++def test_decision_fails_closed_trunc_cutoff(v41, monkeypatch):
++    monkeypatch.setenv("VLLM_V41_TRUNC_CUTOFF", "4096")
++    with pytest.raises(ValueError, match="VLLM_V41_TRUNC_CUTOFF"):
++        multi_seq_decision(_config())
++
++
++def test_decision_names_every_problem(v41):
++    config = _config(
++        scheduler_config=SimpleNamespace(max_num_seqs=9, async_scheduling=True),
++        lora_config=object(),
++    )
++    with pytest.raises(ValueError) as error:
++        multi_seq_decision(config)
++    message = str(error.value)
++    assert "max_num_seqs=9" in message
++    assert "async scheduling" in message
++    assert "LoRA" in message
++
++
++def test_slot_variant():
++    assert slot_variant(0) == 0
++    assert [slot_variant(k) for k in (1, 2, 3)] == [
++        SLOT_VARIANT_BASE - 1,
++        SLOT_VARIANT_BASE - 2,
++        SLOT_VARIANT_BASE - 3,
++    ]
++    # Never the long-context variant (-1) or a drafter variant (>= 0).
++    assert all(slot_variant(k) < -1 for k in (1, 2, 3))
++    for bad in (-1, 4):
++        with pytest.raises(ValueError):
++            slot_variant(bad)
++
++
++# -- the knob off ----------------------------------------------------------
++@pytest.mark.parametrize("value", [None, "0"])
++def test_knob_off_scheduler_unchanged(monkeypatch, value):
++    if value is None:
++        monkeypatch.delenv(KNOB, raising=False)
++    else:
++        monkeypatch.setenv(KNOB, value)
++    scheduler = create_scheduler(pipeline_parallel_size=2, max_num_seqs=4)
++    assert scheduler.v41_multi_seq is None
++    assert scheduler.kv_cache_manager.v41_multi_seq_slots is None
++    for request in create_requests(num_requests=2, num_tokens=20):
++        scheduler.add_request(request)
++    first = scheduler.schedule()
++    # Default path: both requests in one step, no slots sent.
++    assert set(first.num_scheduled_tokens) == {"0", "1"}
++    assert first.v41_slots is None
++
++
++def _trace(scheduler, num_drafts=0):
++    for request in create_requests(num_requests=3, num_tokens=24, max_tokens=7):
++        scheduler.add_request(request)
++    engine = Engine(scheduler, num_drafts=num_drafts)
++    engine.run()
++    return [
++        (
++            dict(s.num_scheduled_tokens),
++            s.scheduled_cached_reqs.req_ids,
++            s.scheduled_cached_reqs.new_token_ids,
++            s.scheduled_cached_reqs.num_computed_tokens,
++            sorted(s.scheduled_cached_reqs.all_token_ids),
++            s.v41_slots,
++        )
++        for s in engine.steps
++    ]
++
++
++def test_knob_inert_for_other_models_matches_default(monkeypatch):
++    monkeypatch.setenv(KNOB, "0")
++    off = _trace(create_scheduler(pipeline_parallel_size=2, max_num_seqs=4))
++    monkeypatch.setenv(KNOB, "1")
++    inert = create_scheduler(pipeline_parallel_size=2, max_num_seqs=4)
++    assert inert.v41_multi_seq is None
++    assert _trace(inert) == off
++
++
++# -- the knob on: cadence --------------------------------------------------
++def test_two_requests_alternate_between_stages(v41):
++    scheduler = create_scheduler(pipeline_parallel_size=2, max_num_seqs=2)
++    assert scheduler.v41_multi_seq is not None
++    request_a, request_b = create_requests(num_requests=2, num_tokens=20, max_tokens=9)
++    scheduler.add_request(request_a)
++    scheduler.add_request(request_b)
++    engine = Engine(scheduler)
++    engine.run()
++
++    ids = _scheduled_ids(engine.steps)
++    assert all(len(step) <= 1 for step in ids)
++    # Admission takes the first two steps (one request each), then the two
++    # requests alternate with no empty step until the first one finishes.
++    assert ids[:2] == [["0"], ["1"]]
++    steady = ids[2 : 2 + 2 * 8]
++    assert steady == [["0"], ["1"]] * 8
++    for step in engine.steps:
++        if step.num_scheduled_tokens:
++            (req_id,) = step.num_scheduled_tokens
++            assert step.v41_slots == {req_id: int(req_id)}
++        else:
++            assert step.v41_slots == {}
++        # The held record: no request's history is ever resent.
++        assert not step.scheduled_cached_reqs.all_token_ids
++    assert request_a.status == RequestStatus.FINISHED_LENGTH_CAPPED
++    assert request_b.status == RequestStatus.FINISHED_LENGTH_CAPPED
++    assert request_a.num_output_tokens == request_b.num_output_tokens == 9
++
++
++def test_three_requests_take_turns(v41):
++    scheduler = create_scheduler(pipeline_parallel_size=2, max_num_seqs=3)
++    requests = create_requests(num_requests=3, num_tokens=20, max_tokens=12)
++    for request in requests:
++        scheduler.add_request(request)
++    engine = Engine(scheduler)
++    engine.run()
++
++    ids = [step[0] for step in _scheduled_ids(engine.steps) if step]
++    # A waiting request gets every other turn while one can be admitted.
++    assert ids[:4] == ["0", "1", "0", "2"]
++    # Least recently scheduled first: every window of three is a permutation.
++    steady = ids[4:30]
++    for i in range(len(steady) - 2):
++        assert sorted(steady[i : i + 3]) == ["0", "1", "2"]
++    # With three runnable requests and two stages there is no empty step.
++    first_finish = min(
++        i for i, step in enumerate(engine.steps) if step.finished_req_ids
++    )
++    assert all(s.num_scheduled_tokens for s in engine.steps[:first_finish])
++    assert sorted(
++        set(s for step in engine.steps for s in (step.v41_slots or {}).values())
++    ) == [
++        0,
++        1,
++        2,
++    ]
++    assert all(r.num_output_tokens == 12 for r in requests)
++
++
++def test_waiting_request_takes_the_freed_slot(v41):
++    scheduler = create_scheduler(pipeline_parallel_size=2, max_num_seqs=2)
++    request_a, request_b, request_c = create_requests(
++        num_requests=3, num_tokens=20, max_tokens=4
++    )
++    request_b.max_tokens = 20
++    scheduler.add_request(request_a)
++    scheduler.add_request(request_b)
++    scheduler.add_request(request_c)
++    engine = Engine(scheduler)
++    engine.run()
++
++    admitted = {}
++    for step in engine.steps:
++        assert len(scheduler.running) <= 2
++        for new_req in step.scheduled_new_reqs:
++            admitted[new_req.req_id] = step.v41_slots[new_req.req_id]
++    # C waits for a slot, then reuses the one A freed (slot 0).
++    assert admitted == {"0": 0, "1": 1, "2": 0}
++    c_admit = next(
++        i
++        for i, s in enumerate(engine.steps)
++        if any(r.req_id == "2" for r in s.scheduled_new_reqs)
++    )
++    a_finish = next(i for i, s in enumerate(engine.steps) if "0" in s.finished_req_ids)
++    assert c_admit >= a_finish
++    assert request_c.num_output_tokens == 4
++
++
++def test_spec_decode_drafts_and_new_tokens(v41):
++    """Drafts travel with each step's output; the first stage gets the bonus
++    token only, and the accepted count moves num_computed_tokens."""
++    scheduler = create_scheduler(
++        pipeline_parallel_size=2, max_num_seqs=2, num_speculative_tokens=3
++    )
++    request_a, request_b = create_requests(num_requests=2, num_tokens=20, max_tokens=40)
++    scheduler.add_request(request_a)
++    scheduler.add_request(request_b)
++    pattern = [0, 3, 1, 2, 3, 0, 2]
++    engine = Engine(
++        scheduler,
++        num_drafts=3,
++        accept=lambda step, req_id, drafts: min(len(drafts), pattern[step % 7]),
++    )
++    engine.run()
++    decode_steps = [s for s in engine.steps if s.scheduled_cached_reqs.req_ids]
++    assert decode_steps
++    for step in decode_steps:
++        (req_id,) = step.num_scheduled_tokens
++        drafts = step.scheduled_spec_decode_tokens.get(req_id, [])
++        assert len(drafts) == 3
++        assert step.num_scheduled_tokens[req_id] == 1 + len(drafts)
++        (sent,) = step.scheduled_cached_reqs.new_token_ids
++        assert len(sent) == 1
++        assert not step.scheduled_cached_reqs.all_token_ids
++    assert request_a.num_output_tokens >= 40
++    assert request_b.num_output_tokens >= 40
++
++
++def test_preempted_request_returns_with_a_slot(v41):
++    # 9 blocks of 16 (one is the null block): two requests cannot both
++    # grow to 4 blocks, so the scheduler preempts one.
++    scheduler = create_scheduler(
++        pipeline_parallel_size=2, max_num_seqs=2, num_blocks=7, block_size=16
++    )
++    request_a, request_b = create_requests(
++        num_requests=2, num_tokens=30, max_tokens=40, block_size=16
++    )
++    scheduler.add_request(request_a)
++    scheduler.add_request(request_b)
++    engine = Engine(scheduler)
++    engine.run(max_steps=2000)
++
++    preempted = [s for s in engine.steps if s.preempted_req_ids]
++    assert preempted, "the test did not preempt"
++    resumed = [s for s in engine.steps if s.scheduled_cached_reqs.resumed_req_ids]
++    assert resumed
++    for step in resumed:
++        for req_id in step.scheduled_cached_reqs.resumed_req_ids:
++            assert req_id in step.v41_slots
++            # A resumed request is never treated as held.
++            assert req_id in step.scheduled_cached_reqs.all_token_ids
++    multi = scheduler.v41_multi_seq
++    assert multi.slots.owner == [None, None]
++    assert request_a.num_output_tokens == request_b.num_output_tokens == 40
++
++
++# -- the step policy (no scheduler) ----------------------------------------
++def _req(req_id, computed=10, tokens=11, eligible=0, placeholders=0):
++    return SimpleNamespace(
++        request_id=req_id,
++        next_decode_eligible_step=eligible,
++        num_tokens_with_spec=tokens,
++        num_output_placeholders=placeholders,
++        num_computed_tokens=computed,
++    )
++
++
++def test_policy_lru_among_runnable():
++    multi = V41SchedulerMultiSeq(3, 128, False)
++    a, b, c = _req("a"), _req("b"), _req("c")
++    multi.last_step.update({"a": 5, "b": 3, "c": 4})
++    multi.begin_step([a, b, c], False, False, 6)
++    assert multi.turn == "b"
++    assert multi.skip_running(a) and not multi.skip_running(b)
++    assert multi.skip_waiting(0)
++    # b in flight (no work left): c is next.
++    multi.begin_step([a, _req("b", computed=11), c], False, False, 7)
++    assert multi.turn == "c"
++    # not eligible yet
++    multi.begin_step([_req("a", eligible=9)], False, False, 8)
++    assert multi.turn is None
++
++
++def test_policy_waiting_turns_and_backoff():
++    multi = V41SchedulerMultiSeq(2, 128, False)
++    a = _req("a")
++    multi.begin_step([a], True, True, 1)
++    assert multi.turn == "a"  # the previous turn was not a running one
++    admitted = SimpleNamespace(request_id="a", num_computed_tokens=0)
++    assert multi.end_step(["a"], [admitted], 1) == {"a": 0}
++    multi.begin_step([a], True, True, 2)
++    assert multi.turn == v41_multi_seq._WAITING
++    assert multi.skip_running(a) and not multi.skip_waiting(0)
++    assert multi.skip_waiting(1)  # one request per step
++    # The waiting turn admitted nothing (e.g. no KV room): back off once.
++    multi.end_step([], [], 2)
++    multi.begin_step([a], True, True, 3)
++    assert multi.turn == "a"
++    multi.end_step(["a"], [], 3)
++    multi.begin_step([a], True, True, 4)
++    assert multi.turn == v41_multi_seq._WAITING
++    # Nothing runnable: the waiting queue gets the turn.
++    multi.begin_step([_req("a", computed=11)], True, True, 5)
++    assert multi.turn == v41_multi_seq._WAITING
++    # Cannot admit: running only.
++    multi.begin_step([a], True, False, 6)
++    assert multi.turn == "a"
++
++
++def test_policy_end_step_rejects_two_requests():
++    multi = V41SchedulerMultiSeq(2, 128, False)
++    with pytest.raises(RuntimeError, match="one request per step"):
++        multi.end_step(["a", "b"], [], 1)
++    with pytest.raises(RuntimeError, match="has no slot"):
++        multi.end_step(["a"], [], 1)
++
++
++def test_held_record():
++    previous = {"a", "x"}
++    V41SchedulerMultiSeq.held_record(previous, ["b"], {"a", "b"})
++    assert previous == {"a", "b"}
++
++
++# -- slots and their session records ---------------------------------------
++def _sreq(req_id, tokens, computed=0):
++    return SimpleNamespace(
++        request_id=req_id, all_token_ids=list(tokens), num_computed_tokens=computed
++    )
++
++
++def test_slot_assign_and_release():
++    table = V41SlotTable(3, 128, record_sessions=False)
++    a, b = _sreq("a", range(10)), _sreq("b", range(10))
++    assert table.assign(a) == 0
++    assert table.assign(b) == 1
++    with pytest.raises(RuntimeError, match="already owns"):
++        table.assign(a)
++    table.release(a)
++    assert table.free_slots() == [0, 2]
++    assert table.records == [None, None, None]
++    # A fresh request prefers a slot without a record: here the lowest.
++    assert table.assign(_sreq("c", range(5))) == 0
++    table.assign(_sreq("d", range(5)))
++    with pytest.raises(RuntimeError, match="no free slot"):
++        table.assign(_sreq("e", range(5)))
++    table.release(_sreq("zz", []))  # unknown request: no-op
++
++
++def test_slot_sessions():
++    table = V41SlotTable(2, 128, record_sessions=True)
++    first = _sreq("a", range(300))
++    assert table.assign(first) == 0
++    first.num_computed_tokens = 300
++    table.release(first)
++    assert table.records[0] == (list(range(300)), 300)
++
++    follow_up = _sreq("b", list(range(300)) + [7, 8])
++    assert not table.session_hit(follow_up, 255)  # odd
++    assert not table.session_hit(follow_up, 160)  # outside the rings' reach
++    assert table.session_hit(follow_up, 288)
++    other = _sreq("c", [5] * 302)
++    assert not table.session_hit(other, 288)  # different tokens
++    # A fresh request avoids the slot that holds a session.
++    fresh = _sreq("d", range(4))
++    assert table.assign(fresh) == 1
++    follow_up.num_computed_tokens = 288
++    assert table.assign(follow_up) == 0
++    # The session's slot is taken now: a hit cannot be admitted anywhere.
++    late = _sreq("e", list(range(300)), computed=0)
++    assert not table.session_hit(late, 288)
++
++
++def test_slot_hit_needs_its_own_free_slot():
++    table = V41SlotTable(2, 128, record_sessions=True)
++    req = _sreq("a", range(40), computed=32)
++    with pytest.raises(RuntimeError, match="without a free slot"):
++        table.assign(req)
++
++
++# -- session prefix hits, per slot -----------------------------------------
++def _request(req_id, prompt, max_tokens):
++    from vllm.utils.hashing import sha256
++    from vllm.v1.core.kv_cache_utils import get_request_block_hasher
++    from vllm.v1.request import Request
++
++    (template,) = create_requests(num_requests=1, max_tokens=max_tokens)
++    return Request(
++        request_id=req_id,
++        prompt_token_ids=list(prompt),
++        sampling_params=template.sampling_params,
++        pooling_params=None,
++        block_hasher=get_request_block_hasher(16, sha256),
++    )
++
++
++def test_session_hit_only_in_the_freed_slot_of_that_session(v41, monkeypatch):
++    from vllm.v1.core import kv_cache_manager
++
++    monkeypatch.setattr(kv_cache_manager, "_V41_SESSION_PREFIX", True)
++    scheduler = create_scheduler(
++        pipeline_parallel_size=2,
++        max_num_seqs=2,
++        enable_prefix_caching=True,
++        block_size=16,
++    )
++    first = _request("a", [11] * 40, max_tokens=10)
++    other = _request("c", [22] * 40, max_tokens=30)
++    scheduler.add_request(first)
++    scheduler.add_request(other)
++    engine = Engine(scheduler)
++    while first.status != RequestStatus.FINISHED_LENGTH_CAPPED:
++        engine.step()
++    multi = scheduler.v41_multi_seq
++    assert multi.slots.records[0] is not None  # a's slot keeps its session
++    assert multi.slots.owner[1] == "c"
++
++    # The next turn of a's conversation, and a request that shares c's prompt
++    # while c still runs (its slot holds another live sequence).
++    follow_up = _request("b", list(first.all_token_ids) + [33] * 6, max_tokens=4)
++    same_as_running = _request("d", [22] * 40 + [44] * 3, max_tokens=4)
++    scheduler.add_request(follow_up)
++    engine.run()
++    new = {
++        r.req_id: (r.num_computed_tokens, step.v41_slots[r.req_id])
++        for step in engine.steps
++        for r in step.scheduled_new_reqs
++    }
++    hit, slot = new["b"]
++    assert hit == 48 and slot == 0
++    assert new["c"][1] == 1
++
++    scheduler2 = create_scheduler(
++        pipeline_parallel_size=2,
++        max_num_seqs=2,
++        enable_prefix_caching=True,
++        block_size=16,
++    )
++    other2 = _request("c", [22] * 40, max_tokens=30)
++    scheduler2.add_request(other2)
++    engine2 = Engine(scheduler2)
++    for _ in range(6):
++        engine2.step()
++    assert other2.status == RequestStatus.RUNNING
++    table = scheduler2.v41_multi_seq.slots
++    asked = []
++    real_hit = table.session_hit
++
++    def recording_hit(request, hit):
++        result = real_hit(request, hit)
++        asked.append((request.request_id, hit, result))
++        return result
++
++    monkeypatch.setattr(table, "session_hit", recording_hit)
++    scheduler2.add_request(same_as_running)
++    engine2.run()
++    # The block pool had c's prompt blocks; the slot table refused them.
++    assert ("d", 32, False) in asked
++    new2 = {
++        r.req_id: r.num_computed_tokens
++        for step in engine2.steps
++        for r in step.scheduled_new_reqs
++    }
++    # The cached blocks exist, but no free slot holds that sequence.
++    assert new2["d"] == 0
+diff --git a/tests/v1/worker/test_v41_multi_seq_runner.py b/tests/v1/worker/test_v41_multi_seq_runner.py
+new file mode 100644
+index 000000000..082a59a5f
+--- /dev/null
++++ b/tests/v1/worker/test_v41_multi_seq_runner.py
+@@ -0,0 +1,536 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""VLLM_V41_MULTI_SEQ, V1 runner side.
++
++The real scheduler (knob on, PP=2, three drafts per decode step) drives the
++real ``GPUModelRunner._update_states`` of a first-stage and a last-stage
++runner on CPU ``InputBatch`` objects through the batch-queue cadence. Two or
++three requests interleave, so every request leaves the persistent batch on
++the steps of the others: its row is parked and re-added by memcpy, the first
++stage rebuilds its accepted drafts from the parked drafts (the scheduler no
++longer resends the history), and the model is bound to the step's slot. The
++runners are built without ``__init__`` (no GPU, no process group).
++"""
++
++import dataclasses
++from collections import deque
++from types import SimpleNamespace
++from unittest.mock import Mock
++
++import numpy as np
++import pytest
++import torch
++
++import vllm.v1.worker.gpu_model_runner as gpu_model_runner
++import vllm.v1.worker.v41_multi_seq_runner as multi_runner
++from tests.v1.core.utils import create_requests, create_scheduler
++from vllm.config import CUDAGraphMode
++from vllm.forward_context import BatchDescriptor
++from vllm.sampling_params import SamplingParams
++from vllm.v1.core.sched import v41_multi_seq
++from vllm.v1.outputs import DraftTokenIds, ModelRunnerOutput
++from vllm.v1.worker.gpu_input_batch import CachedRequestState, InputBatch
++from vllm.v1.worker.gpu_model_runner import GPUModelRunner
++from vllm.v1.worker.v41_multi_seq_runner import (
++    ParkedRow,
++    V41MultiSeqRunner,
++    copy_parked_row,
++)
++
++pytestmark = pytest.mark.cpu_test
++
++KNOB = "VLLM_V41_MULTI_SEQ"
++BLOCK_SIZE = 16
++MAX_MODEL_LEN = 512
++NUM_DRAFTS = 3
++
++
++@pytest.fixture(autouse=True)
++def two_devices(monkeypatch):
++    monkeypatch.setattr("vllm.config.parallel.current_platform.device_count", lambda: 2)
++
++
++@pytest.fixture(autouse=True)
++def no_process_groups(monkeypatch):
++    monkeypatch.setattr(multi_runner, "get_pp_group", lambda: _pp(True))
++    monkeypatch.setattr(
++        multi_runner, "get_tp_group", lambda: SimpleNamespace(rank_in_group=0)
++    )
++
++
++@pytest.fixture
++def v41(monkeypatch):
++    monkeypatch.setenv(KNOB, "1")
++    monkeypatch.setattr(v41_multi_seq, "is_v41_model", lambda vllm_config: True)
++
++
++class FakeModel:
++    """Records what the runner asks of the V4.1 model."""
++
++    def __init__(self):
++        self.binds = []
++        self.restores = []
++
++    def v41_bind_slot(self, slot, new_sequence=False):
++        self.binds.append((slot, new_sequence))
++
++    def restore_prefix(self, cached, token_ids):
++        self.restores.append((cached, list(token_ids)))
++
++
++def _pp(is_last_rank):
++    return SimpleNamespace(
++        is_last_rank=is_last_rank,
++        is_first_rank=not is_last_rank,
++        rank_in_group=1 if is_last_rank else 0,
++        world_size=2,
++    )
++
++
++def _input_batch():
++    return InputBatch(
++        max_num_reqs=4,
++        max_model_len=MAX_MODEL_LEN,
++        max_num_batched_tokens=MAX_MODEL_LEN,
++        device=torch.device("cpu"),
++        pin_memory=False,
++        vocab_size=50272,
++        block_sizes=[BLOCK_SIZE],
++        kernel_block_sizes=[BLOCK_SIZE],
++        num_spec_tokens=NUM_DRAFTS,
++    )
++
++
++def _runner(is_last_rank, num_slots, monkeypatch):
++    monkeypatch.setattr(multi_runner, "get_pp_group", lambda: _pp(is_last_rank))
++    runner = object.__new__(GPUModelRunner)
++    runner.pp_keep_batch = False
++    runner._pp_keep_batch_kept_logged = False
++    runner.device = torch.device("cpu")
++    runner.input_batch = _input_batch()
++    runner.requests = {}
++    runner.num_prompt_logprobs = {}
++    runner.encoder_cache = {}
++    runner.late_interaction_runner = Mock()
++    runner._dynamic_draft_vocab_prefill_bootstrap = Mock()
++    runner.dynamic_draft_vocab_prefill_topk = 0
++    runner.speculative_config = SimpleNamespace(
++        method="dspark", use_ngram_gpu=lambda: False
++    )
++    runner.scheduler_config = SimpleNamespace(max_num_seqs=num_slots)
++    runner.use_async_spec_decode = False
++    runner.sync_spec_decode_accept_counts = False
++    runner.use_async_scheduling = False
++    runner.is_pooling_model = False
++    runner.uses_mrope = False
++    runner.uses_xdrope_dim = 0
++    runner.kv_cache_config = SimpleNamespace(kv_cache_groups=[])
++    runner.model = FakeModel()
++    runner.v41_multi_seq = V41MultiSeqRunner(runner, "test")
++    adds = []
++    real_add = runner.input_batch.add_request
++
++    def counting_add(request, **kwargs):
++        adds.append((request.req_id, kwargs.get("v41_multi_seq_row") is not None))
++        return real_add(request, **kwargs)
++
++    runner.input_batch.add_request = counting_add
++    runner.adds = adds
++    return runner
++
++
++def _row(runner, req_id):
++    batch = runner.input_batch
++    idx = batch.req_id_to_index[req_id]
++    num_tokens = int(batch.num_tokens_no_spec[idx])
++    return {
++        "tokens": batch.token_ids_cpu[idx, :num_tokens].tolist(),
++        "is_token": bool(batch.is_token_ids[idx, :num_tokens].all()),
++        "num_computed": int(batch.num_computed_tokens_cpu[idx]),
++        "spec": list(batch.spec_token_ids[idx]),
++    }
++
++
++def _last_rank_bookkeeping(runner, req_id, sampled):
++    """What _bookkeeping_sync does with the sampled tokens of a step."""
++    batch = runner.input_batch
++    idx = batch.req_id_to_index[req_id]
++    start = int(batch.num_tokens_no_spec[idx])
++    end = start + len(sampled)
++    batch.token_ids_cpu[idx, start:end] = sampled
++    batch.is_token_ids[idx, start:end] = True
++    batch.num_tokens_no_spec[idx] = end
++    runner.requests[req_id].output_token_ids.extend(sampled)
++
++
++def _output(req_id, sampled):
++    return ModelRunnerOutput(
++        req_ids=[req_id],
++        req_id_to_index={req_id: 0},
++        sampled_token_ids=[sampled],
++        logprobs=None,
++        prompt_logprobs_dict={},
++        pooler_output=[],
++    )
++
++
++def _simulate(monkeypatch, num_requests, accepted, max_tokens=60):
++    """The PP=2 batch queue (depth two) with a first-stage and a last-stage
++    runner. Each scheduled step's sampled tokens are fixed when it is
++    scheduled (the last stage samples them in that step); the scheduler
++    applies them when the step leaves the queue, then the step's drafts."""
++    scheduler = create_scheduler(
++        pipeline_parallel_size=2,
++        max_num_seqs=num_requests,
++        num_speculative_tokens=NUM_DRAFTS,
++        block_size=BLOCK_SIZE,
++        max_model_len=MAX_MODEL_LEN,
++    )
++    assert scheduler.v41_multi_seq is not None
++    first = _runner(False, num_requests, monkeypatch)
++    last = _runner(True, num_requests, monkeypatch)
++    requests = create_requests(
++        num_requests=num_requests,
++        num_tokens=37,
++        max_tokens=max_tokens,
++        block_size=BLOCK_SIZE,
++    )
++    by_id = {r.request_id: r for r in requests}
++    for request in requests:
++        scheduler.add_request(request)
++
++    queue = deque()
++    checks = 0
++    token = 1000
++    step_index = 0
++    for _ in range(2000):
++        if not scheduler.has_requests() and not queue:
++            break
++        if len(queue) < 2 and scheduler.has_requests():
++            scheduled = scheduler.schedule()
++            sampled = {}
++            monkeypatch.setattr(gpu_model_runner, "get_pp_group", lambda: _pp(False))
++            first._update_states(scheduled)
++            monkeypatch.setattr(gpu_model_runner, "get_pp_group", lambda: _pp(True))
++            last._update_states(scheduled)
++            for req_id, num in scheduled.num_scheduled_tokens.items():
++                request = by_id[req_id]
++                drafts = list(scheduled.scheduled_spec_decode_tokens.get(req_id, []))
++                # The first stage holds exactly the history it feeds the
++                # model, then this step's drafts.
++                cached = scheduled.scheduled_cached_reqs
++                if req_id in cached.req_ids:
++                    i = cached.req_ids.index(req_id)
++                    computed = cached.num_computed_tokens[i]
++                    expected = computed + len(cached.new_token_ids[i])
++                else:
++                    (new,) = [
++                        r for r in scheduled.scheduled_new_reqs if r.req_id == req_id
++                    ]
++                    computed = new.num_computed_tokens
++                    expected = request.num_prompt_tokens
++                row = _row(first, req_id)
++                assert row["tokens"] == request.all_token_ids[:expected]
++                assert row["is_token"]
++                assert row["spec"] == drafts
++                # The last stage holds the prompt and every sampled token.
++                last_row = _row(last, req_id)
++                assert last_row["tokens"] == list(request.all_token_ids)
++                assert last_row["spec"] == drafts
++                for runner, state in ((first, row), (last, last_row)):
++                    # Positions: the runner feeds num_computed + arange(num)
++                    # from the row's num_computed, so it must be the
++                    # scheduler's, after any park and re-add.
++                    assert state["num_computed"] == computed
++                    assert runner.requests[req_id].num_computed_tokens == computed
++                    # The step runs in the request's own slot.
++                    assert runner.model.binds[-1][0] == scheduled.v41_slots[req_id]
++                checks += 1
++                n = min(len(drafts), accepted[step_index % len(accepted)])
++                step_index += 1
++                sampled[req_id] = drafts[:n] + [token]
++                token += 10
++                _last_rank_bookkeeping(last, req_id, sampled[req_id])
++            queue.appendleft((scheduled, sampled))
++            if scheduled.total_num_scheduled_tokens and len(queue) < 2:
++                continue
++        if not queue:
++            continue
++        oldest, sampled = queue.pop()
++        for req_id, tokens in sampled.items():
++            scheduler.update_from_output(oldest, _output(req_id, tokens))
++            scheduler.update_draft_token_ids(
++                DraftTokenIds([req_id], [[tokens[-1] + k + 1 for k in range(3)]])
++            )
++        if not sampled:
++            scheduler.update_from_output(
++                oldest,
++                ModelRunnerOutput(
++                    req_ids=[],
++                    req_id_to_index={},
++                    sampled_token_ids=[],
++                    logprobs=None,
++                    prompt_logprobs_dict={},
++                    pooler_output=[],
++                ),
++            )
++    else:
++        raise AssertionError("did not drain")
++    return requests, first, last, checks
++
++
++ACCEPTED = [0, 3, 1, 2, 3, 0, 2, 3, 1]
++
++
++@pytest.mark.parametrize("num_requests", [2, 3])
++def test_interleaved_rows_parked_and_exact(v41, monkeypatch, num_requests):
++    requests, first, last, checks = _simulate(monkeypatch, num_requests, ACCEPTED)
++    assert checks > 20
++    for request in requests:
++        assert request.num_output_tokens >= 60
++    for runner in (first, last):
++        # Every re-add after the first one is a parked-row copy.
++        by_req = {}
++        for req_id, parked in runner.adds:
++            by_req.setdefault(req_id, []).append(parked)
++        for flags in by_req.values():
++            assert flags[0] is False
++            assert all(flags[1:]) and len(flags) > 5
++        # Finished requests leave no parked row behind.
++        assert runner.v41_multi_seq.parks == {}
++        binds = runner.model.binds
++        slots = {slot for slot, _ in binds}
++        assert slots <= set(range(num_requests))
++        # A fresh request starts a sequence in its slot exactly once.
++        assert sum(1 for _, fresh in binds if fresh) == num_requests
++
++
++def test_bind_follows_the_step(v41, monkeypatch):
++    first = _runner(False, 2, monkeypatch)
++    scheduler = create_scheduler(
++        pipeline_parallel_size=2, max_num_seqs=2, block_size=BLOCK_SIZE
++    )
++    monkeypatch.setattr(gpu_model_runner, "get_pp_group", lambda: _pp(False))
++    for request in create_requests(num_requests=2, num_tokens=20):
++        scheduler.add_request(request)
++    step_a = scheduler.schedule()
++    first._update_states(step_a)
++    step_b = scheduler.schedule()
++    first._update_states(step_b)
++    assert first.model.binds == [(0, True), (1, True)]
++    assert set(step_a.v41_slots.items()) == {("0", 0)}
++    assert set(step_b.v41_slots.items()) == {("1", 1)}
++
++
++def test_begin_update_fails_closed():
++    runner = SimpleNamespace(
++        scheduler_config=SimpleNamespace(max_num_seqs=2),
++        dynamic_draft_vocab_prefill_topk=0,
++        speculative_config=None,
++        get_model=FakeModel,
++    )
++    helper = V41MultiSeqRunner(runner, "test")
++    output = SimpleNamespace(
++        v41_slots=None,
++        finished_req_ids=set(),
++        scheduled_new_reqs=[],
++        scheduled_cached_reqs=SimpleNamespace(resumed_req_ids=set()),
++    )
++    with pytest.raises(RuntimeError, match="sent no slots"):
++        helper.begin_update(output)
++    output.v41_slots = {"a": 0, "b": 1}
++    with pytest.raises(RuntimeError, match="one"):
++        helper.begin_update(output)
++
++
++def test_runner_fails_closed_for_unsupported_features():
++    runner = SimpleNamespace(
++        scheduler_config=SimpleNamespace(max_num_seqs=2),
++        dynamic_draft_vocab_prefill_topk=8,
++        speculative_config=None,
++    )
++    with pytest.raises(ValueError, match="dynamic draft-vocabulary"):
++        V41MultiSeqRunner(runner, "test")
++
++
++def test_park_skips_preempted_and_resumed(v41, monkeypatch):
++    monkeypatch.setattr(gpu_model_runner, "get_pp_group", lambda: _pp(True))
++    runner = _runner(True, 3, monkeypatch)
++    scheduler = create_scheduler(
++        pipeline_parallel_size=2, max_num_seqs=3, block_size=BLOCK_SIZE
++    )
++    for request in create_requests(num_requests=1, num_tokens=20):
++        scheduler.add_request(request)
++    runner._update_states(scheduler.schedule())
++    empty = scheduler.schedule()
++    assert not empty.num_scheduled_tokens
++    runner._update_states(dataclasses.replace(empty, preempted_req_ids={"0"}))
++    assert runner.v41_multi_seq.parks == {}
++    assert "0" not in runner.input_batch.req_id_to_index
++
++
++def test_prepend_uses_parked_drafts():
++    helper = multi_runner.V41MultiSeqRunner.__new__(multi_runner.V41MultiSeqRunner)
++    helper.parks = {"r": multi_runner.ParkedRow(np.arange(11), [7, 8, 9])}
++    req_state = SimpleNamespace(num_tokens=11)
++    assert helper.is_parked("r") and not helper.is_parked("s")
++    # 2 of 3 parked drafts accepted: computed 11 -> 13, the bonus token at 13.
++    assert helper.prepend_parked_drafts("r", req_state, 13, [42]) == [7, 8, 42]
++    assert helper.prepend_parked_drafts("r", req_state, 11, [42]) == [42]
++    # More accepted than parked: fail closed (the default path only warns).
++    with pytest.raises(RuntimeError, match="3 parked"):
++        helper.prepend_parked_drafts("r", req_state, 15, [42])
++
++
++# -- the parked-row copy -----------------------------------------------------
++def _state(prompt, output):
++    return CachedRequestState(
++        req_id="r",
++        prompt_token_ids=list(prompt),
++        mm_features=[],
++        sampling_params=None,
++        generator=None,
++        block_ids=([],),
++        num_computed_tokens=0,
++        output_token_ids=list(output),
++    )
++
++
++def _copy(request, parked):
++    tokens = np.full((2, 64), -7, dtype=np.int32)
++    is_token = np.zeros((2, 64), dtype=bool)
++    copy_parked_row(tokens, is_token, 1, request, parked)
++    return tokens, is_token
++
++
++@pytest.mark.parametrize(
++    ("prompt", "parked_len", "output"),
++    [
++        (range(10, 30), 23, [5, 6, 7]),  # nothing new since the park
++        (range(10, 30), 21, [5, 6, 7, 8, 9]),  # tokens appended since
++        (range(10, 30), 25, [5, 6]),  # output tail trimmed since
++        (range(10, 30), 12, []),  # parked mid-prefill
++        (range(10, 30), 12, [5]),  # parked mid-prefill, then sampled
++        (range(10, 30), 0, [5]),  # empty row
++    ],
++)
++def test_copy_parked_row_matches_lists(prompt, parked_len, output):
++    request = _state(prompt, output)
++    full = list(prompt) + list(output)
++    parked_tokens = np.array((full + [99] * 10)[:parked_len], dtype=np.int32)
++    if parked_len > len(full):
++        parked_tokens[len(full) :] = 99
++    tokens, is_token = _copy(request, ParkedRow(parked_tokens, []))
++    assert tokens[1, : len(full)].tolist() == full
++    assert is_token[1, : len(full)].all()
++    assert not is_token[1, len(full) :].any()
++    assert (tokens[0] == -7).all()
++
++
++def test_copy_parked_row_detects_a_stale_row():
++    request = _state(range(10, 30), [5, 6, 7])
++    parked = np.array(list(range(10, 30)) + [5, 66], dtype=np.int32)
++    with pytest.raises(RuntimeError, match="disagrees"):
++        _copy(request, ParkedRow(parked, []))
++
++
++def test_add_request_with_parked_row_equals_default():
++    batch_default, batch_parked = _input_batch(), _input_batch()
++    prompt = list(range(100, 137))
++    request = _state(prompt, [1, 2, 3, 4])
++    request.sampling_params = SamplingParams(temperature=0.0)
++    batch_default.add_request(request)
++    parked = ParkedRow(np.array(prompt + [1, 2], dtype=np.int32), [9])
++    batch_parked.add_request(request, v41_multi_seq_row=parked)
++    for name in ("token_ids_cpu", "is_token_ids", "num_tokens_no_spec"):
++        assert np.array_equal(
++            getattr(batch_default, name), getattr(batch_parked, name)
++        ), name
++    assert batch_default.req_id_to_index == batch_parked.req_id_to_index
++
++
++# -- graphs and drafts -------------------------------------------------------
++def _helper(num_slots=3, last=True, spec=True, monkeypatch=None):
++    if monkeypatch is not None:
++        monkeypatch.setattr(multi_runner, "get_pp_group", lambda: _pp(last))
++    runner = SimpleNamespace(
++        scheduler_config=SimpleNamespace(max_num_seqs=num_slots),
++        dynamic_draft_vocab_prefill_topk=0,
++        speculative_config=object() if spec else None,
++    )
++    return V41MultiSeqRunner(runner, "test"), runner
++
++
++def test_slot_descriptor(monkeypatch):
++    helper, _ = _helper(monkeypatch=monkeypatch)
++    desc = BatchDescriptor(num_tokens=6, num_reqs=1, uniform=False)
++    helper.slot = None
++    assert helper.slot_descriptor(CUDAGraphMode.FULL, desc) is desc
++    helper.slot = 0
++    assert helper.slot_descriptor(CUDAGraphMode.FULL, desc) is desc
++    helper.slot = 2
++    assert helper.slot_descriptor(CUDAGraphMode.NONE, desc) is desc
++    slot_desc = helper.slot_descriptor(CUDAGraphMode.FULL, desc)
++    assert slot_desc == dataclasses.replace(desc, graph_variant=-1002)
++
++
++@pytest.mark.parametrize(
++    ("last", "spec", "attached"),
++    [(True, True, True), (False, True, False), (True, False, False)],
++)
++def test_attach_drafts(monkeypatch, last, spec, attached):
++    helper, runner = _helper(last=last, spec=spec, monkeypatch=monkeypatch)
++    drafts = DraftTokenIds(["a"], [[1, 2]])
++    runner.take_draft_token_ids = lambda: drafts
++    output = SimpleNamespace(v41_multi_seq_drafts=None)
++    helper.attach_drafts(output)
++    assert (output.v41_multi_seq_drafts is drafts) is attached
++    if attached:
++        # No drafts this step: an empty set, so the engine takes nothing.
++        runner.take_draft_token_ids = lambda: None
++        helper.attach_drafts(output)
++        assert output.v41_multi_seq_drafts == DraftTokenIds([], [])
++
++
++def test_capture_slot_graphs(monkeypatch):
++    monkeypatch.setattr(multi_runner.torch.accelerator, "synchronize", lambda: None)
++    helper, runner = _helper(num_slots=3, monkeypatch=monkeypatch)
++    model = FakeModel()
++    runner.get_model = lambda: model
++    descs = [
++        BatchDescriptor(num_tokens=n, num_reqs=1, uniform=False) for n in (6, 3, 1)
++    ]
++    runner.cudagraph_dispatcher = SimpleNamespace(
++        get_capture_descs=lambda: [(CUDAGraphMode.FULL, descs)]
++    )
++    calls = []
++
++    def capture(desc, cudagraph_runtime_mode, batch_descriptor_override):
++        calls.append((model.binds[-1][0], desc, batch_descriptor_override))
++
++    runner._warmup_and_capture = capture
++    helper.capture_slot_graphs()
++    assert [(slot, d.num_tokens, d.graph_variant) for slot, d, _ in calls] == [
++        (1, 6, -1001),
++        (1, 3, -1001),
++        (1, 1, -1001),
++        (2, 6, -1002),
++        (2, 3, -1002),
++        (2, 1, -1002),
++    ]
++    assert all(d is o for _, d, o in calls)
++    assert model.binds[-1] == (0, True)
++    assert helper.captured_variants == [-1001, -1002]
++
++    descs.append(
++        BatchDescriptor(num_tokens=6, num_reqs=1, attention_context_bucket=8192)
++    )
++    with pytest.raises(ValueError, match="context-specialized"):
++        helper.capture_slot_graphs()
++
++
++def test_capture_slot_graphs_one_slot(monkeypatch):
++    helper, runner = _helper(num_slots=1, monkeypatch=monkeypatch)
++    runner.cudagraph_dispatcher = None  # never touched
++    helper.capture_slot_graphs()
++    assert helper.captured_variants == []
+diff --git a/vllm/envs.py b/vllm/envs.py
+index c8c66e85c..fc7f7b531 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -506,6 +506,7 @@ if TYPE_CHECKING:
+     VLLM_V41_HC_V3: str = "1"
+     VLLM_V41_HC_V3_GROUPS: str = "8"
+     VLLM_V41_HC_WINDOW: str = "2048"
++    VLLM_V41_HOT_REFILL: str = "1"
+     VLLM_V41_HITLOG_RELAXED: str = "1"
+     VLLM_V41_INDEX_DECODE_BLOCKS: str = "8"
+     VLLM_V41_INDEX_OVERLAP: str = "0"
+@@ -516,6 +517,7 @@ if TYPE_CHECKING:
+     VLLM_V41_KV_HOT_POSITIONS: str = "32768"
+     VLLM_V41_MAX_LEN: str = "16384"
+     VLLM_V41_MISS_HIST: str = "0"
++    VLLM_V41_MULTI_SEQ: str = "0"
+     VLLM_V41_PACKED_KV: str | None = None
+     VLLM_V41_PLAN_FUSE: str = "0"
+     VLLM_V41_PLAN_STATS: str | None = None
+@@ -531,6 +533,7 @@ if TYPE_CHECKING:
+     VLLM_V41_PRUNE_MIN_W: str = "0"
+     VLLM_V41_PRUNE_RENORM: str = "kept"
+     VLLM_V41_PRUNE_TOPP: str = "0"
++    VLLM_V41_RING_REACH: str = "124"
+     VLLM_V41_ROUTED_PREFILL_MAX: str = "1536"
+     VLLM_V41_ROUTER_FUSED: str = "1"
+     VLLM_V41_ROUTE_FAST: str = "0"
+@@ -7814,6 +7817,20 @@ environment_variables: dict[str, Callable[[], Any]] = {
+         acceleration_paths=(),
+         user_visible=False,
+     ),
++    "VLLM_V41_HOT_REFILL": env_var(
++        lambda: os.getenv("VLLM_V41_HOT_REFILL", "1"),
++        description=(
++            "DS-V4.1 packed KV: on a same-session prefix hit, refill the hot ring from the"
++            " host copy so rows the previous request wrote past the hit are not read as"
++            " current (1Cat #1341). '0' restores the old behaviour."
++        ),
++        category="configuration",
++        declared_default="'1'",
++        effective_default="'1'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
+     "VLLM_V41_INDEX_DECODE_BLOCKS": env_var(
+         lambda: os.getenv("VLLM_V41_INDEX_DECODE_BLOCKS", "8"),
+         description=(
+@@ -7922,6 +7939,24 @@ environment_variables: dict[str, Callable[[], Any]] = {
+         acceleration_paths=(),
+         user_visible=False,
+     ),
++    "VLLM_V41_MULTI_SEQ": env_var(
++        lambda: os.getenv("VLLM_V41_MULTI_SEQ", "0"),
++        description=(
++            "DS-V4.1, synchronous scheduling, PP 1 or 2: 1 = admit max_num_seqs"
++            " 1..4. Each engine step schedules one request (with PP2 the batch"
++            " queue then runs request B on stage 1 while request A is on stage"
++            " 2), every running request keeps its own V4.1 per-sequence state"
++            " slot (window rings, packed-KV hot/index/host rows, ratio-2 and"
++            " Engram hash state, stage commit) and its own CUDA graphs. 0"
++            " (default) keeps max_num_seqs=1."
++        ),
++        category="tuning",
++        declared_default="'0'",
++        effective_default="'0'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
+     "VLLM_V41_PACKED_KV": env_var(
+         lambda: os.getenv("VLLM_V41_PACKED_KV"),
+         description=(
+@@ -8110,6 +8145,20 @@ environment_variables: dict[str, Callable[[], Any]] = {
+         acceleration_paths=(),
+         user_visible=False,
+     ),
++    "VLLM_V41_RING_REACH": env_var(
++        lambda: os.getenv("VLLM_V41_RING_REACH", "124"),
++        description=(
++            "DS-V4.1 session prefix: a hit is admitted only within this many positions"
++            " of the last processed position (window rings hold 256; 5 drafts reach +4;"
++            " 1Cat #1341). Old value 128."
++        ),
++        category="configuration",
++        declared_default="'124'",
++        effective_default="'124'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
+     "VLLM_V41_ROUTED_PREFILL_MAX": env_var(
+         lambda: os.getenv("VLLM_V41_ROUTED_PREFILL_MAX", "1536"),
+         description=(
+@@ -20745,6 +20794,7 @@ def compile_factors(kernel_config=None, *, vllm_config=None) -> dict[str, object
+         "VLLM_V41_HC_V3",
+         "VLLM_V41_HC_V3_GROUPS",
+         "VLLM_V41_HC_WINDOW",
++        "VLLM_V41_HOT_REFILL",
+         "VLLM_V41_HITLOG_RELAXED",
+         "VLLM_V41_INDEX_DECODE_BLOCKS",
+         "VLLM_V41_INDEX_TILE_MB",
+@@ -20753,6 +20803,7 @@ def compile_factors(kernel_config=None, *, vllm_config=None) -> dict[str, object
+         "VLLM_V41_KV_HOT_POSITIONS",
+         "VLLM_V41_MAX_LEN",
+         "VLLM_V41_MISS_HIST",
++        "VLLM_V41_MULTI_SEQ",
+         "VLLM_V41_PACKED_KV",
+         "VLLM_V41_PLAN_STATS",
+         "VLLM_V41_PP_BOUNDARY_SIM",
+@@ -20763,6 +20814,7 @@ def compile_factors(kernel_config=None, *, vllm_config=None) -> dict[str, object
+         "VLLM_V41_PREFILL_DMA",
+         "VLLM_V41_PREFILL_GROUP",
+         "VLLM_V41_PREFILL_TIMING",
++        "VLLM_V41_RING_REACH",
+         "VLLM_V41_ROUTED_PREFILL_MAX",
+         "VLLM_V41_ROUTER_FUSED",
+         "VLLM_V41_ROUTE_TRACE",
+diff --git a/vllm/models/deepseek_v41/kv_store.py b/vllm/models/deepseek_v41/kv_store.py
+index 58000c477..f001c21d3 100644
+--- a/vllm/models/deepseek_v41/kv_store.py
++++ b/vllm/models/deepseek_v41/kv_store.py
+@@ -258,6 +258,55 @@ class V41PackedKV:
+             (self.staging.numel() if self.staging is not None else 0) / 2**20,
+         )
+ 
++    # -- VLLM_V41_MULTI_SEQ ---------------------------------------------
++    V41_SLOT_FIELDS = ("arena", "host_cpu", "mapped", "host", "hot", "index")
++
++    def v41_slot_state(self):
++        """This store's per-sequence rows (the bound slot's), by attribute."""
++        return {name: self.__dict__[name] for name in self.V41_SLOT_FIELDS}
++
++    def v41_add_slot(self, group):
++        """Per-sequence rows for one more concurrent request: its own host
++        arena (collective over the TP group, like __init__), hot ring and
++        index keys. The staging, selected-row and index-reduce buffers are
++        per-step scratch and stay shared. Returns the fields to bind."""
++        total = sum(self.rows[s] * C_ROW for s in self.sources)
++        arena = _share_arena(total, group)
++        host_cpu = torch.frombuffer(arena.buffer, dtype=torch.uint8)
++        self.native.host_register(host_cpu.data_ptr(), host_cpu.numel())
++        mapped = self.native.mapped_view(host_cpu, self.device.index)
++        state = {
++            "arena": arena,
++            "host_cpu": host_cpu,
++            "mapped": mapped,
++            "host": {
++                s: mapped[
++                    self.offsets[s] : self.offsets[s] + self.rows[s] * C_ROW
++                ].view(self.rows[s], C_ROW)
++                for s in self.sources
++            },
++            "hot": {
++                s: torch.zeros(
++                    self.hot_rows[s], C_ROW, dtype=torch.uint8, device=self.device
++                )
++                for s in self.sources
++            },
++            "index": {
++                s: torch.zeros(
++                    self.rows[s], I_ROW, dtype=torch.uint8, device=self.device
++                )
++                for s in self.sources
++            },
++        }
++        logger.info(
++            "V4.1 packed KV slot (VLLM_V41_MULTI_SEQ): host %.0f MiB, GPU index "
++            "%.0f MiB, hot %.0f MiB",
++            total / 2**20,
++            sum(t.numel() for t in state["index"].values()) / 2**20,
++            sum(t.numel() for t in state["hot"].values()) / 2**20,
++        )
++        return state
++
+     # -- writers --------------------------------------------------------
+     def insert_compressed(self, source, values, positions, valid_tokens):
+         """values: pre-QDQ FP16 [T, 512] (RoPE applied)."""
+@@ -274,6 +323,31 @@ class V41PackedKV:
+             )
+ 
+     # -- readers --------------------------------------------------------
++    def refill_hot(self, cached):
++        """Session hit at `cached`: rewrite the hot slots of the rows before the hit (1Cat #1341).
++
++        Readers take slot c % hot_rows as row c for c in (newest - hot_rows, newest]. The previous
++        request wrote rows past the hit (its answer and up to 4 rejected drafts); once the ring has
++        wrapped those sit in the slots of rows ~hot_rows back, which the readers treat as current.
++        The host copy (rank 0 writes every row) is authoritative for the rows before the hit.
++        Returns the number of rows copied.
++        """
++        copied = 0
++        for source, ratio in self.sources.items():
++            hi = cached // ratio - 1  # last row completed before the hit
++            rows = self.hot_rows[source]
++            if hi < 0 or hi + 256 < rows:  # stale rows (at most ~133 past hi) cannot wrap yet
++                continue
++            lo = max(0, hi - rows + 1)
++            n, start = hi - lo + 1, lo % rows
++            first = min(n, rows - start)
++            hot, host = self.hot[source], self.host[source]
++            hot[start : start + first].copy_(host[lo : lo + first], non_blocking=True)
++            if n > first:
++                hot[: n - first].copy_(host[lo + first : hi + 1], non_blocking=True)
++            copied += n
++        return copied
++
+     def fill_selected(self, source, topk, positions):
+         """Decode: copy each token's selected rows (hot or host) into `selected`."""
+         tokens = topk.shape[0]
+diff --git a/vllm/models/deepseek_v41/model.py b/vllm/models/deepseek_v41/model.py
+index 967c036ed..21756d9ec 100644
+--- a/vllm/models/deepseek_v41/model.py
++++ b/vllm/models/deepseek_v41/model.py
+@@ -61,6 +61,11 @@ from vllm.models.deepseek_v41 import dense_tm
+ from vllm.models.deepseek_v41.activations import swiglu
+ from vllm.platforms import current_platform
+ from vllm.sequence import IntermediateTensors
++from vllm.v1.core.sched.v41_multi_seq import (
++    MAX_SLOTS,
++    multi_seq_decision,
++    multi_seq_requested,
++)
+ 
+ from .attention_ops import (
+     WINDOW_RING,
+@@ -80,6 +85,10 @@ from .norm import short_rms_norm
+ from .pp_commit import StageCommit
+ from .quant_rope import apply_rope, attention_qdq, rope_table
+ 
++from vllm.logger import init_logger
++
++logger = init_logger(__name__)
++
+ _HC_FUSED = envs.VLLM_V41_HC_FUSED == "1"
+ _ROUTER_FUSED = envs.VLLM_V41_ROUTER_FUSED == "1"
+ 
+@@ -851,6 +860,9 @@ def v41_stage_bounds(config):
+ 
+ 
+ class DeepseekV41Model(nn.Module, EagleModelMixin):
++    # VLLM_V41_MULTI_SEQ: per-request device state (slots.py), or None.
++    v41_slots = None
++
+     def __init__(self, vllm_config, prefix):
+         super().__init__()
+         c = self.config = vllm_config.model_config.hf_text_config
+@@ -890,6 +902,8 @@ class DeepseekV41Model(nn.Module, EagleModelMixin):
+                 torch.device("cuda", torch.accelerator.current_device_index()),
+                 get_tp_group(),
+             )
++        # Handle for restore_prefix (VLLM_V41_HOT_REFILL, 1Cat #1341).
++        self._v41_shared = shared
+         self.norm = (
+             V41Norm(c.hidden_size) if get_pp_group().is_last_rank else PPMissingLayer()
+         )
+@@ -957,6 +971,24 @@ class DeepseekV41Model(nn.Module, EagleModelMixin):
+         path = self.vllm_config.load_config.model_loader_extra_config["engram_path"]
+         self.engram_io = SharedEngramIO(path, max_tokens=maximum)
+ 
++    def v41_init_slots(self, num_slots):
++        """VLLM_V41_MULTI_SEQ: one copy of the per-request state per slot.
++        After prepare_postload (the hash state exists) and before any forward;
++        collective over the TP group (the packed KV arenas)."""
++        from vllm.distributed import get_tp_group
++
++        from .slots import V41Slots
++
++        self.v41_slots = V41Slots(self, num_slots, get_tp_group())
++
++    def v41_bind_slot(self, slot, new_sequence):
++        assert self.v41_slots is not None
++        self.v41_slots.bind(slot)
++        if new_sequence and self.stage_commit is not None:
++            # Position 0 resets the device protocol; drop an armed forward of
++            # the slot's previous sequence (pp_commit.py).
++            self.stage_commit.reset()
++
+     def forward(
+         self, input_ids, positions, inputs_embeds=None, intermediate_tensors=None
+     ):
+@@ -1198,8 +1230,34 @@ class DeepseekV41Model(nn.Module, EagleModelMixin):
+         rings need no rewind. Later PP stages hold nothing else.
+         """
+         assert cached % 2 == 0
++        shared = getattr(self, "_v41_shared", None)
++        if not getattr(self, "_v41_restore_logged", False):
++            self._v41_restore_logged = True
++            logger.info(
++                "V4.1 restore_prefix: first session hit at %d (stage layers %d-%d, "
++                "packed store %s, VLLM_V41_HOT_REFILL=%s)",
++                cached, self.start_layer, self.end_layer,
++                shared is not None and shared.store is not None,
++                envs.VLLM_V41_HOT_REFILL,
++            )
+         if self.stage_commit is not None:
+             self.stage_commit.reset()
++        # 1Cat #1341: past the hot ring's size, the previous request's rows past
++        # the hit (answer + rejected drafts) sit in slots readers treat as
++        # current. Every PP stage has its own packed store, so refill on each.
++        if (
++            envs.VLLM_V41_HOT_REFILL == "1"
++            and shared is not None
++            and shared.store is not None
++        ):
++            copied = shared.store.refill_hot(cached)
++            if not getattr(self, "_v41_hot_refill_logged", False):
++                self._v41_hot_refill_logged = True
++                logger.info(
++                    "VLLM_V41_HOT_REFILL=1 active: session hit at %d refilled "
++                    "%d hot rows (stage layers %d-%d)",
++                    cached, copied, self.start_layer, self.end_layer,
++                )
+         if self.start_layer != 0:
+             return
+         assert self.hash_state is not None
+@@ -1232,10 +1290,15 @@ class DeepseekV41Model(nn.Module, EagleModelMixin):
+ 
+ 
+ class DeepseekV41ForCausalLM(nn.Module, SupportsEagle3, SupportsPP):
++    # VLLM_V41_MULTI_SEQ: the number of request slots (0: the knob is off).
++    v41_multi_seq_slots = 0
++
+     def __init__(self, *, vllm_config, prefix=""):
+         super().__init__()
+         c = self.config = vllm_config.model_config.hf_text_config
+         p, s = vllm_config.parallel_config, vllm_config.scheduler_config
++        # Raises for a configuration the multi-request path does not cover.
++        v41_multi_seq = multi_seq_requested() and multi_seq_decision(vllm_config)[0]
+         if (
+             not current_platform.is_cuda()
+             or not current_platform.is_device_capability(70)
+@@ -1244,7 +1307,11 @@ class DeepseekV41ForCausalLM(nn.Module, SupportsEagle3, SupportsPP):
+             or p.pipeline_parallel_size not in (1, 2)
+             or p.data_parallel_size != 1
+             or p.enable_expert_parallel
+-            or s.max_num_seqs != 1
++            or (
++                not 1 <= s.max_num_seqs <= MAX_SLOTS
++                if v41_multi_seq
++                else s.max_num_seqs != 1
++            )
+             or (s.async_scheduling and envs.VLLM_V41_ASYNC != "1")
+             or s.max_num_batched_tokens > 16384
+             or vllm_config.model_config.max_model_len
+@@ -1301,6 +1368,8 @@ class DeepseekV41ForCausalLM(nn.Module, SupportsEagle3, SupportsPP):
+         else:
+             self.lm_head = PPMissingLayer()
+         self.logits_processor = LogitsProcessor(c.vocab_size)
++        if v41_multi_seq:
++            self.v41_multi_seq_slots = s.max_num_seqs
+ 
+     def embed_input_ids(self, input_ids):
+         return self.model.embed_tokens(input_ids)
+@@ -1385,6 +1454,13 @@ class DeepseekV41ForCausalLM(nn.Module, SupportsEagle3, SupportsPP):
+         if not isinstance(self.lm_head, PPMissingLayer):
+             dense_tm.attach_lm_head(self.lm_head)
+         self.model.prepare_postload()
++        if self.v41_multi_seq_slots:
++            self.model.v41_init_slots(self.v41_multi_seq_slots)
++
++    def v41_bind_slot(self, slot, new_sequence=False):
++        """VLLM_V41_MULTI_SEQ: point the model's per-request state at slot.
++        new_sequence: the step starts a sequence at position 0 there."""
++        self.model.v41_bind_slot(slot, new_sequence)
+ 
+     def commit_speculative_state(self, accepted_counts):
+         self.model.commit(accepted_counts)
+diff --git a/vllm/models/deepseek_v41/slots.py b/vllm/models/deepseek_v41/slots.py
+new file mode 100644
+index 000000000..0240a6bd4
+--- /dev/null
++++ b/vllm/models/deepseek_v41/slots.py
+@@ -0,0 +1,130 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""VLLM_V41_MULTI_SEQ: the V4.1 model's per-sequence device state, per slot.
++
++Everything below continues one sequence from step to step, so each running
++request needs its own copy (vllm/v1/core/sched/v41_multi_seq.py):
++
++- the window rings of the ring layers and compressed anchors (attention);
++- the ratio-2 compressor states (incomplete pair, candidates, metadata);
++- the Engram hash history (first stage);
++- the pending commit buffers (the forward's length, position, prefill flag);
++- the first stage's commit protocol (``StageCommit``, PP only);
++- the packed long-context KV rows (host arena, hot ring, GPU index keys).
++
++The rest is shared: weights, per-step scratch (the store's staging and
++selected-row buffers, the index-reduce bank, ``stage_commit_count``, the
++shared attention metadata), Engram IO and everything the vLLM block pool owns
++per request (paged window and draft caches).
++
++Binding swaps the module dictionary entries that hold these tensors
++(``_buffers``, ``__dict__``); it costs a few microseconds of host time and
++runs only when the step's slot differs from the bound one. Eager code then
++reads the bound slot; CUDA graphs bake pointers, so each slot replays graphs
++captured while it was bound (the runner keys them by slot).
++"""
++
++from __future__ import annotations
++
++from typing import TYPE_CHECKING, Any
++
++import torch
++
++from vllm.logger import init_logger
++
++from .pp_commit import StageCommit
++
++if TYPE_CHECKING:
++    from .model import DeepseekV41Model
++
++logger = init_logger(__name__)
++
++_C2_FIELDS = ("partial", "candidates", "metadata", "position")
++_HASH_FIELDS = ("history", "candidates", "metadata")
++_PENDING_FIELDS = ("pending_length", "pending_position", "pending_prefill")
++
++
++def _fresh(tensor: torch.Tensor) -> torch.Tensor:
++    # Created right after load, before any forward: slot 0 holds the
++    # constructors' initial values, which every new slot starts from.
++    return tensor.detach().clone()
++
++
++class V41Slots:
++    def __init__(self, model: DeepseekV41Model, num_slots: int, group: Any):
++        from vllm.model_executor.kernels.deepseek_v41_compression import V41C2State
++
++        if not 1 <= num_slots <= 4:
++            raise ValueError(f"V4.1 slots: {num_slots} (supported 1..4)")
++        self.num_slots = num_slots
++        self.current = 0
++        # (namespace dict, key, the value of every slot); bind() writes
++        # namespace[key] = values[slot].
++        self._entries: list[tuple[dict, str, list[Any]]] = []
++        self.device_bytes = 0
++        self.host_bytes = 0
++        counts = {"ring": 0, "c2": 0, "hash": 0, "pending": 0, "commit": 0}
++
++        def add(namespace: dict, key: str, make) -> None:
++            first = namespace[key]
++            values = [first] + [make(first) for _ in range(num_slots - 1)]
++            for value in values[1:]:
++                if isinstance(value, torch.Tensor):
++                    self.device_bytes += value.numel() * value.element_size()
++            self._entries.append((namespace, key, values))
++
++        for module in model.modules():
++            if "window_ring" in module._buffers:
++                add(module._buffers, "window_ring", _fresh)
++                counts["ring"] += 1
++            if isinstance(module, V41C2State):
++                for name in _C2_FIELDS:
++                    add(module._buffers, name, _fresh)
++                counts["c2"] += 1
++        hash_state = model.hash_state
++        if hash_state is not None:
++            for name in _HASH_FIELDS:
++                add(hash_state._buffers, name, _fresh)
++            counts["hash"] = 1
++        for name in _PENDING_FIELDS:
++            add(model._buffers, name, _fresh)
++        counts["pending"] = len(_PENDING_FIELDS)
++        if model.__dict__.get("stage_commit") is not None:
++            add(model.__dict__, "stage_commit", lambda _: StageCommit())
++            counts["commit"] = 1
++        store = model.layers[model.start_layer].attn.shared.store
++        self.store_slots = 0
++        if store is not None:
++            states = [store.v41_slot_state()] + [
++                store.v41_add_slot(group) for _ in range(num_slots - 1)
++            ]
++            for name in store.V41_SLOT_FIELDS:
++                self._entries.append((store.__dict__, name, [s[name] for s in states]))
++            for state in states[1:]:
++                self.host_bytes += state["host_cpu"].numel()
++                for table in ("hot", "index"):
++                    self.device_bytes += sum(t.numel() for t in state[table].values())
++            self.store_slots = num_slots
++        self.counts = counts
++        logger.info(
++            "V4.1 slots (VLLM_V41_MULTI_SEQ): %d slots; per slot %d window "
++            "rings, %d C2 states, hash state %s, pending buffers, stage "
++            "commit %s, packed KV %s; extra GPU %.1f MiB, extra host %.0f MiB",
++            num_slots,
++            counts["ring"],
++            counts["c2"],
++            "yes" if counts["hash"] else "no",
++            "yes" if counts["commit"] else "no",
++            "yes" if store is not None else "no",
++            self.device_bytes / 2**20,
++            self.host_bytes / 2**20,
++        )
++
++    def bind(self, slot: int) -> None:
++        if slot == self.current:
++            return
++        if not 0 <= slot < self.num_slots:
++            raise ValueError(f"V4.1 slots: slot {slot} outside 0..{self.num_slots - 1}")
++        for namespace, key, values in self._entries:
++            namespace[key] = values[slot]
++        self.current = slot
+diff --git a/vllm/v1/core/kv_cache_manager.py b/vllm/v1/core/kv_cache_manager.py
+index c1e38a17a..bd2a9f94d 100644
+--- a/vllm/v1/core/kv_cache_manager.py
++++ b/vllm/v1/core/kv_cache_manager.py
+@@ -4,7 +4,7 @@
+ import itertools
+ from collections.abc import Sequence
+ from dataclasses import dataclass
+-from typing import Literal, overload
++from typing import TYPE_CHECKING, Literal, overload
+ 
+ import vllm.envs as envs
+ from vllm.distributed.kv_events import BlockStored, KVCacheEvent
+@@ -30,12 +30,17 @@ from vllm.v1.kv_cache_interface import (
+ from vllm.v1.metrics.stats import PrefixCacheStats
+ from vllm.v1.request import Request
+ 
++if TYPE_CHECKING:
++    from vllm.v1.core.sched.v41_multi_seq import V41SlotTable
++
+ logger = init_logger(__name__)
+ 
+ 
+ _V41_SESSION_PREFIX = envs.VLLM_V41_SESSION_PREFIX == "1"
+-# A hit at P needs window rows [P - 128, P) still in the 256-row rings.
+-_V41_RING_REACH = 128
++# A hit at P needs window rows [P - 128, P) still in the 256-row rings. Rejected
++# drafts (5 draft tokens) reach processed + 4 and overwrite the slots of
++# P - 128 .. P - 125 when the hit is 125-128 behind (1Cat #1341): default 124.
++_V41_RING_REACH = int(envs.VLLM_V41_RING_REACH)
+ 
+ 
+ @dataclass
+@@ -223,8 +228,13 @@ class KVCacheManager:
+ 
+     # V4.1 window rings hold only the last executed sequence's recent rows.
+     _v41_last: tuple[list[int], int] | None = None
++    # VLLM_V41_MULTI_SEQ: one session record per device-state slot instead
++    # (set by the scheduler; v41_multi_seq.py).
++    v41_multi_seq_slots: "V41SlotTable | None" = None
+ 
+     def _v41_session_hit(self, request: Request, hit: int) -> bool:
++        if self.v41_multi_seq_slots is not None:
++            return self.v41_multi_seq_slots.session_hit(request, hit)
+         last = self._v41_last
+         if last is None or hit % 2:
+             return False
+@@ -760,7 +770,9 @@ class KVCacheManager:
+         Args:
+             request: The request to free the blocks.
+         """
+-        if _V41_SESSION_PREFIX:
++        if self.v41_multi_seq_slots is not None:
++            self.v41_multi_seq_slots.release(request)
++        elif _V41_SESSION_PREFIX:
+             self._v41_last = (list(request.all_token_ids), request.num_computed_tokens)
+         self.coordinator.free(request.request_id)
+ 
+diff --git a/vllm/v1/core/sched/output.py b/vllm/v1/core/sched/output.py
+index 7f65a0320..83a69eab7 100644
+--- a/vllm/v1/core/sched/output.py
++++ b/vllm/v1/core/sched/output.py
+@@ -262,6 +262,10 @@ class SchedulerOutput:
+     # Scheduler-local; cleared after connector metadata is built.
+     boundary_state_offloads: dict[str, list[tuple[int, int, int]]] | None = None
+ 
++    # VLLM_V41_MULTI_SEQ: {request_id: device-state slot} for the step's
++    # scheduled request (v41_multi_seq.py). None with the knob off.
++    v41_slots: dict[str, int] | None = None
++
+     @classmethod
+     def make_empty(cls) -> "SchedulerOutput":
+         return cls(
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index 84523c6fc..13c6c0ecd 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -54,6 +54,11 @@ from vllm.v1.core.sched.request_queue import (
+     create_request_queue,
+ )
+ from vllm.v1.core.sched.utils import check_stop, remove_all
++from vllm.v1.core.sched.v41_multi_seq import (
++    V41SchedulerMultiSeq,
++    multi_seq_decision,
++    multi_seq_requested,
++)
+ from vllm.v1.engine import EngineCoreEventType, EngineCoreOutput, EngineCoreOutputs
+ from vllm.v1.kv_cache_interface import KVCacheConfig, MambaSpec
+ from vllm.v1.metrics.perf import ModelMetrics, PerfStats
+@@ -82,6 +87,8 @@ class Scheduler(SchedulerInterface):
+     # built without __init__ (unit-test stubs) on the default path.
+     pp_keep_batch: bool = False
+     _pp_keep_batch_kept_logged: bool = False
++    # VLLM_V41_MULTI_SEQ (set in __init__ when the knob is on for V4.1).
++    v41_multi_seq: V41SchedulerMultiSeq | None = None
+ 
+     def __init__(
+         self,
+@@ -312,6 +319,8 @@ class Scheduler(SchedulerInterface):
+                 "path runs.",
+                 pp_keep_batch_reason,
+             )
++        if multi_seq_requested():
++            self._v41_init_multi_seq(vllm_config)
+         self.current_step = 0
+         self.scheduler_reserve_full_isl = (
+             self.scheduler_config.scheduler_reserve_full_isl
+@@ -704,11 +713,20 @@ class Scheduler(SchedulerInterface):
+                 self.max_num_scheduled_tokens // num_eligible_reqs,
+             )
+ 
++        if self.v41_multi_seq is not None:
++            self._v41_begin_step()
++
+         # First, schedule the RUNNING requests.
+         req_index = 0
+         while req_index < len(self.running) and token_budget > 0:
+             request = self.running[req_index]
+ 
++            if self.v41_multi_seq is not None and self.v41_multi_seq.skip_running(
++                request
++            ):
++                req_index += 1
++                continue
++
+             if self.current_step < request.next_decode_eligible_step:
+                 req_index += 1
+                 continue
+@@ -1008,6 +1026,10 @@ class Scheduler(SchedulerInterface):
+             step_skipped_waiting = create_request_queue(self.policy)
+ 
+             while (self.waiting or self.skipped_waiting) and token_budget > 0:
++                if self.v41_multi_seq is not None and self.v41_multi_seq.skip_waiting(
++                    len(num_scheduled_tokens)
++                ):
++                    break
+                 if len(self.running) == self.max_num_running_reqs:
+                     break
+ 
+@@ -1351,7 +1373,11 @@ class Scheduler(SchedulerInterface):
+             )
+ 
+         # Record the request ids that were scheduled in this step.
+-        if self.pp_keep_batch and not num_scheduled_tokens:
++        if self.v41_multi_seq is not None:
++            v41_slots = self._v41_end_step(
++                num_scheduled_tokens, scheduled_new_reqs, scheduled_resumed_reqs
++            )
++        elif self.pp_keep_batch and not num_scheduled_tokens:
+             self._keep_prev_step_record_on_empty_step()
+         else:
+             self.prev_step_scheduled_req_ids.clear()
+@@ -1408,6 +1434,8 @@ class Scheduler(SchedulerInterface):
+                 boundary_state_offloads if self.connector is not None else None
+             ),
+         )
++        if self.v41_multi_seq is not None:
++            scheduler_output.v41_slots = v41_slots
+ 
+         # NOTE(Kuntai): this function is designed for multiple purposes:
+         # 1. Plan the KV cache store
+@@ -1544,6 +1572,61 @@ class Scheduler(SchedulerInterface):
+         if self.log_stats:
+             session.record_event(EngineCoreEventType.QUEUED)
+ 
++    def _v41_init_multi_seq(self, vllm_config: VllmConfig) -> None:
++        """VLLM_V41_MULTI_SEQ: one slot per running request, one request per
++        step (v41_multi_seq.py). Raises for an unsupported V4.1 config."""
++        enabled, reason = multi_seq_decision(vllm_config)
++        if not enabled:
++            logger.warning(
++                "VLLM_V41_MULTI_SEQ=1 ignored (scheduler): %s; the default path "
++                "runs.",
++                reason,
++            )
++            return
++        from vllm.v1.core import kv_cache_manager
++
++        self.v41_multi_seq = V41SchedulerMultiSeq(
++            self.max_num_running_reqs,
++            kv_cache_manager._V41_RING_REACH,
++            kv_cache_manager._V41_SESSION_PREFIX,
++        )
++        self.kv_cache_manager.v41_multi_seq_slots = self.v41_multi_seq.slots
++        logger.info("VLLM_V41_MULTI_SEQ=1 active (scheduler): %s.", reason)
++
++    def _v41_begin_step(self) -> None:
++        multi = self.v41_multi_seq
++        assert multi is not None
++        multi.begin_step(
++            self.running,
++            bool(self.waiting or self.skipped_waiting),
++            len(self.running) < self.max_num_running_reqs
++            and self._pause_state == PauseState.UNPAUSED,
++            self.current_step,
++        )
++
++    def _v41_end_step(
++        self,
++        num_scheduled_tokens: dict[str, int],
++        scheduled_new_reqs: list[Request],
++        scheduled_resumed_reqs: list[Request],
++    ) -> dict[str, int]:
++        """Slots for the admitted requests, the LRU stamps and the held
++        record (the runner keeps every running request it has seen)."""
++        multi = self.v41_multi_seq
++        assert multi is not None
++        v41_slots = multi.end_step(
++            num_scheduled_tokens.keys(),
++            itertools.chain(scheduled_new_reqs, scheduled_resumed_reqs),
++            self.current_step,
++        )
++        running_ids = {request.request_id for request in self.running}
++        multi.held_record(
++            self.prev_step_scheduled_req_ids, num_scheduled_tokens.keys(), running_ids
++        )
++        for req_id in [r for r in multi.last_step if r not in running_ids]:
++            multi.forget(req_id)
++        return v41_slots
++
+     def _keep_prev_step_record_on_empty_step(self) -> None:
+         """VLLM_V41_PP_KEEP_BATCH: this step scheduled no request at all.
+ 
+diff --git a/vllm/v1/core/sched/v41_multi_seq.py b/vllm/v1/core/sched/v41_multi_seq.py
+new file mode 100644
+index 000000000..ba0ab8e41
+--- /dev/null
++++ b/vllm/v1/core/sched/v41_multi_seq.py
+@@ -0,0 +1,354 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""VLLM_V41_MULTI_SEQ: serve up to four DeepSeek-V4.1 requests at once.
++
++The V4.1 package keeps per-request state on the device outside the vLLM block
++pool: the window rings, the ratio-2 compressor states, the Engram hash
++history, the pending commit buffers, the first stage's commit protocol and the
++packed long-context KV store (host arena, hot ring, GPU index keys). All of it
++is sized for one request, so the model refuses ``max_num_seqs != 1``.
++
++With the knob on, every running request owns one *slot*: a private copy of
++that state. A step still runs exactly one request (M <= 6 verify rows, the
++fast single-request kernels and their numerics), so nothing in the model's
++forward changes. With pipeline parallelism (PP=2) the engine's batch queue
++already keeps two steps in flight; two running requests then alternate, one
++in each stage, instead of one request leaving a stage idle on every other
++step. Three or four requests time-slice the same two stages.
++
++Pieces, all keyed off this module's decision:
++
++- scheduler (``V41SchedulerMultiSeq``): at most one request per step, chosen
++  least-recently-scheduled among the running requests that can run, with a
++  turn for waiting requests; a slot per running request, released when its
++  blocks are freed (finish, abort, preemption), sent to the workers as
++  ``SchedulerOutput.v41_slots``; the previous-step record keeps every running
++  request the runner holds, so a request's token history is not resent after
++  another request's step; one session-prefix record per slot.
++- runner (``vllm/v1/worker/v41_multi_seq_runner.py``): binds the step's slot
++  before the forward, parks an unscheduled request's token row instead of
++  rebuilding it from Python lists, replays one CUDA graph set per slot, and
++  hands each step's drafts back with its output.
++- model (``vllm/models/deepseek_v41/slots.py``): the slot copies and the
++  binding (dictionary swaps, only when the slot changes).
++
++With the knob off, nothing here runs and the one-request path is unchanged.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Iterable, Sequence
++from typing import TYPE_CHECKING
++
++import vllm.envs as envs
++
++if TYPE_CHECKING:
++    from vllm.config import VllmConfig
++    from vllm.v1.request import Request
++
++KNOB = "VLLM_V41_MULTI_SEQ"
++MAX_SLOTS = 4
++# Slot k > 0 replays CUDA graphs keyed by graph_variant SLOT_VARIANT_BASE - k.
++# Negative variants get their own graph memory pool (cuda_graph.py); slot 0
++# keeps the default variant, so its graphs are the ones captured today.
++SLOT_VARIANT_BASE = -1000
++V41_MODEL_TYPE = "deepseek_v41_text"
++
++
++def multi_seq_requested() -> bool:
++    """Whether the knob is set to 1. Any value other than unset, 0 or 1 is an
++    error, so a typo cannot leave the operator believing the path ran."""
++    value = (envs.VLLM_V41_MULTI_SEQ or "0").strip()
++    if value not in ("0", "1"):
++        raise ValueError(f"{KNOB} must be 0 or 1, got {value!r}")
++    return value == "1"
++
++
++def is_v41_model(vllm_config: VllmConfig) -> bool:
++    model_config = vllm_config.model_config
++    if model_config is None:
++        return False
++    text_config = getattr(model_config, "hf_text_config", None)
++    return getattr(text_config, "model_type", None) == V41_MODEL_TYPE
++
++
++def _unsupported(vllm_config: VllmConfig) -> list[str]:
++    """Every configuration this path does not cover, in words."""
++    parallel_config = vllm_config.parallel_config
++    scheduler_config = vllm_config.scheduler_config
++    model_config = vllm_config.model_config
++    speculative_config = vllm_config.speculative_config
++    problems = []
++    max_num_seqs = scheduler_config.max_num_seqs
++    if not 1 <= max_num_seqs <= MAX_SLOTS:
++        problems.append(f"max_num_seqs={max_num_seqs} (supported: 1..{MAX_SLOTS})")
++    if scheduler_config.async_scheduling:
++        problems.append(
++            "async scheduling (its PP path rebuilds requests from the history "
++            "and broadcasts drafts by batch row)"
++        )
++    if parallel_config.pipeline_parallel_size not in (1, 2):
++        problems.append(
++            f"pipeline_parallel_size={parallel_config.pipeline_parallel_size}"
++        )
++    if vllm_config.use_v2_model_runner:
++        problems.append("the V2 model runner (VLLM_USE_V2_MODEL_RUNNER)")
++    if parallel_config.distributed_executor_backend == "external_launcher":
++        problems.append("the external_launcher backend")
++    if vllm_config.kv_transfer_config is not None:
++        problems.append("a KV connector")
++    if vllm_config.ec_transfer_config is not None:
++        problems.append("an encoder-cache connector")
++    if vllm_config.lora_config is not None:
++        problems.append("LoRA")
++    if model_config is not None and getattr(model_config, "enable_prompt_embeds", 0):
++        problems.append("prompt embeddings")
++    if speculative_config is not None:
++        if speculative_config.use_ngram_gpu():
++            problems.append("ngram_gpu drafting (GPU token tensors per batch row)")
++        if speculative_config.use_dflash_ddtree():
++            problems.append("dflash_ddtree (tree payloads per batch row)")
++    if int(envs.VLLM_V41_TRUNC_CUTOFF or 0):
++        problems.append(
++            "VLLM_V41_TRUNC_CUTOFF (decided on the previous step's batch, which "
++            "can be another request)"
++        )
++    return problems
++
++
++def multi_seq_decision(vllm_config: VllmConfig) -> tuple[bool, str]:
++    """Return ``(enabled, reason)``; the same answer in every process.
++
++    Knob off: ``(False, "")``. Knob on for a model other than V4.1: ``(False,
++    reason)``, the knob is inert. Knob on for V4.1: ``(True, reason)``, or a
++    ``ValueError`` naming every unsupported setting (fail closed: never fall
++    back silently to a path the operator did not ask for).
++    """
++    if not multi_seq_requested():
++        return False, ""
++    if not is_v41_model(vllm_config):
++        return False, "the model is not DeepSeek-V4.1"
++    problems = _unsupported(vllm_config)
++    if problems:
++        raise ValueError(
++            f"{KNOB}=1 does not support: "
++            + "; ".join(problems)
++            + f". Unset {KNOB} or change the configuration."
++        )
++    pp_size = vllm_config.parallel_config.pipeline_parallel_size
++    max_num_seqs = vllm_config.scheduler_config.max_num_seqs
++    overlap = (
++        "two pipeline stages overlap two requests"
++        if pp_size == 2
++        else "PP=1: requests time-slice one stage (no overlap)"
++    )
++    return True, (
++        f"{max_num_seqs} slot(s), one request per step (M<=6 single-request "
++        f"kernels), {overlap}"
++    )
++
++
++def slot_variant(slot: int) -> int:
++    """CUDA graph variant of a slot (0 keeps today's graphs)."""
++    if not 0 <= slot < MAX_SLOTS:
++        raise ValueError(f"{KNOB}: slot {slot} outside 0..{MAX_SLOTS - 1}")
++    return 0 if slot == 0 else SLOT_VARIANT_BASE - slot
++
++
++def _session_tokens_match(request: Request, tokens: Sequence[int], hit: int) -> bool:
++    return list(request.all_token_ids)[:hit] == list(tokens[:hit])
++
++
++class V41SlotTable:
++    """Which running request owns which slot, plus one session record per slot.
++
++    A slot's device state continues the last sequence that ran in it, so a
++    same-session prefix hit is admissible only in the slot that ran that
++    session, and only while the slot is free.
++    """
++
++    def __init__(self, num_slots: int, ring_reach: int, record_sessions: bool):
++        if not 1 <= num_slots <= MAX_SLOTS:
++            raise ValueError(f"{KNOB}: {num_slots} slots (supported 1..{MAX_SLOTS})")
++        self.num_slots = num_slots
++        self.ring_reach = ring_reach
++        self.record_sessions = record_sessions
++        self.owner: list[str | None] = [None] * num_slots
++        self.by_req: dict[str, int] = {}
++        # Per slot: (all token ids, num computed tokens) of the last request
++        # freed from it, like KVCacheManager._v41_last for one request.
++        self.records: list[tuple[list[int], int] | None] = [None] * num_slots
++        # Request id -> the free slot its admitted session hit continues.
++        self.matched: dict[str, int] = {}
++
++    def slot_of(self, req_id: str) -> int | None:
++        return self.by_req.get(req_id)
++
++    def free_slots(self) -> list[int]:
++        return [k for k, owner in enumerate(self.owner) if owner is None]
++
++    def session_hit(self, request: Request, hit: int) -> bool:
++        """KVCacheManager._v41_session_hit, per slot. Remembers the slot."""
++        self.matched.pop(request.request_id, None)
++        if hit % 2:
++            return False
++        for slot in self.free_slots():
++            record = self.records[slot]
++            if record is None:
++                continue
++            tokens, processed = record
++            if not processed - self.ring_reach <= hit <= processed:
++                continue
++            if _session_tokens_match(request, tokens, hit):
++                self.matched[request.request_id] = slot
++                return True
++        return False
++
++    def assign(self, request: Request) -> int:
++        """Give an admitted (new or resumed) request its slot."""
++        req_id = request.request_id
++        if req_id in self.by_req:
++            raise RuntimeError(f"{KNOB}: request {req_id} already owns a slot")
++        free = self.free_slots()
++        if not free:
++            raise RuntimeError(
++                f"{KNOB}: no free slot for request {req_id} "
++                f"({self.num_slots} slots, owners {self.owner})"
++            )
++        matched = self.matched.pop(req_id, None)
++        if request.num_computed_tokens > 0:
++            # A prefix hit continues one slot's device state; any other slot
++            # would read another sequence's rings and packed rows.
++            if matched is None or matched not in free:
++                raise RuntimeError(
++                    f"{KNOB}: request {req_id} starts at "
++                    f"{request.num_computed_tokens} cached tokens without a "
++                    "free slot that holds that session"
++                )
++            slot = matched
++        else:
++            # Fresh prefill: prefer a slot without a session record worth
++            # keeping (an unused slot), else the lowest free slot.
++            unused = [k for k in free if self.records[k] is None]
++            slot = unused[0] if unused else free[0]
++        self.owner[slot] = req_id
++        self.by_req[req_id] = slot
++        return slot
++
++    def release(self, request: Request) -> None:
++        """Blocks freed (finish, abort, preemption): record and free the slot."""
++        req_id = request.request_id
++        self.matched.pop(req_id, None)
++        slot = self.by_req.pop(req_id, None)
++        if slot is None:
++            return
++        self.owner[slot] = None
++        if self.record_sessions:
++            self.records[slot] = (
++                list(request.all_token_ids),
++                request.num_computed_tokens,
++            )
++        else:
++            self.records[slot] = None
++
++
++_WAITING = "waiting"
++
++
++class V41SchedulerMultiSeq:
++    """Scheduler side: the step policy, slots and the held record."""
++
++    def __init__(self, num_slots: int, ring_reach: int, record_sessions: bool):
++        self.slots = V41SlotTable(num_slots, ring_reach, record_sessions)
++        self.last_step: dict[str, int] = {}
++        self.turn: str | None = None  # a running request id, _WAITING or None
++        self.last_turn_running = False
++        self.waiting_backoff = False
++
++    # -- the step policy -------------------------------------------------
++    @staticmethod
++    def can_run(request: Request, current_step: int) -> bool:
++        """A running request with work and no step of it still in flight."""
++        if current_step < request.next_decode_eligible_step:
++            return False
++        return (
++            request.num_tokens_with_spec
++            + request.num_output_placeholders
++            - request.num_computed_tokens
++            > 0
++        )
++
++    def begin_step(
++        self,
++        running: Iterable[Request],
++        has_waiting: bool,
++        can_admit: bool,
++        current_step: int,
++    ) -> None:
++        """Choose this step's turn: one running request or the waiting queue.
++
++        Waiting requests get every other turn (and any turn when no running
++        request can run); a waiting turn that schedules nothing hands the
++        next turn to the running requests, so a full KV pool cannot stall
++        the requests that would free it. Among running requests, the least
++        recently scheduled goes first.
++        """
++        candidates = [r for r in running if self.can_run(r, current_step)]
++        admit = has_waiting and can_admit and not self.waiting_backoff
++        self.waiting_backoff = False
++        if admit and (self.last_turn_running or not candidates):
++            self.turn = _WAITING
++            self.last_turn_running = False
++            return
++        if candidates:
++            chosen = min(candidates, key=lambda r: self.last_step.get(r.request_id, -1))
++            self.turn = chosen.request_id
++            self.last_turn_running = True
++            return
++        self.turn = None
++
++    def skip_running(self, request: Request) -> bool:
++        return self.turn != request.request_id
++
++    def skip_waiting(self, num_scheduled: int) -> bool:
++        return self.turn != _WAITING or num_scheduled > 0
++
++    def end_step(
++        self,
++        scheduled_req_ids: Iterable[str],
++        new_or_resumed: Iterable[Request],
++        current_step: int,
++    ) -> dict[str, int]:
++        """After a step: slots for newly admitted requests, the LRU stamps and
++        the step's ``v41_slots`` (request id -> slot, every scheduled one)."""
++        scheduled = list(scheduled_req_ids)
++        if len(scheduled) > 1:
++            raise RuntimeError(
++                f"{KNOB}: the scheduler scheduled {len(scheduled)} requests in "
++                "one step; V4.1 runs one request per step"
++            )
++        for request in new_or_resumed:
++            self.slots.assign(request)
++        if self.turn == _WAITING and not scheduled:
++            self.waiting_backoff = True
++        slots = {}
++        for req_id in scheduled:
++            slot = self.slots.slot_of(req_id)
++            if slot is None:
++                raise RuntimeError(f"{KNOB}: scheduled request {req_id} has no slot")
++            slots[req_id] = slot
++            self.last_step[req_id] = current_step
++        return slots
++
++    def forget(self, req_id: str) -> None:
++        self.last_step.pop(req_id, None)
++
++    @staticmethod
++    def held_record(
++        previous: set[str], scheduled: Iterable[str], running_ids: set[str]
++    ) -> None:
++        """The runner holds every running request it has seen (in its batch
++        or parked); a preempted or finished request leaves the record, so a
++        resumed request is never treated as held. Updates ``previous``."""
++        previous.update(scheduled)
++        previous.intersection_update(running_ids)
+diff --git a/vllm/v1/cudagraph_dispatcher.py b/vllm/v1/cudagraph_dispatcher.py
+index 257f5db2a..8d2f0aa9c 100644
+--- a/vllm/v1/cudagraph_dispatcher.py
++++ b/vllm/v1/cudagraph_dispatcher.py
+@@ -20,6 +20,7 @@ from vllm.platforms.sm70.graph_policy import (
+     parse_context_buckets,
+     resolve_graph_plan,
+ )
++from vllm.v1.core.sched.v41_multi_seq import multi_seq_decision, multi_seq_requested
+ 
+ logger = init_logger(__name__)
+ 
+@@ -83,8 +84,14 @@ class CudagraphDispatcher:
+     runnable without cudagraph (if the mode does not match or mode is NONE).
+     """
+ 
++    # VLLM_V41_MULTI_SEQ: every step holds one request, so graph keys use one
++    # request whatever max_num_seqs is (v41_multi_seq.py).
++    v41_multi_seq = False
++
+     def __init__(self, vllm_config: VllmConfig):
+         self.vllm_config = vllm_config
++        if multi_seq_requested():
++            self.v41_multi_seq = multi_seq_decision(vllm_config)[0]
+         self.compilation_config = vllm_config.compilation_config
+         self.uniform_decode_query_len = (
+             1
+@@ -205,6 +212,8 @@ class CudagraphDispatcher:
+         num_active_loras: int = 0,
+     ) -> BatchDescriptor:
+         max_num_seqs = self.vllm_config.scheduler_config.max_num_seqs
++        if self.v41_multi_seq:
++            max_num_seqs = 1
+         uniform_decode_query_len = self.uniform_decode_query_len
+         num_tokens_padded = self._bs_to_padded_graph_size[num_tokens]
+ 
+@@ -406,9 +415,10 @@ class CudagraphDispatcher:
+             cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
+             and cudagraph_mode.separate_routine()
+         ):
+-            max_num_tokens = (
+-                uniform_decode_query_len
+-                * self.vllm_config.scheduler_config.max_num_seqs
++            max_num_tokens = uniform_decode_query_len * (
++                1
++                if self.v41_multi_seq
++                else self.vllm_config.scheduler_config.max_num_seqs
+             )
+             assert self.compilation_config.cudagraph_capture_sizes is not None, (
+                 "Cudagraph capture sizes must be set when full mode is enabled."
+diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
+index 1d17c7ecd..a57c57a81 100644
+--- a/vllm/v1/engine/core.py
++++ b/vllm/v1/engine/core.py
+@@ -726,7 +726,13 @@ class EngineCore:
+         )
+         if trace_log:
+             trace_update_ms = (time.perf_counter() - trace_update_t0) * 1000.0
+-        if (
++        if model_output.v41_multi_seq_drafts is not None:
++            # VLLM_V41_MULTI_SEQ: the step's drafts came with its output. With
++            # requests interleaved, a later step of another request is always
++            # in flight, so the take below would never run (and its RPC would
++            # wait for that step).
++            self.scheduler.update_draft_token_ids(model_output.v41_multi_seq_drafts)
++        elif (
+             self.use_spec_decode
+             and not self.async_scheduling
+             and not deferred_scheduler_output
+diff --git a/vllm/v1/outputs.py b/vllm/v1/outputs.py
+index 8c6c4edca..d47c116f9 100644
+--- a/vllm/v1/outputs.py
++++ b/vllm/v1/outputs.py
+@@ -297,6 +297,10 @@ class ModelRunnerOutput:
+     # Completed GPU timing only; CUDA events never cross process boundaries.
+     mixed_prefill_timing: MixedPrefillTiming | None = None
+ 
++    # VLLM_V41_MULTI_SEQ with a batch queue: this step's drafts, so the engine
++    # attaches them to the request whose step this is. None otherwise.
++    v41_multi_seq_drafts: "DraftTokenIds | None" = None
++
+     @staticmethod
+     def with_kv_conn_output_only(
+         kv_connector_output: KVConnectorOutput | None,
+diff --git a/vllm/v1/worker/gpu_input_batch.py b/vllm/v1/worker/gpu_input_batch.py
+index 3aae57f00..53b35a60d 100644
+--- a/vllm/v1/worker/gpu_input_batch.py
++++ b/vllm/v1/worker/gpu_input_batch.py
+@@ -3,7 +3,7 @@
+ # Datastructures defining a GPU input batch
+ 
+ from dataclasses import dataclass
+-from typing import cast
++from typing import TYPE_CHECKING, cast
+ 
+ import numpy as np
+ import torch
+@@ -30,6 +30,9 @@ from vllm.v1.sample.thinking_budget_state import (
+ from vllm.v1.utils import copy_slice
+ from vllm.v1.worker.block_table import MultiGroupBlockTable
+ 
++if TYPE_CHECKING:
++    from vllm.v1.worker.v41_multi_seq_runner import ParkedRow
++
+ 
+ @dataclass
+ class CachedRequestState:
+@@ -346,6 +349,7 @@ class InputBatch:
+     def add_request(
+         self,
+         request: "CachedRequestState",
++        v41_multi_seq_row: "ParkedRow | None" = None,
+     ) -> int:
+         req_index = self._register_add_request(request)
+ 
+@@ -368,7 +372,19 @@ class InputBatch:
+         self.num_prompt_tokens[req_index] = num_prompt_tokens
+         start_idx = num_prompt_tokens
+         end_idx = start_idx + len(request.output_token_ids)
+-        if request.prompt_token_ids is not None:
++        if v41_multi_seq_row is not None:
++            # VLLM_V41_MULTI_SEQ: a parked request's row is a memcpy, not a
++            # conversion of its whole context from lists (no prompt embeds).
++            from vllm.v1.worker.v41_multi_seq_runner import copy_parked_row
++
++            copy_parked_row(
++                self.token_ids_cpu,
++                self.is_token_ids,
++                req_index,
++                request,
++                v41_multi_seq_row,
++            )
++        elif request.prompt_token_ids is not None:
+             self.token_ids_cpu[req_index, :num_prompt_tokens] = request.prompt_token_ids
+             if request.prompt_is_token_ids is not None:
+                 self.is_token_ids[req_index, :num_prompt_tokens] = (
+@@ -380,8 +396,9 @@ class InputBatch:
+             self.is_token_ids[req_index, :num_prompt_tokens] = False
+         if request.prompt_embeds is not None:
+             self.req_prompt_embeds[req_index] = request.prompt_embeds
+-        self.token_ids_cpu[req_index, start_idx:end_idx] = request.output_token_ids
+-        self.is_token_ids[req_index, start_idx:end_idx] = True
++        if v41_multi_seq_row is None:
++            self.token_ids_cpu[req_index, start_idx:end_idx] = request.output_token_ids
++            self.is_token_ids[req_index, start_idx:end_idx] = True
+         # Number of tokens without spec decode tokens.
+         self.num_tokens_no_spec[req_index] = request.num_tokens
+ 
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index ce0675193..863597889 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -153,6 +153,7 @@ from vllm.v1.attention.backends.utils import (
+ )
+ from vllm.v1.core.sched.output import NewRequestData
+ from vllm.v1.core.sched.pp_keep_batch import pp_keep_batch_decision
++from vllm.v1.core.sched.v41_multi_seq import multi_seq_decision, multi_seq_requested
+ from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
+ from vllm.v1.kv_cache_interface import (
+     AttentionSpec,
+@@ -269,6 +270,7 @@ if TYPE_CHECKING:
+     from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
+     from vllm.v1.spec_decode.ngram_proposer import NgramProposer
+     from vllm.v1.worker.encoder_cudagraph import EncoderCudaGraphManager
++    from vllm.v1.worker.v41_multi_seq_runner import V41MultiSeqRunner
+ 
+ from vllm.model_executor.warmup.plan import (
+     run_warmup_tasks,
+@@ -1098,6 +1100,8 @@ class GPUModelRunner(
+     # built without __init__ (unit-test stubs) on the default path.
+     pp_keep_batch: bool = False
+     _pp_keep_batch_kept_logged: bool = False
++    # VLLM_V41_MULTI_SEQ (set in __init__ when the knob is on for V4.1).
++    v41_multi_seq: "V41MultiSeqRunner | None" = None
+ 
+     @contextmanager
+     def _dflash_ddtree_target_forward_profile_scope(
+@@ -1367,6 +1371,8 @@ class GPUModelRunner(
+                 "acceptance validation.",
+                 self.dynamic_draft_vocab_prefill_topk,
+             )
++        if multi_seq_requested():
++            self._v41_init_multi_seq()
+         _maybe_log_sm70_decode_event_trace_config(
+             use_async_scheduling=self.use_async_scheduling,
+             greedy_token_fastpath=self.sm70_greedy_token_fastpath,
+@@ -2193,6 +2199,23 @@ class GPUModelRunner(
+             self.async_output_copy_stream = stream
+         return stream
+ 
++    def _v41_init_multi_seq(self) -> None:
++        """VLLM_V41_MULTI_SEQ: slots, parked rows, per-slot graphs and drafts
++        with the output (v41_multi_seq_runner.py)."""
++        enabled, reason = multi_seq_decision(self.vllm_config)
++        if not enabled:
++            logger.warning(
++                "VLLM_V41_MULTI_SEQ=1 ignored (runner): %s; the default path runs.",
++                reason,
++            )
++            return
++        from vllm.v1.worker.v41_multi_seq_runner import V41MultiSeqRunner
++
++        self.v41_multi_seq = V41MultiSeqRunner(self, reason)
++        self.v41_multi_seq.log_activation(
++            self.compilation_config.cudagraph_capture_sizes
++        )
++
+     def _pp_prepend_accepted_drafts(
+         self,
+         req_id: str,
+@@ -2258,6 +2281,10 @@ class GPUModelRunner(
+         The SamplingMetadata is updated and copied to the GPU if there is a
+         new/resumed/paused/finished request in the batch.
+         """
++        if self.v41_multi_seq is not None:
++            # VLLM_V41_MULTI_SEQ: bind the step's slot before anything below
++            # touches the model's per-request state.
++            self.v41_multi_seq.begin_update(scheduler_output)
+         self._dynamic_draft_vocab_prefill_bootstrap.clear_finished_requests(
+             scheduler_output.finished_req_ids
+         )
+@@ -2325,6 +2352,8 @@ class GPUModelRunner(
+         # have low request overlap (e.g., alternating between two distinct
+         # sets of requests), this optimization becomes very inefficient.
+         for req_id in unscheduled_req_ids:
++            if self.v41_multi_seq is not None:
++                self.v41_multi_seq.park(req_id, scheduler_output)
+             self.input_batch.remove_request(req_id)
+ 
+         is_ngram_gpu = (
+@@ -2508,14 +2537,24 @@ class GPUModelRunner(
+                     # between the first-stage worker and the last-stage worker.
+                     new_token_ids = req_data.new_token_ids[i]
+                     num_sent_tokens = len(new_token_ids)
+-                    new_token_ids = self._pp_prepend_accepted_drafts(
+-                        req_id,
+-                        req_state,
+-                        req_index,
+-                        num_computed_tokens,
+-                        new_token_ids,
+-                        req_data.all_token_ids,
+-                    )
++                    if (
++                        self.v41_multi_seq is not None
++                        and req_index is None
++                        and self.v41_multi_seq.is_parked(req_id)
++                    ):
++                        # VLLM_V41_MULTI_SEQ: its drafts were parked with its row.
++                        new_token_ids = self.v41_multi_seq.prepend_parked_drafts(
++                            req_id, req_state, num_computed_tokens, new_token_ids
++                        )
++                    else:
++                        new_token_ids = self._pp_prepend_accepted_drafts(
++                            req_id,
++                            req_state,
++                            req_index,
++                            num_computed_tokens,
++                            new_token_ids,
++                            req_data.all_token_ids,
++                        )
+                     # Add the sampled token(s) from the previous step (if any).
+                     # This doesn't include "unverified" tokens like spec tokens.
+                     num_new_tokens = (
+@@ -2555,6 +2594,11 @@ class GPUModelRunner(
+                 # The request is resumed from preemption.
+                 # Replace the existing block IDs with the new ones.
+                 req_state.block_ids = new_block_ids
++                if self.v41_multi_seq is not None and num_computed_tokens > 0:
++                    # VLLM_V41_MULTI_SEQ: a prefix hit in its own slot.
++                    self.v41_multi_seq.restore_resumed(
++                        num_computed_tokens, req_data.all_token_ids[req_id]
++                    )
+ 
+             if req_index is None:
+                 # The request is not in the persistent batch.
+@@ -2614,7 +2658,12 @@ class GPUModelRunner(
+         # Add the new or resumed requests to the persistent batch.
+         # The smaller empty indices are filled first.
+         for request in reqs_to_add:
+-            self.input_batch.add_request(request)
++            if self.v41_multi_seq is not None:
++                self.input_batch.add_request(
++                    request, v41_multi_seq_row=self.v41_multi_seq.take_row(request)
++                )
++            else:
++                self.input_batch.add_request(request)
+             self.input_batch.update_req_spec_token_ids(request, scheduled_spec_tokens)
+ 
+         # Condense the batched states if there are gaps left by removed requests
+@@ -8818,6 +8867,11 @@ class GPUModelRunner(
+                 trace_batch_desc_ms = (
+                     time.perf_counter() - trace_batch_desc_t0
+                 ) * 1000.0
++            if self.v41_multi_seq is not None:
++                # VLLM_V41_MULTI_SEQ: replay the graphs of the bound slot.
++                batch_desc = self.v41_multi_seq.slot_descriptor(
++                    cudagraph_mode, batch_desc
++                )
+ 
+             logger.debug(
+                 "Running batch with cudagraph_mode: %s, batch_descriptor: %s, "
+@@ -9711,6 +9765,8 @@ class GPUModelRunner(
+                 trace_output_ms = (time.perf_counter() - trace_output_t0) * 1000.0
+ 
+         if not self.use_async_scheduling:
++            if self.v41_multi_seq is not None:
++                self.v41_multi_seq.attach_drafts(output)
+             if self.routed_experts_initialized:
+                 # Sync path: D2H was issued in ``_bookkeeping_sync`` and
+                 # synchronized by ``_to_list``'s event.synchronize(), so
+@@ -11232,7 +11288,11 @@ class GPUModelRunner(
+         # for dummy run with LoRA so that the num_reqs collectively
+         # has num_tokens in total.
+         assert num_tokens <= self.max_num_tokens
+-        max_num_reqs = self.scheduler_config.max_num_seqs
++        max_num_reqs = (
++            1  # VLLM_V41_MULTI_SEQ: every step holds one request
++            if self.v41_multi_seq is not None
++            else self.scheduler_config.max_num_seqs
++        )
+         if create_mixed_batch:
+             assert not uniform_decode
+             # Create mixed batch:
+@@ -12277,6 +12337,9 @@ class GPUModelRunner(
+                 )
+                 torch.accelerator.synchronize()
+ 
++            if self.v41_multi_seq is not None:
++                self.v41_multi_seq.capture_slot_graphs()
++
+             self._capture_drafter_cudagraphs()
+ 
+             # Capture encoder CUDA graphs if enabled
+@@ -12664,7 +12727,7 @@ class GPUModelRunner(
+         graph_query_len = self.uniform_decode_query_len
+         if (
+             self.model_config.hf_text_config.model_type == "deepseek_v41_text"
+-            and self.max_num_reqs == 1
++            and (1 if self.v41_multi_seq is not None else self.max_num_reqs) == 1
+             and self.compilation_config.cudagraph_mode == CUDAGraphMode.FULL
+             and not self.compilation_config.pass_config.enable_sp
+         ):
+@@ -12678,7 +12741,7 @@ class GPUModelRunner(
+             graph_query_len,
+             self.parallel_config.tensor_parallel_size,
+             self.kv_cache_config,
+-            self.max_num_reqs,
++            1 if self.v41_multi_seq is not None else self.max_num_reqs,
+             is_profiling=is_profiling,
+         )
+         # Trigger cudagraph dispatching keys initialization after
+diff --git a/vllm/v1/worker/v41_multi_seq_runner.py b/vllm/v1/worker/v41_multi_seq_runner.py
+new file mode 100644
+index 000000000..7998d9a54
+--- /dev/null
++++ b/vllm/v1/worker/v41_multi_seq_runner.py
+@@ -0,0 +1,279 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""VLLM_V41_MULTI_SEQ: the V1 GPU model runner's side.
++
++The scheduler runs one request per step and names its slot
++(``SchedulerOutput.v41_slots``, vllm/v1/core/sched/v41_multi_seq.py). Here:
++
++- ``begin_update``: bind the model's per-request state to that slot before
++  anything in the step touches it (``restore_prefix``, the forward, the
++  first stage's commit protocol);
++- ``park`` / ``take_row`` / ``prepend_parked_drafts``: a running request that is not
++  scheduled in a step leaves the persistent batch, as on the default path,
++  but its token row and last drafts are kept. The scheduler does not resend
++  its history (the held record), so on re-add the row is a memcpy instead of
++  a list conversion of the whole context, and a non-last pipeline stage still
++  knows the drafts its accepted count refers to;
++- ``slot_descriptor`` / ``capture_slot_graphs``: one FULL CUDA graph set per
++  slot (graphs bake the slot's buffer addresses), slot k > 0 keyed by
++  ``slot_variant(k)``, which also gives it its own graph memory pool;
++- ``attach_drafts``: with a batch queue (PP), the step's drafts travel with
++  its output, because another request's step is always in flight when this
++  one is applied (vllm/v1/engine/core.py).
++
++Everything is plain Python bookkeeping on the host; nothing here adds device
++work to a step except the slot's own graphs.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, replace
++from typing import TYPE_CHECKING, Any
++
++import numpy as np
++import torch
++
++from vllm.config import CUDAGraphMode
++from vllm.distributed.parallel_state import get_pp_group, get_tp_group
++from vllm.logger import init_logger
++from vllm.v1.core.sched.v41_multi_seq import KNOB, slot_variant
++from vllm.v1.outputs import DraftTokenIds
++
++if TYPE_CHECKING:
++    from vllm.forward_context import BatchDescriptor
++    from vllm.v1.core.sched.output import SchedulerOutput
++    from vllm.v1.outputs import ModelRunnerOutput
++    from vllm.v1.worker.gpu_input_batch import CachedRequestState
++
++logger = init_logger(__name__)
++
++
++@dataclass
++class ParkedRow:
++    """A running request's persistent-batch row while it is not scheduled."""
++
++    tokens: np.ndarray  # token_ids_cpu[row, :num_tokens] (a copy)
++    spec: list[int]  # the drafts scheduled in its last step
++
++
++def copy_parked_row(
++    token_ids_cpu: np.ndarray,
++    is_token_ids: np.ndarray,
++    req_index: int,
++    request: CachedRequestState,
++    parked: ParkedRow,
++) -> None:
++    """InputBatch.add_request's token copy, from a parked row.
++
++    Tokens only ever append to a parked request (the scheduler's sampled
++    tokens on a non-last stage, this rank's own samples on the last), or its
++    output tail is trimmed; the row's prefix up to the current length is
++    therefore still exact. The tail since the park comes from the lists.
++    """
++    num_tokens = request.num_tokens
++    keep = min(len(parked.tokens), num_tokens)
++    if keep and int(parked.tokens[keep - 1]) != request.get_token_id(keep - 1):
++        raise RuntimeError(
++            f"{KNOB}: the parked token row of request {request.req_id} "
++            f"disagrees with its token lists at position {keep - 1}"
++        )
++    row = token_ids_cpu[req_index]
++    row[:keep] = parked.tokens[:keep]
++    if keep < num_tokens:
++        num_prompt = len(request.prompt_token_ids or ())
++        if keep < num_prompt:
++            assert request.prompt_token_ids is not None
++            row[keep:num_prompt] = request.prompt_token_ids[keep:]
++            keep = num_prompt
++        row[keep:num_tokens] = request.output_token_ids[keep - num_prompt :]
++    is_token_ids[req_index, :num_tokens] = True
++
++
++class V41MultiSeqRunner:
++    def __init__(self, runner: Any, reason: str):
++        self.runner = runner
++        self.num_slots = runner.scheduler_config.max_num_seqs
++        problems = []
++        if runner.dynamic_draft_vocab_prefill_topk:
++            problems.append(
++                "the dynamic draft-vocabulary prefill bootstrap (GPU LRU rows)"
++            )
++        if problems:
++            raise ValueError(
++                f"{KNOB}=1 does not support: {'; '.join(problems)}. Unset {KNOB}."
++            )
++        pp = get_pp_group()
++        self.pp_rank, self.pp_size = pp.rank_in_group, pp.world_size
++        self.drafts_with_output = (
++            pp.world_size > 1
++            and pp.is_last_rank
++            and runner.speculative_config is not None
++        )
++        self.parks: dict[str, ParkedRow] = {}
++        # This step's slot; None for a step without a request.
++        self.slot: int | None = None
++        self.captured_variants: list[int] = []
++        self.reason = reason
++
++    def log_activation(self, capture_sizes: Any) -> None:
++        if get_tp_group().rank_in_group != 0:
++            return
++        logger.info(
++            "%s=1 active (runner, pp rank %d of %d): max_num_seqs=%d, %s; "
++            "kernel routes: one request per step, so the single-request M<=6 "
++            "kernels and their numerics (graph sizes %s, one batch row); "
++            "per-slot FULL CUDA graphs (slot 0 the default variant, slot k "
++            "variant %s); drafts %s.",
++            KNOB,
++            self.pp_rank,
++            self.pp_size,
++            self.num_slots,
++            self.reason,
++            capture_sizes,
++            "-1000-k",
++            "returned with each step's output"
++            if self.drafts_with_output
++            else "taken by the engine as on the default path",
++        )
++
++    # -- per step --------------------------------------------------------
++    def begin_update(self, scheduler_output: SchedulerOutput) -> None:
++        """Top of _update_states: forget finished requests, bind the slot."""
++        slots = scheduler_output.v41_slots
++        if slots is None:
++            raise RuntimeError(
++                f"{KNOB}=1 in the worker but the scheduler sent no slots; the "
++                "engine and the workers must share the setting"
++            )
++        for req_id in scheduler_output.finished_req_ids:
++            self.parks.pop(req_id, None)
++        for new_req in scheduler_output.scheduled_new_reqs:
++            self.parks.pop(new_req.req_id, None)
++        resumed = scheduler_output.scheduled_cached_reqs.resumed_req_ids
++        for req_id in resumed:
++            self.parks.pop(req_id, None)
++        if len(slots) > 1:
++            raise RuntimeError(
++                f"{KNOB}: {len(slots)} requests in one step; V4.1 runs one"
++            )
++        if not slots:
++            self.slot = None
++            return
++        ((req_id, slot),) = slots.items()
++        # A request that starts at position 0 (new, or resumed without a
++        # prefix hit) starts a new sequence in its slot; restore_prefix
++        # resets a prefix-hit start.
++        fresh = any(
++            new_req.req_id == req_id and new_req.num_computed_tokens == 0
++            for new_req in scheduler_output.scheduled_new_reqs
++        )
++        if not fresh and req_id in resumed:
++            cached = scheduler_output.scheduled_cached_reqs
++            fresh = cached.num_computed_tokens[cached.req_ids.index(req_id)] == 0
++        self.runner.get_model().v41_bind_slot(slot, new_sequence=fresh)
++        self.slot = slot
++
++    def park(self, req_id: str, scheduler_output: SchedulerOutput) -> None:
++        """Before a running request that is not scheduled leaves the batch."""
++        if req_id in (scheduler_output.preempted_req_ids or ()) or (
++            req_id in scheduler_output.scheduled_cached_reqs.resumed_req_ids
++        ):
++            self.parks.pop(req_id, None)
++            return
++        batch = self.runner.input_batch
++        index = batch.req_id_to_index[req_id]
++        num_tokens = int(batch.num_tokens_no_spec[index])
++        self.parks[req_id] = ParkedRow(
++            batch.token_ids_cpu[index, :num_tokens].copy(),
++            list(batch.spec_token_ids[index]),
++        )
++
++    def is_parked(self, req_id: str) -> bool:
++        return req_id in self.parks
++
++    def prepend_parked_drafts(
++        self,
++        req_id: str,
++        req_state: CachedRequestState,
++        num_computed_tokens: int,
++        sent_token_ids: list[int],
++    ) -> list[int]:
++        """A non-last PP rank re-adds a parked request: the tokens accepted
++        in its last step are its parked drafts. (The default path,
++        GPUModelRunner._pp_prepend_accepted_drafts, has no row to read them
++        from, and the scheduler sends no history for a held request.)"""
++        num_accepted = num_computed_tokens - req_state.num_tokens
++        if num_accepted <= 0:
++            return sent_token_ids
++        spec = self.parks[req_id].spec
++        if num_accepted > len(spec):
++            raise RuntimeError(
++                f"{KNOB}: {num_accepted} accepted draft token(s) of request "
++                f"{req_id} but {len(spec)} parked; the scheduler and the "
++                "runner disagree about its last step"
++            )
++        return spec[:num_accepted] + list(sent_token_ids)
++
++    def take_row(self, request: CachedRequestState) -> ParkedRow | None:
++        return self.parks.pop(request.req_id, None)
++
++    def restore_resumed(self, num_computed_tokens: int, token_ids: list[int]):
++        """A preempted request resumed at a prefix hit in its own slot."""
++        restore = getattr(self.runner.get_model(), "restore_prefix", None)
++        if restore is not None:
++            restore(num_computed_tokens, token_ids)
++
++    def slot_descriptor(
++        self, mode: CUDAGraphMode, batch_desc: BatchDescriptor
++    ) -> BatchDescriptor:
++        if mode == CUDAGraphMode.NONE or not self.slot:
++            return batch_desc
++        return replace(batch_desc, graph_variant=slot_variant(self.slot))
++
++    def attach_drafts(self, output: ModelRunnerOutput) -> None:
++        if self.drafts_with_output:
++            drafts = self.runner.take_draft_token_ids()
++            output.v41_multi_seq_drafts = (
++                drafts if drafts is not None else DraftTokenIds([], [])
++            )
++
++    # -- start-up --------------------------------------------------------
++    def capture_slot_graphs(self) -> None:
++        """After the default capture: the same graphs for every other slot."""
++        if self.num_slots == 1:
++            return
++        runner = self.runner
++        plan = list(runner.cudagraph_dispatcher.get_capture_descs())
++        for _, descs in plan:
++            for desc in descs:
++                if desc.graph_variant != 0 or desc.attention_context_bucket:
++                    raise ValueError(
++                        f"{KNOB}=1 does not support context-specialized CUDA "
++                        f"graphs ({desc}); unset {KNOB} or the graph buckets"
++                    )
++        model = runner.get_model()
++        count = 0
++        try:
++            for slot in range(1, self.num_slots):
++                model.v41_bind_slot(slot, new_sequence=True)
++                for mode, descs in plan:
++                    for desc in descs:
++                        slot_desc = replace(desc, graph_variant=slot_variant(slot))
++                        runner._warmup_and_capture(
++                            slot_desc,
++                            cudagraph_runtime_mode=mode,
++                            batch_descriptor_override=slot_desc,
++                        )
++                        count += 1
++                    torch.accelerator.synchronize()
++                self.captured_variants.append(slot_variant(slot))
++        finally:
++            model.v41_bind_slot(0, new_sequence=True)
++        if get_tp_group().rank_in_group == 0:
++            logger.info(
++                "%s: captured %d CUDA graph(s) for slot(s) 1..%d (variants %s).",
++                KNOB,
++                count,
++                self.num_slots - 1,
++                self.captured_variants,
++            )

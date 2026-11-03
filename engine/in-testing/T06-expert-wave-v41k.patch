@@ -1,0 +1,327 @@
+--- a/v41k.cu
++++ b/v41k.cu
+@@ -2710,6 +2710,9 @@
+ #include "v41k_fast.cuh"
+ #include "v41k_fast_gu.cuh"
+ #include "v41k_diet.cuh"
++#include "v41k_wave.cuh"
++#include <cstdio>
++#include <cstring>
+ 
+ // EXPERT_DIET (v41k_diet.cuh): VLLM_V41_EXPERT_DIET, read once, default 0.
+ // Bit 1: gate_up_fast runs gate_up_diet; bit 2: down_rows_fast runs
+@@ -2724,6 +2727,19 @@
+   return flags;
+ }
+ int64_t v41k_expert_diet_op() { return v41k_expert_diet(); }
++
++// Strict default-off flag, read once per worker. No Python deploy required.
++static bool v41k_expert_wave() {
++  static const bool enabled = [] {
++    const char* value = std::getenv("VLLM_V41_EXPERT_WAVE");
++    if (!value || std::strcmp(value, "0") == 0) return false;
++    TORCH_CHECK(std::strcmp(value, "1") == 0,
++                "VLLM_V41_EXPERT_WAVE must be 0 or 1");
++    return true;
++  }();
++  return enabled;
++}
++int64_t v41k_expert_wave_op() { return v41k_expert_wave(); }
+ 
+ torch::Tensor v41k_fast_table(int64_t type, torch::Device device) {
+   int words = 0;
+@@ -2866,6 +2882,26 @@
+     default: V41K_DNF(6); break;
+   }
+ #undef V41K_DNF
++}
++
++template <int T, int M>
++static void v41k_down_rows_wave_launch(half* out, const uint8_t* gathered,
++    const uint8_t* down, int rs, int rows, int base, const uint32_t* book,
++    int classes, const int* plan, cudaStream_t stream) {
++  // 8 KiB shared per CTA. Prefer L1 for compact global lookup tables and
++  // gathered activations; 32 KiB shared admits all four 256-thread CTAs.
++  C10_CUDA_CHECK(cudaFuncSetAttribute(v41k_wave::down_rows<T, M>,
++      cudaFuncAttributePreferredSharedMemoryCarveout, 33));
++  v41k_wave::down_rows<T, M><<<rows / v41k_wave::kRows, 256, 0, stream>>>(
++      out, gathered, down, rs, rows, base, book, classes, plan);
++}
++template <int T>
++static void v41k_down_rows_wave_m(int tokens, half* out, const uint8_t* gathered,
++    const uint8_t* down, int rs, int rows, int base, const uint32_t* book,
++    int classes, const int* plan, cudaStream_t stream) {
++#define WAVE(M) case M: v41k_down_rows_wave_launch<T, M>(out, gathered, down, rs, rows, base, book, classes, plan, stream); break;
++  switch (tokens) { WAVE(1) WAVE(2) WAVE(3) WAVE(4) WAVE(5) WAVE(6) }
++#undef WAVE
+ }
+ 
+ // Bitwise-identical replacement for down_rows(..., rows = 4, dn_warps, ...)
+@@ -2924,7 +2960,17 @@
+   const auto* b = reinterpret_cast<const uint32_t*>(fbook.data_ptr());
+   const int* pl = plan.data_ptr<int>();
+   const int rs = int(down.size(2));
+-  if (diet) {
++  if (diet == 8) {
++    TORCH_CHECK(down.numel() < (int64_t(1) << 31), "down_rows_wave: down must be < 2 GB");
++    static const bool logged = [] {
++      std::fprintf(stderr, "VLLM_V41_EXPERT_WAVE=1: down rows4 warps8 compact-table active\n");
++      return true;
++    }();
++    (void)logged;
++    if (dtype == 16) v41k_down_rows_wave_m<16>(tokens, o, g, w, rs, rows_local, int(row_base), b, int(classes), pl, stream);
++    else if (dtype == 17) v41k_down_rows_wave_m<17>(tokens, o, g, w, rs, rows_local, int(row_base), b, int(classes), pl, stream);
++    else v41k_down_rows_wave_m<29>(tokens, o, g, w, rs, rows_local, int(row_base), b, int(classes), pl, stream);
++  } else if (diet) {
+     TORCH_CHECK(down.numel() < (int64_t(1) << 31),
+                 "down_rows_diet: down must be < 2 GB (32-bit row offsets)");
+     const bool sa = (diet & 4) != 0;
+@@ -2958,7 +3004,7 @@
+                          torch::Tensor plan) {
+   const int f = v41k_expert_diet();
+   v41k_down_rows_impl(out, gathered, rank_stride, routes, down, dtype,
+-                      row_base, fbook, classes, plan, (f & 2) ? f : 0);
++                      row_base, fbook, classes, plan, v41k_expert_wave() ? 8 : ((f & 2) ? f : 0));
+ }
+ 
+ // down_rows_diet explicitly (check scripts): sa = 1 copies the activations
+@@ -2970,6 +3016,13 @@
+                          torch::Tensor plan, int64_t sa) {
+   v41k_down_rows_impl(out, gathered, rank_stride, routes, down, dtype,
+                       row_base, fbook, classes, plan, sa ? 5 : 1);
++}
++
++void v41k_down_rows_wave(torch::Tensor out, torch::Tensor gathered,
++    int64_t rank_stride, int64_t routes, torch::Tensor down, int64_t dtype,
++    int64_t row_base, torch::Tensor fbook, int64_t classes, torch::Tensor plan) {
++  v41k_down_rows_impl(out, gathered, rank_stride, routes, down, dtype,
++      row_base, fbook, classes, plan, 8);
+ }
+ 
+ template <int T>
+@@ -4129,6 +4182,10 @@
+       "Tensor ids32, Tensor prob, Tensor gate, Tensor up, int gtype, "
+       "Tensor fbook, Tensor(c!) plan, bool build_plan) -> ()",
+       &v41k_gate_up_diet);
++  m.def("expert_wave() -> int", &v41k_expert_wave_op);
++  m.def("down_rows_wave(Tensor(a!) out, Tensor gathered, int rank_stride, int routes, "
++        "Tensor down, int dtype, int row_base, Tensor fbook, int classes, Tensor plan) -> ()",
++        &v41k_down_rows_wave);
+   m.def("expert_diet() -> int", &v41k_expert_diet_op);
+   m.def(
+       "gate_up(Tensor(a!) down_in, Tensor x, Tensor ids32, Tensor prob, "
+--- a/build.py
++++ b/build.py
+@@ -1,35 +1,20 @@
+-# SPDX-License-Identifier: Apache-2.0
+-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+-"""Build the V4.1 v41k CUDA extension (SM70) into ./build/v41k.so.
+-
+-The runtime loads it from VLLM_V41K_LIB, defaulting to this build directory.
+-"""
+-
++"""Owner window only: production torch ABI, explicit immutable csrc include tree."""
+ import os
+-
++from pathlib import Path
+ from torch.utils import cpp_extension as ce
+ 
+-here = os.path.dirname(os.path.abspath(__file__))
+-src = os.path.abspath(os.path.join(here, "..", "..", ".."))
++here = Path(__file__).resolve().parent
++src = Path(os.environ['V41K_CSRCS'])
++(here / 'build').mkdir(exist_ok=True)
+ ce.load(
+-    name="v41k",
+-    sources=[os.path.join(here, "v41k.cu")],
+-    extra_include_paths=[src + "/csrc", src + "/csrc/sm70_turbomind/lmdeploy"],
+-    extra_cuda_cflags=[
+-        "-O3",
+-        "-gencode",
+-        "arch=compute_70,code=sm_70",
+-        "--expt-relaxed-constexpr",
+-        "-std=c++20",
+-        "-DENABLE_SM70_TURBOMIND=1",
+-        "-U__CUDA_NO_HALF_OPERATORS__",
+-        "-U__CUDA_NO_HALF_CONVERSIONS__",
+-        "-U__CUDA_NO_HALF2_OPERATORS__",
+-        "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+-    ],
+-    extra_cflags=["-O3", "-std=c++20"],
+-    is_python_module=False,
+-    build_directory=os.path.join(here, "build"),
+-    verbose=False,
++    name='v41k', sources=[str(here / 'v41k.cu')],
++    extra_include_paths=[str(src), str(src / 'sm70_turbomind/lmdeploy')],
++    extra_cuda_cflags=['-O3', '-gencode', 'arch=compute_70,code=sm_70',
++                      '--expt-relaxed-constexpr', '-std=c++20', '-DENABLE_SM70_TURBOMIND=1',
++                      '-U__CUDA_NO_HALF_OPERATORS__', '-U__CUDA_NO_HALF_CONVERSIONS__',
++                      '-U__CUDA_NO_HALF2_OPERATORS__', '-U__CUDA_NO_BFLOAT16_CONVERSIONS__',
++                      '-Xptxas', '-v'],
++    extra_cflags=['-O3', '-std=c++20'], is_python_module=False,
++    build_directory=str(here / 'build'), verbose=True,
+ )
+-print("built", os.path.join(here, "build", "v41k.so"))
++print('built', here / 'build/v41k.so')
+--- /dev/null
++++ b/v41k_wave.cuh
+@@ -0,0 +1,159 @@
++// SPDX-License-Identifier: Apache-2.0
++// BITWISE down projection, default-off VLLM_V41_EXPERT_WAVE=1.
++// Split N into four-row tiles (320 CTAs), never split K. Eight warps claim
++// experts; each lane retains the deployed (row, sub) assignment and the
++// j=0..8 FMUL/FMUL/FFMA chain, xor 1/2/4 butterfly, half rounding and class
++// reduction. Compact global selector tables avoid replicated 16/40 KiB
++// shared tables and let multiple CTAs reside per SM. No extra kernel.
++#pragma once
++#include "v41k_diet.cuh"
++
++namespace v41k_wave {
++constexpr int kRows = 4, kWarps = 8;
++
++// Global fast_table is unreplicated. These selectors are the exact words
++// that fill_book copies into the old replicated shared table.
++template <int T>
++__device__ __forceinline__ void decode(const v41k_diet::DnSlot<T>& raw,
++    const v41k_diet::DnLane& ln, const uint32_t* book, uint32_t (&w)[8],
++    float& d, int& m0, int& m1) {
++  using FB = v41k_fast::FastBook<T>;
++  uint32_t a, b;
++  if constexpr (T == 29) {
++    v41k_diet::idx29(raw.qs, raw.qh, a, b);
++    v41k_diet::m29(raw.s01, raw.s23, ln.hi, ln.sh29, ln.one, m0, m1);
++    d = __half2float(__ushort_as_half((unsigned short)v41k_diet::d29_bits(raw.s01, raw.s23)));
++  } else {
++    a = __funnelshift_r(raw.x0, raw.x1, raw.sh);
++    b = __funnelshift_r(raw.x1, raw.x2, raw.sh);
++    d = __half2float(__ushort_as_half((unsigned short)raw.dh));
++    if constexpr (T == 16) m0 = m1 = 1 + 2 * int(b >> 28);
++    else { m0 = 1 + 2 * int(raw.sc & 15); m1 = 1 + 2 * int((raw.sc >> 4) & 15); }
++  }
++#pragma unroll
++  for (int o = 0; o < 4; ++o) {
++    uint32_t sel;
++    if constexpr (T == 29) {
++      const uint32_t x = o < 2 ? a : b;
++      sel = __ldg(book + (((o & 1) ? x >> 16 : x) & 4095));
++    } else if constexpr (T == 16) {
++      sel = __ldg(book + ((a >> (8 * o)) & 255)) |
++            __ldg(book + FB::kGrid + ((b >> (7 * o)) & 127));
++    } else {
++      const uint32_t x = (o < 2 ? a : b) >> (16 * (o & 1));
++      sel = __ldg(book + (x & 511)) | __ldg(book + FB::kGrid + ((x >> 9) & 127));
++    }
++    w[2 * o] = v41k_fast::prmt(FB::kPos, FB::kNeg, sel);
++    w[2 * o + 1] = v41k_fast::prmt(FB::kPos, FB::kNeg, sel >> 16);
++  }
++}
++
++// IQ2's final subblock ends at the end of its row. Load only the live
++// low half of the third alignment word; the deployed reader assumes tail
++// slack. This variant is safe with an exact-sized final tensor allocation.
++template <int T>
++__device__ __forceinline__ void load_slot(v41k_diet::DnSlot<T>& raw,
++    const v41k_diet::DnLane& ln, uint32_t offset) {
++  if constexpr (T == 29) raw.load(ln, offset);
++  else {
++    const uint32_t w = offset + 2 + 8 * ln.sub;
++    raw.sh = (w & 3) * 8;
++    const uint8_t* p = ln.down + (w & ~3u);
++    raw.x0 = v41k_fast::ldw32(p);
++    raw.x1 = v41k_fast::ldw32(p + 4);
++    raw.x2 = raw.sh ? v41k_fast::ldw16(p + 8) : 0;
++    raw.dh = v41k_fast::ldw16(ln.down + offset);
++    if constexpr (T == 17) raw.sc = v41k_fast::ldw8(ln.down + offset + 66 + ln.sub);
++  }
++}
++
++template <int T, int M>
++__global__ void __launch_bounds__(256, 4) down_rows(
++    half* __restrict__ out, const uint8_t* __restrict__ gathered,
++    const uint8_t* __restrict__ down, int row_stride, int rows_local,
++    int row_base, const uint32_t* __restrict__ book, int classes,
++    const int* __restrict__ plan) {
++  using namespace v41k_fast;
++  using namespace v41k_diet;
++  using D = DnDiet<T, M, false>;
++  using Slot = DnSlot<T>;
++  constexpr int LG = 18, N = 5120, TOP_K = 6, BB = Slot::BB;
++  __shared__ int s_e[36], s_cnt[36], s_route[36][6], s_key[36], s_nu, s_next;
++  __shared__ half s_v[36][kRows];
++  __shared__ float s_p[kWarps][6][32];
++  const int t = threadIdx.x, lane = t & 31, warp = t >> 5;
++  const int r4 = lane >> 3, sub = lane & 7, row0 = blockIdx.x * kRows;
++  if (t < 36) { s_e[t] = __ldg(plan + 1 + t); s_cnt[t] = __ldg(plan + 37 + t); s_key[t] = -1; }
++  // 216 routes fit in 256 threads; separate from expert initialization.
++  if (t < 216) s_route[t / 6][t % 6] = __ldg(plan + 73 + t);
++  if (t == 40) { s_nu = __ldg(plan); s_next = kWarps; }
++  const DnLane ln{down, uint32_t(sub), uint32_t(lane) * 4,
++      uint32_t(lane & 15) * 4, uint32_t(((sub >> 1) & 1) * 16 + (sub & 1) * 6), 1, sub >= 4};
++  __syncthreads();
++  if (warp == kWarps - 1) {
++    for (int i = lane; i < 216; i += 32) {
++      const int q = i / 6, c = i % 6;
++      if (q < s_nu && c < s_cnt[q]) s_key[s_route[q][c]] = (q % classes) << 16 | q << 3 | c;
++    }
++  }
++  for (int q = warp; q < s_nu;) {
++    const int cnt = s_cnt[q];
++    const uint32_t ro = uint32_t(s_e[q] * rows_local + row0 + r4) * uint32_t(row_stride);
++#pragma unroll 1
++    for (int c = 0; c < cnt; ++c) s_p[warp][c][lane] = 0.f;
++#pragma unroll 1
++    for (int j = 0; j < 9; ++j) {
++      Slot raw;
++      load_slot<T>(raw, ln, ro + BB * j);
++      uint32_t w[8]; float d; int m0, m1;
++      decode<T>(raw, ln, book, w, d, m0, m1);
++      const int rank = int(uint32_t(sub + 8 * j) / 18u);
++      const int qo = 32 * sub + 256 * j + rank * (D::RS - LG * 32);
++      const int ds = sub + 8 * j + rank * ((D::RS - LG * 4) / 4);
++#pragma unroll 1
++      for (int c = 0; c < cnt; ++c) {
++        const int r = s_route[q][c];
++        int a[8]; float xd;
++        load_act(gathered + r * LG * 32 + qo,
++                 reinterpret_cast<const float*>(gathered + D::QB) + r * LG + ds, a, xd);
++        s_p[warp][c][lane] = fast_dot(w, a, d, xd, m0, m1, s_p[warp][c][lane]);
++      }
++    }
++#pragma unroll 1
++    for (int c = 0; c < cnt; ++c) {
++      float v = s_p[warp][c][lane];
++      v += __shfl_xor_sync(0xffffffffU, v, 1);
++      v += __shfl_xor_sync(0xffffffffU, v, 2);
++      v += __shfl_xor_sync(0xffffffffU, v, 4);
++      if (sub == 0) s_v[s_route[q][c]][r4] = __float2half_rn(v);
++    }
++    int next = 0;
++    if (lane == 0) next = atomicAdd(&s_next, 1);
++    q = __shfl_sync(0xffffffffU, next, 0);
++  }
++  __syncthreads();
++  if (t < kRows * M) {
++    const int k = t / kRows, rl = t % kRows;
++    int key[TOP_K];
++#pragma unroll
++    for (int i = 0; i < TOP_K; ++i) key[i] = s_key[k * TOP_K + i];
++    float total = 0.f, acc = 0.f; int last = -1, cls = -1;
++#pragma unroll
++    for (int n = 0; n < TOP_K; ++n) {
++      int best = 0x7fffffff, bi = 0;
++#pragma unroll
++      for (int i = 0; i < TOP_K; ++i) if (key[i] > last && key[i] < best) { best = key[i]; bi = i; }
++      if (best != 0x7fffffff) {
++        last = best;
++        if ((best >> 16) != cls) { if (cls >= 0) total += acc; acc = 0.f; cls = best >> 16; }
++        acc += __half2float(s_v[k * TOP_K + bi][rl]);
++      }
++    }
++    if (cls >= 0) total += acc;
++    out[k * N + row_base + row0 + rl] = __float2half_rn(total);
++#pragma unroll
++    for (int o = 0; o < 4; ++o) if (o * rows_local != row_base)
++      out[k * N + o * rows_local + row0 + rl] = __float2half_rn(0.f);
++  }
++}
++}  // namespace v41k_wave

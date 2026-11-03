@@ -1,0 +1,70 @@
+{
+ "name": "Volta sPLIce: DeepSeek-V4.1-Flash on 8x V100 (PP2 x TP4, resident Engram)",
+ "assembled": "2026-11-01",
+ "source": {
+  "repository": "private ds41-v100 (main bd1d5b8)",
+  "export": "selected files copied, then reviewed; docs written for publication from its records"
+ },
+ "reused_from_public": {
+  "patches/0001-numa-single-node.patch": "ProprietaryLegal/deepseek-v4-flash-v100 patches/v4.1-flash-1cat-vllm/ (byte-identical; also = private deployment repository patches/)",
+  "patches/0003-mp1-exl3-tiled-smem-staging.patch": "ProprietaryLegal/deepseek-v4-flash-v100 patches/v4.1-flash-1cat-vllm/ (byte-identical; also = private deployment repository patches/)",
+  "evidence/2026-11-01-interim/results.json": "ProprietaryLegal/deepseek-v4-flash-v100 evidence/v4.1-flash-2026-11-01/results.json (byte-identical)",
+  "LICENSE": "Apache-2.0 text, as in the DGX sPLIce repository",
+  "LICENSES/Apache-2.0.txt": "Apache-2.0 text, as in the DGX sPLIce repository",
+  "patches/mp1-harness/mp1_bench.py": "ProprietaryLegal/deepseek-v4-flash-v100 patches/v4.1-flash-1cat-vllm/mp1-harness/ (byte-identical)",
+  "patches/mp1-harness/mp1_dispatch.py": "ProprietaryLegal/deepseek-v4-flash-v100 patches/v4.1-flash-1cat-vllm/mp1-harness/ (byte-identical)",
+  "patches/mp1-harness/mp1_dispatch_ext.cu": "ProprietaryLegal/deepseek-v4-flash-v100 patches/v4.1-flash-1cat-vllm/mp1-harness/ (byte-identical)",
+  "patches/mp1-harness/mp1_ext.cu": "ProprietaryLegal/deepseek-v4-flash-v100 patches/v4.1-flash-1cat-vllm/mp1-harness/ (byte-identical)",
+  "patches/mp1-harness/mp1_smem.cuh": "ProprietaryLegal/deepseek-v4-flash-v100 patches/v4.1-flash-1cat-vllm/mp1-harness/ (byte-identical)"
+ },
+ "taken_from_unpublished_source": {
+  "patches/0002-gmu1-cudagraph-sizes-and-profiler-switch.patch": "private deployment repository patches/ (unchanged)",
+  "tools/check_data_boundary.sh": "private deployment repository tools/ (one regex written as github_pat[_] so the scan does not flag its own pattern; same matches)",
+  "tools/compare_speed.py": "private deployment repository quality/ (docstring: usage line and rule name)",
+  "tools/proc_census.py": "private deployment repository tools/ (docstring: host name removed)",
+  "tools/pin_io.py": "private deployment repository tools/ (docstring: process wording)",
+  "tools/warmup.py": "private deployment repository tools/ (docstring: host name and internal source path removed)",
+  "tools/warmup.sh": "private deployment repository tools/ (unchanged)",
+  "tools/test_proc_census.py": "private deployment repository tools/ (unchanged)",
+  "tools/test_warmup.py": "private deployment repository tools/ (one comment: host name removed)"
+ },
+ "authored_files": [
+  ".github/ISSUE_TEMPLATE/bug_report.yml",
+  ".github/ISSUE_TEMPLATE/config.yml",
+  ".github/ISSUE_TEMPLATE/feature_request.yml",
+  ".github/ISSUE_TEMPLATE/performance_report.yml",
+  ".github/PULL_REQUEST_TEMPLATE.md",
+  ".gitignore",
+  ".publication/SOURCE.json",
+  "CHANGELOG.md",
+  "CONTRIBUTING.md",
+  "CREDITS.md",
+  "NOTICE",
+  "README.md",
+  "SECURITY.md",
+  "docs/decisions.md",
+  "docs/experiments.md",
+  "docs/hardware-notes.md",
+  "docs/kv-capacity.md",
+  "docs/measurements.md",
+  "docs/method.md",
+  "docs/production.md",
+  "docs/publication.md",
+  "docs/roadmap.md",
+  "docs/survey.md",
+  "evidence/2026-11-01-final/results.json",
+  "evidence/README.md",
+  "patches/README.md",
+  "tools/README.md",
+  "tools/test_compare_speed.py"
+ ],
+ "dropped_by_reason": {
+  "launcher wrapper, env files, manifest, start/stop/status/verify scripts (private paths, GPU UUIDs, hash pins)": "not taken",
+  "request runner, greedy check, functional check, private task suite (prompt corpus, private prompts, references)": "not taken",
+  "raw logs, speed files, generated text": "not taken",
+  "experiment runners, arm scripts, hand-run test packages (private paths, addresses)": "not taken",
+  "KMOE1 kernel variants (timed, no win) and expert-usage counters (unmeasured)": "not taken",
+  "two decision records on co-tenant scheduling": "not taken"
+ },
+ "private_markers_rewritten": "host names replaced by role names; no addresses, user paths, UUIDs or e-mail addresses"
+}

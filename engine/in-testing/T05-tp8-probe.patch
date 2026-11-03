@@ -1,0 +1,1814 @@
+diff --git a/benchmarks/deepseek_v41/tp8probe/ar_probe.py b/benchmarks/deepseek_v41/tp8probe/ar_probe.py
+new file mode 100644
+index 000000000..41a2fd688
+--- /dev/null
++++ b/benchmarks/deepseek_v41/tp8probe/ar_probe.py
+@@ -0,0 +1,436 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""TP8PROBE1103 step b: all-reduce latency on the 8 board GPUs, CUDA-graph timed.
++
++Eight processes (rank r = visible device r; ranks 0-3 Board B, 4-7 Board C),
++the deployed engine's own collectives driven standalone (as vLLM's
++benchmarks/kernels/benchmark_device_communicators.py does): CustomAllreduce on
++gloo groups, PyNcclCommunicator. Groups (--group) run as separate processes so
++a hang in one (1Cat #1224: TP8 hang across two NVLink islands) loses only it:
++
++  ca    ca4        today's TP4 custom push AR inside each board, both boards
++                   at once (the PP2 baseline, comparable to PROF1103b 7-10 us)
++        ca2x       2-rank custom AR across boards, pairs (i, i+4) all at once
++        ca2x_q     the same at a quarter payload (the cross step of a
++                   reduce-scatter -> cross exchange -> all-gather scheme)
++        two_level  ca4 then ca2x in one graph = (B0+..+B3) + (C0+..+C3) on all
++                   8 ranks (an 8-way AR built from today's kernels)
++  nccl  nccl8      NCCL all-reduce over all 8
++        nccl4      NCCL inside each board (reference)
++        nccl2x     NCCL across boards, pairs (i, i+4)
++        two_level_nccl  ca4 then nccl2x
++  hier  hier8      the in-tree SM70 TP8 hierarchical push AR (env
++                   VLLM_SM70_TP8_HIERARCHICAL_CUSTOM_AR=1, _PUSH_AR=1); it
++                   admits exactly 8 KiB and 64 KiB fp16, so those two sizes
++
++Payloads: M x 5120 fp16, M = 1..6 (10,240..61,440 B; M6 = DSpark-5 verify),
++plus M12 (122,880 B = "120 KiB"); hier8 at 4,096 / 32,768 elements.
++
++Timing: per (variant, size) two graphs of N1=40 and N2=200 back-to-back
++collectives; us/op = (t(N2) - t(N1)) / (N2 - N1) per replay, which removes
++the launch and the cross-rank start skew; median and p90 over replays per
++rank, and the slowest rank is reported. Mode "spin": every collective follows
++a ~20 us spin kernel (decode-like spacing); the spin-only graph is
++subtracted. Correctness: an eager collective of (rank+1) x base is compared
++with the expected sum before timing.
++
++  python ar_probe.py --group ca --out ar-ca.json [--watchdog 400]
++"""
++
++import argparse
++import json
++import os
++import socket
++import sys
++import time
++import traceback
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++import common as C  # noqa: E402
++
++N1, N2 = 40, 200
++TRIALS = 15
++SPIN_CYCLES = 28_000  # ~20 us at 1.4 GHz
++MS = [1, 2, 3, 4, 5, 6, 12]
++SPIN_MS = [6]
++
++
++def _free_port():
++    s = socket.socket()
++    s.bind(("127.0.0.1", 0))
++    port = s.getsockname()[1]
++    s.close()
++    return port
++
++
++# --------------------------------------------------------------------------
++# worker
++
++
++def worker(rank, world, group_name, port, outdir, sel, wd_seconds):
++    import faulthandler
++    from datetime import timedelta
++
++    trace = open(os.path.join(outdir, f"ar-{group_name}-rank{rank}.stacks.txt"), "w")
++    faulthandler.dump_traceback_later(max(10.0, wd_seconds - 15), exit=False, file=trace)
++    res = {"rank": rank, "status": "running", "results": {}, "notes": []}
++    path = os.path.join(outdir, f"ar-{group_name}-rank{rank}.json")
++    try:
++        import torch
++        import torch.distributed as dist
++
++        torch.cuda.set_device(rank)
++        got = str(torch.cuda.get_device_properties(rank).uuid)
++        got = got if got.startswith("GPU-") else "GPU-" + got
++        if got.lower() != sel["uuids"][rank].lower():
++            res["status"] = "precondition"
++            res["error"] = f"rank {rank} device is {C.mask(got)}"
++            C.write_json(path, res)
++            return
++        dist.init_process_group(
++            "gloo",
++            init_method=f"tcp://127.0.0.1:{port}",
++            rank=rank,
++            world_size=world,
++            timeout=timedelta(seconds=120),
++        )
++        half = world // 2
++        boards = [list(range(0, half)), list(range(half, world))]
++        pairs = [[i, i + half] for i in range(half)]
++        g_world = dist.new_group(list(range(world)), backend="gloo")
++        g_board = [dist.new_group(b, backend="gloo") for b in boards]
++        g_pair = [dist.new_group(p, backend="gloo") for p in pairs]
++        my_board = g_board[0 if rank < half else 1]
++        my_pair = g_pair[rank % half]
++        my_board_ranks = boards[0 if rank < half else 1]
++        my_pair_ranks = pairs[rank % half]
++
++        from vllm.distributed.device_communicators.custom_all_reduce import (
++            CustomAllreduce,
++        )
++        from vllm.distributed.device_communicators.pynccl import (
++            PyNcclCommunicator,
++        )
++
++        dev = torch.device(f"cuda:{rank}")
++        stream = torch.cuda.Stream(device=dev)
++
++        def barrier():
++            dist.barrier(group=g_world)
++
++        def build_comms():
++            comms = {}
++            if group_name == "ca":
++                comms["ca4"] = CustomAllreduce(group=my_board, device=dev)
++                comms["ca2x"] = CustomAllreduce(group=my_pair, device=dev)
++            elif group_name == "nccl":
++                comms["ca4"] = CustomAllreduce(group=my_board, device=dev)
++                comms["nccl8"] = PyNcclCommunicator(group=g_world, device=dev)
++                comms["nccl4"] = PyNcclCommunicator(group=my_board, device=dev)
++                comms["nccl2x"] = PyNcclCommunicator(group=my_pair, device=dev)
++            elif group_name == "hier":
++                comms["hier8"] = CustomAllreduce(group=g_world, device=dev)
++            for k, c in comms.items():
++                if isinstance(c, CustomAllreduce):
++                    res["notes"].append(
++                        f"{k}: disabled={c.disabled}"
++                        + (
++                            f" fully_connected={c.fully_connected}"
++                            f" tp8_hierarchical={getattr(c, 'tp8_hierarchical', None)}"
++                            f" tp4_push={c.sm70_tp4_push_buffer_ptrs is not None}"
++                            f" tp8_push={c.sm70_tp8_hierarchical_push_buffer_ptrs is not None}"
++                            if not c.disabled
++                            else ""
++                        )
++                    )
++                else:
++                    res["notes"].append(f"{k}: disabled={c.disabled}")
++            return comms
++
++        comms = build_comms()
++        C.write_json(path, res)
++        barrier()
++
++        def ca_fn(c):
++            def f(x):
++                y = c.custom_all_reduce(x)
++                if y is None:
++                    raise RuntimeError("custom all-reduce rejected this payload")
++                return y
++
++            return f
++
++        def nccl_fn(c):
++            return lambda x: c.all_reduce(x)
++
++        variants = {}
++        if group_name == "ca":
++            a, b = comms["ca4"], comms["ca2x"]
++            if not a.disabled:
++                variants["ca4"] = ([a], [ca_fn(a)], my_board_ranks, 1.0)
++            if not b.disabled:
++                variants["ca2x"] = ([b], [ca_fn(b)], my_pair_ranks, 1.0)
++                variants["ca2x_q"] = ([b], [ca_fn(b)], my_pair_ranks, 0.25)
++            if not a.disabled and not b.disabled:
++                variants["two_level"] = ([a, b], [ca_fn(a), ca_fn(b)], list(range(world)), 1.0)
++        elif group_name == "nccl":
++            a = comms["ca4"]
++            for k, ranks in (("nccl8", list(range(world))), ("nccl4", my_board_ranks), ("nccl2x", my_pair_ranks)):
++                if not comms[k].disabled:
++                    variants[k] = ([], [nccl_fn(comms[k])], ranks, 1.0)
++            if not a.disabled and not comms["nccl2x"].disabled:
++                variants["two_level_nccl"] = (
++                    [a],
++                    [ca_fn(a), nccl_fn(comms["nccl2x"])],
++                    list(range(world)),
++                    1.0,
++                )
++        elif group_name == "hier":
++            h = comms["hier8"]
++            if not h.disabled:
++                variants["hier8"] = ([h], [ca_fn(h)], list(range(world)), 1.0)
++        res["variants"] = list(variants)
++
++        def sizes_for(name, scale):
++            if name == "hier8":
++                return [4096, 32768] + [m * C.HIDDEN for m in MS]
++            return [int(m * C.HIDDEN * scale) for m in MS]
++
++        from contextlib import ExitStack
++
++        def chain(fns, x, spin):
++            y = x
++            for f in fns:
++                y = f(y)
++            return y
++
++        def capture(cas, fns, x, count, spin):
++            with ExitStack() as st:
++                for c in cas:
++                    st.enter_context(c.capture())
++                g = torch.cuda.CUDAGraph()
++                with torch.cuda.graph(g, stream=stream):
++                    for _ in range(count):
++                        if spin:
++                            torch.cuda._sleep(SPIN_CYCLES)
++                        if fns:
++                            chain(fns, x, spin)
++            return g
++
++        def replay_times(g):
++            out = []
++            for _ in range(3):
++                g.replay()
++            torch.cuda.synchronize()
++            for _ in range(TRIALS):
++                barrier()
++                a = torch.cuda.Event(enable_timing=True)
++                b = torch.cuda.Event(enable_timing=True)
++                a.record(stream)
++                with torch.cuda.stream(stream):
++                    g.replay()
++                b.record(stream)
++                b.synchronize()
++                out.append(a.elapsed_time(b) * 1000.0)
++            return out
++
++        def slope(cas, fns, x, spin, base_us=None):
++            g1 = capture(cas, fns, x, N1, spin)
++            g2 = capture(cas, fns, x, N2, spin)
++            torch.cuda.synchronize()
++            barrier()
++            t1 = replay_times(g1)
++            t2 = replay_times(g2)
++            per = sorted((b2 - b1) / (N2 - N1) for b1, b2 in zip(sorted(t1), sorted(t2)))
++            st = C.stats(per)
++            st["t1_median_us"] = round(sorted(t1)[len(t1) // 2], 2)
++            st["t2_median_us"] = round(sorted(t2)[len(t2) // 2], 2)
++            del g1, g2
++            return st
++
++        spin_base = None
++        for name, (cas, fns, ranks, scale) in variants.items():
++            res["results"][name] = {}
++            for numel in sizes_for(name, scale):
++                key = str(numel * 2)  # bytes
++                entry = {"bytes": numel * 2, "elements": numel, "group_ranks": ranks}
++                gen = torch.Generator(device=dev).manual_seed(numel)
++                base = (torch.rand(numel, device=dev, generator=gen) * 0.01).half()
++                x = (base * (rank + 1)).contiguous()
++                ok_payload = True
++                for c in cas:
++                    if not c.should_custom_ar(x):
++                        ok_payload = False
++                if not ok_payload:
++                    entry["admitted"] = False
++                    res["results"][name][key] = entry
++                    barrier()
++                    continue
++                entry["admitted"] = True
++                with torch.cuda.stream(stream):
++                    for _ in range(2):
++                        y = chain(fns, x, False)
++                    torch.cuda.synchronize()
++                    want = base.float() * sum(r + 1 for r in ranks)
++                    err = (y.float() - want).abs().max().item()
++                    entry["max_abs_err"] = err
++                    entry["correct"] = bool(err <= 2e-3 * max(1.0, want.abs().max().item()) + 1e-3)
++                barrier()
++                entry["us"] = slope(cas, fns, x, False)
++                m = numel * 2 // (C.HIDDEN * 2) if scale == 1.0 else None
++                if m in SPIN_MS and name != "hier8":
++                    if spin_base is None:
++                        spin_base = slope([], [], x, True)
++                        res["results"]["spin_only"] = {"spin": {"us": spin_base}}
++                    sp = slope(cas, fns, x, True)
++                    entry["spin_us_total"] = sp
++                    entry["spin_us_net"] = round(sp["median"] - spin_base["median"], 3)
++                res["results"][name][key] = entry
++                C.write_json(path, res)
++                barrier()
++        res["status"] = "ok"
++        C.write_json(path, res)
++        barrier()
++        faulthandler.cancel_dump_traceback_later()
++        for c in comms.values():
++            try:
++                if isinstance(c, CustomAllreduce):
++                    c.close()
++            except Exception:
++                pass
++        dist.destroy_process_group()
++    except Exception:
++        res["status"] = "crash"
++        res["error"] = traceback.format_exc()[-4000:]
++        C.write_json(path, res)
++        os._exit(C.EXIT_CRASH)
++
++
++# --------------------------------------------------------------------------
++# parent
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--group", choices=("ca", "nccl", "hier"), required=True)
++    ap.add_argument("--out", required=True)
++    ap.add_argument("--watchdog", type=float, default=400)
++    args = ap.parse_args()
++    outdir = os.path.dirname(os.path.abspath(args.out))
++    report = {"step": f"ar-{args.group}", "start": C.now(), "status": "running"}
++    sel_json = os.environ.get("TP8PROBE_SELECTION")
++    try:
++        sel = json.loads(sel_json) if sel_json else C.resolve()
++    except SystemExit as e:
++        report.update(status="precondition", error=str(e))
++        C.write_json(args.out, report)
++        return C.EXIT_PRE
++    if os.environ.get("CUDA_VISIBLE_DEVICES") != sel["cuda_visible_devices"]:
++        report.update(status="precondition", error="CUDA_VISIBLE_DEVICES differs from the selection")
++        C.write_json(args.out, report)
++        return C.EXIT_PRE
++    report["layout"] = C.public_layout(sel)
++    os.environ.setdefault("VLLM_SKIP_P2P_CHECK", "1")
++    os.environ["VLLM_ALLREDUCE_USE_SYMM_MEM"] = "0"
++    os.environ.setdefault("NCCL_DEBUG", "WARN")
++    if args.group == "hier":
++        os.environ["VLLM_SM70_TP8_HIERARCHICAL_CUSTOM_AR"] = "1"
++        os.environ["VLLM_SM70_TP8_HIERARCHICAL_PUSH_AR"] = "1"
++    report["env"] = {
++        k: os.environ[k]
++        for k in sorted(os.environ)
++        if k.startswith(("VLLM_SM70_", "VLLM_SKIP_P2P", "NCCL_", "VLLM_ALLREDUCE"))
++    }
++    import multiprocessing as mp
++
++    ctx = mp.get_context("spawn")
++    world = 8
++    port = _free_port()
++    procs = []
++    for r in range(world):
++        p = ctx.Process(
++            target=worker,
++            args=(r, world, args.group, port, outdir, sel, args.watchdog),
++            daemon=False,
++        )
++        p.start()
++        procs.append(p)
++    deadline = time.time() + args.watchdog
++    for p in procs:
++        p.join(timeout=max(0.0, deadline - time.time()))
++    hung = [i for i, p in enumerate(procs) if p.is_alive()]
++    if hung:
++        C.log(f"ar-{args.group}: watchdog, ranks still running {hung}; terminating")
++        for p in procs:
++            if p.is_alive():
++                p.terminate()
++        for p in procs:
++            p.join(timeout=10)
++        for p in procs:
++            if p.is_alive():
++                p.kill()
++    ranks = []
++    for r in range(world):
++        path = os.path.join(outdir, f"ar-{args.group}-rank{r}.json")
++        try:
++            ranks.append(json.load(open(path)))
++        except Exception:
++            ranks.append({"rank": r, "status": "missing"})
++    report["rank_status"] = [x.get("status") for x in ranks]
++    report["exitcodes"] = [p.exitcode for p in procs]
++    report["notes_rank0"] = ranks[0].get("notes", [])
++    report["notes_rank4"] = ranks[4].get("notes", []) if len(ranks) > 4 else []
++    errors = {r: x["error"] for r, x in enumerate(ranks) if x.get("error")}
++    if errors:
++        report["errors"] = errors
++    # merge: slowest rank's median per (variant, size)
++    merged = {}
++    correct = True
++    for x in ranks:
++        for name, sizes in x.get("results", {}).items():
++            for key, e in sizes.items():
++                m = merged.setdefault(name, {}).setdefault(key, {"per_rank_median": {}, "per_rank_p90": {}})
++                for f in ("bytes", "elements", "admitted"):
++                    if f in e:
++                        m[f] = e[f]
++                if "us" in e:
++                    st = e["us"]
++                    m["per_rank_median"][x["rank"]] = st.get("median")
++                    m["per_rank_p90"][x["rank"]] = st.get("p90")
++                if "spin_us_net" in e:
++                    m.setdefault("spin_net_per_rank", {})[x["rank"]] = e["spin_us_net"]
++                if "correct" in e:
++                    m.setdefault("correct_per_rank", {})[x["rank"]] = e["correct"]
++                    correct = correct and e["correct"]
++    for name, sizes in merged.items():
++        for key, m in sizes.items():
++            meds = [v for v in m["per_rank_median"].values() if v is not None]
++            p90s = [v for v in m["per_rank_p90"].values() if v is not None]
++            if meds:
++                m["us_median_slowest_rank"] = max(meds)
++                m["us_p90_slowest_rank"] = max(p90s) if p90s else None
++            if m.get("spin_net_per_rank"):
++                m["spin_net_us_slowest_rank"] = max(m["spin_net_per_rank"].values())
++    report["results"] = merged
++    report["all_correct"] = correct
++    report["end"] = C.now()
++    if hung:
++        report["status"] = "hang"
++        report["hung_ranks"] = hung
++        C.write_json(args.out, report)
++        return C.EXIT_HANG
++    if any(s == "precondition" for s in report["rank_status"]):
++        report["status"] = "precondition"
++        C.write_json(args.out, report)
++        return C.EXIT_PRE
++    if any(s != "ok" for s in report["rank_status"]):
++        report["status"] = "crash"
++        C.write_json(args.out, report)
++        return C.EXIT_CRASH
++    report["status"] = "ok"
++    C.write_json(args.out, report)
++    return C.EXIT_OK if correct else C.EXIT_CHECK
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/benchmarks/deepseek_v41/tp8probe/common.py b/benchmarks/deepseek_v41/tp8probe/common.py
+new file mode 100644
+index 000000000..43cb9c789
+--- /dev/null
++++ b/benchmarks/deepseek_v41/tp8probe/common.py
+@@ -0,0 +1,220 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""TP8PROBE1103 shared helpers: GPU selection by UUID, watchdog, JSON, stats.
++
++GPU selection never runs nvidia-smi: UUID -> PCI bus id comes from
++/proc/driver/nvidia/gpus/*/information, and CUDA_DEVICE_ORDER=PCI_BUS_ID
++indices are the sorted bus ids. The board lists come from ds41.env
++(DS41_GPUS_A = Board B, DS41_GPUS_C = Board C), in that file's order, the same
++order serve-pp2.sh passes to the deployed PP2 server. Every step re-checks the
++UUID of each visible device after CUDA init and exits 2 on a mismatch.
++UUIDs are printed masked (first 4 hex digits only).
++
++Exit codes for every probe step:
++  0 ok, 1 measured but a correctness check failed, 2 precondition failed,
++  3 hang / watchdog, 4 crash.
++"""
++
++from __future__ import annotations
++
++import faulthandler
++import glob
++import json
++import os
++import re
++import statistics
++import sys
++import threading
++import time
++
++DS41_ENV = "/path/to/gpus.env"
++EXIT_OK, EXIT_CHECK, EXIT_PRE, EXIT_HANG, EXIT_CRASH = 0, 1, 2, 3, 4
++
++# Decode payloads: hidden 5120 fp16 x M rows (M = 1 + DSpark 5 drafts at most).
++HIDDEN = 5120
++
++
++def mask(uuid: str) -> str:
++    m = re.match(r"(GPU-[0-9a-fA-F]{4})", uuid or "")
++    return (m.group(1) + "...") if m else "GPU-????"
++
++
++def board_uuids(path: str = DS41_ENV) -> tuple[list[str], list[str]]:
++    """(Board B uuids, Board C uuids) from ds41.env, file order."""
++    text = open(path).read()
++    out = {}
++    for key in ("DS41_GPUS_A", "DS41_GPUS_C"):
++        m = re.search(rf'^export {key}="([^"]*)"', text, re.M)
++        if not m:
++            raise SystemExit(f"{key} not found in {path}")
++        out[key] = m.group(1).split()
++    b, c = out["DS41_GPUS_A"], out["DS41_GPUS_C"]
++    if len(b) != 4 or len(c) != 4 or len(set(b + c)) != 8:
++        raise SystemExit("ds41.env must list 4 + 4 distinct GPU UUIDs")
++    return b, c
++
++
++def proc_gpus() -> list[dict]:
++    """[{bus, uuid, minor}] for every GPU the driver lists, sorted by bus id."""
++    gpus = []
++    for info in glob.glob("/proc/driver/nvidia/gpus/*/information"):
++        fields = {}
++        for line in open(info):
++            k, _, v = line.partition(":")
++            fields[k.strip()] = v.strip()
++        gpus.append(
++            {
++                "bus": fields.get("Bus Location", "").lower(),
++                "uuid": fields.get("GPU UUID", ""),
++                "minor": int(fields.get("Device Minor", "-1")),
++            }
++        )
++    return sorted(gpus, key=lambda g: g["bus"])
++
++
++def resolve(order: str = "deployed") -> dict:
++    """The 8 probe GPUs as PCI_BUS_ID indices.
++
++    order "deployed": Board B in ds41.env order, then Board C (serve-pp2.sh).
++    Rank r of every probe = visible device r; ranks 0-3 Board B, 4-7 Board C.
++    order "rot2": Board C rotated by two (other cross-board pairing for i<->i+4).
++    order may also be an explicit comma list of 8 PCI_BUS_ID indices.
++    """
++    b, c = board_uuids()
++    gpus = proc_gpus()
++    index = {g["uuid"]: i for i, g in enumerate(gpus)}
++    missing = [mask(u) for u in b + c if u not in index]
++    if missing:
++        raise SystemExit(f"GPUs from ds41.env not present: {missing}")
++    bi = [index[u] for u in b]
++    ci = [index[u] for u in c]
++    if order == "deployed":
++        ids = bi + ci
++    elif order == "rot2":
++        ids = bi + ci[2:] + ci[:2]
++    else:
++        ids = [int(v) for v in order.split(",")]
++        if sorted(ids) != sorted(bi + ci):
++            raise SystemExit("--order must be a permutation of the 8 board GPUs")
++    by_idx = {i: g for i, g in enumerate(gpus)}
++    board = {i: ("B" if i in bi else "C") for i in bi + ci}
++    return {
++        "cuda_visible_devices": ",".join(str(i) for i in ids),
++        "indices": ids,
++        "uuids": [by_idx[i]["uuid"] for i in ids],
++        "bus": [by_idx[i]["bus"] for i in ids],
++        "minor": [by_idx[i]["minor"] for i in ids],
++        "board": [board[i] for i in ids],
++        "masked": [mask(by_idx[i]["uuid"]) for i in ids],
++    }
++
++
++def public_layout(sel: dict) -> list[dict]:
++    """Layout for JSON output: no full UUIDs."""
++    return [
++        {
++            "rank": r,
++            "pci_bus_id_index": sel["indices"][r],
++            "bus": sel["bus"][r],
++            "board": sel["board"][r],
++            "uuid": sel["masked"][r],
++        }
++        for r in range(len(sel["indices"]))
++    ]
++
++
++def check_visible_uuids(expected: list[str]) -> str | None:
++    """After CUDA init: visible device r must have expected[r]. None if ok."""
++    import torch
++
++    n = torch.cuda.device_count()
++    if n != len(expected):
++        return f"{n} visible devices, expected {len(expected)}"
++    for r, want in enumerate(expected):
++        got = str(torch.cuda.get_device_properties(r).uuid)
++        got = got if got.startswith("GPU-") else "GPU-" + got
++        if got.lower() != want.lower():
++            return f"visible device {r} is {mask(got)}, expected {mask(want)}"
++    return None
++
++
++def gpu_holders(minors: list[int]) -> list[dict]:
++    """Processes (other than this one) holding /dev/nvidia<minor> open."""
++    targets = {f"/dev/nvidia{m}" for m in minors}
++    me = os.getpid()
++    found = []
++    for fd_dir in glob.glob("/proc/[0-9]*/fd"):
++        pid = int(fd_dir.split("/")[2])
++        if pid == me:
++            continue
++        try:
++            links = {os.readlink(os.path.join(fd_dir, f)) for f in os.listdir(fd_dir)}
++        except OSError:
++            continue
++        hit = sorted(links & targets)
++        if hit:
++            try:
++                comm = open(f"/proc/{pid}/comm").read().strip()
++            except OSError:
++                comm = "?"
++            found.append({"pid": pid, "comm": comm, "devices": hit})
++    return found
++
++
++def stats(values: list[float]) -> dict:
++    v = sorted(values)
++    if not v:
++        return {}
++    p90 = v[min(len(v) - 1, int(round(0.9 * (len(v) - 1))))]
++    return {
++        "median": round(statistics.median(v), 3),
++        "p90": round(p90, 3),
++        "min": round(v[0], 3),
++        "max": round(v[-1], 3),
++        "n": len(v),
++    }
++
++
++class Watchdog:
++    """Dump all stacks to `trace_path` and os._exit(EXIT_HANG) after seconds.
++
++    `on_fire(reason)` (optional) runs first, e.g. to write a partial JSON.
++    """
++
++    def __init__(self, seconds: float, trace_path: str, on_fire=None):
++        self.seconds, self.on_fire = seconds, on_fire
++        self.trace = open(trace_path, "w")
++        faulthandler.dump_traceback_later(seconds, exit=False, file=self.trace)
++        self.timer = threading.Timer(seconds + 2.0, self._fire)
++        self.timer.daemon = True
++        self.timer.start()
++
++    def _fire(self):
++        try:
++            if self.on_fire:
++                self.on_fire(f"watchdog {self.seconds:.0f} s")
++        finally:
++            try:
++                self.trace.flush()
++            except Exception:
++                pass
++            os._exit(EXIT_HANG)
++
++    def cancel(self):
++        self.timer.cancel()
++        faulthandler.cancel_dump_traceback_later()
++
++
++def write_json(path: str, obj) -> None:
++    tmp = path + ".tmp"
++    with open(tmp, "w") as f:
++        json.dump(obj, f, indent=1, default=str)
++    os.replace(tmp, path)
++
++
++def now() -> str:
++    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
++
++
++def log(msg: str) -> None:
++    print(f"{now()} {msg}", flush=True, file=sys.stderr)
+diff --git a/benchmarks/deepseek_v41/tp8probe/kernel_scale.py b/benchmarks/deepseek_v41/tp8probe/kernel_scale.py
+new file mode 100644
+index 000000000..48f0df4bb
+--- /dev/null
++++ b/benchmarks/deepseek_v41/tp8probe/kernel_scale.py
+@@ -0,0 +1,351 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""TP8PROBE1103 step c: half-width kernel scaling on one GPU (TP4 vs TP8 shapes).
++
++One GPU (visible device 0 = Board B's first GPU), the deployed v41k.so
++(--lib / VLLM_V41K_LIB, read-only), synthetic weights, CUDA-graph timing with
++cold weights (rotating copies larger than the 6 MB L2), M = 1..6.
++
++dense    v41k.dmv13_x per role at the deployed TP4 per-rank shapes and at the
++         TP8 per-rank shapes (q_b N 8192->4096, wo_a 2->1 O groups, wo_b K
++         2048->1024, shared 576->288 rows, head 32320->16160, engram
++         6400->3200; qkv is replicated and stays). (warps, split) from
++         dense_tm.default_config at VLLM_V41_DMV_CTAS=80, as deployed.
++experts  gate_up_fast (after q8_plan) and down_rows_fast, gtypes 29/16/17, on
++         eight layers with disjoint expert slices (cold), three route mixes:
++           k6   6 routes per row, today's TP4 rank work;
++           k3   3 live routes per row (3 dropped): half the experts, i.e. the
++                bytes and CTAs of a TP8 rank (288-row gate/up, 640-row down)
++                and of a balanced expert-parallel board;
++           ep2  routes whose expert lives on the other board (a random half
++                of the 384) dropped: EP2 x TP4 with its natural imbalance.
++         The v41k expert kernels hard-code 576 gate/up rows and 1280 down rows
++         per rank, so a true TP8 carrier cannot run without a rebuild; k3 is
++         the proxy (same bytes, same CTA count).
++attn     the per-token attention bmm pair at 16 heads (TP4) vs 8 (TP8):
++         [M,h,512] x [M,512,640] -> softmax -> [M,h,640] x [M,640,512], fp16.
++
++  python kernel_scale.py --out kernels.json [--lib v41k.so] [--watchdog 500]
++"""
++
++import argparse
++import math
++import os
++import statistics
++import sys
++import traceback
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++sys.path.insert(0, HERE)
++sys.path.insert(0, os.path.dirname(HERE))  # benchmarks/deepseek_v41
++import common as C  # noqa: E402
++
++Q5K, Q8 = 1, 4
++# role -> (format, K, segment widths, x offsets, config widths); per rank.
++DENSE = {
++    "tp4": {
++        "qkv": (Q8, 5120, [1280, 512], None, None),
++        "q_b": (Q5K, 1280, [8192], None, None),
++        "wo_a": (Q5K, 4096, [1024, 1024], [0, 4096], [1024]),
++        "wo_b": (Q5K, 2048, [5120], None, None),
++        "shared": (Q5K, 5120, [576, 576], None, None),
++        "engram": (Q5K, 6144, [6400], None, None),
++        "head": (Q5K, 5120, [32320], None, None),
++    },
++    "tp8": {
++        "qkv": (Q8, 5120, [1280, 512], None, None),
++        "q_b": (Q5K, 1280, [4096], None, None),
++        "wo_a": (Q5K, 4096, [1024], [0], [1024]),
++        "wo_b": (Q5K, 1024, [5120], None, None),
++        "shared": (Q5K, 5120, [288, 288], None, None),
++        "engram": (Q5K, 6144, [3200], None, None),
++        "head": (Q5K, 5120, [16160], None, None),
++    },
++}
++# PROF1103b production medians (us/call, stage 1) for the TP4 sanity column.
++PROD_US = {"qkv": 26.2, "q_b": 21.1, "wo_a": 19.1, "wo_b": 18.1, "shared": 12.3,
++           "engram": 48.6, "head": 167.1}  # fmt: skip
++
++
++def default_config(k, widths, target=80):
++    """dense_tm.default_config (VLLM_V41_DMV_CTAS=80): (warps, split)."""
++    tiles = sum((w + 31) // 32 for w in widths)
++    groups = (k // 32 + 3) // 4
++    split = max(1, min(8, round(target / tiles), groups // 4))
++    split = max(c for c in (1, 2, 3, 4, 6, 8) if c <= split)
++    return (8, split) if split > 1 else (4, 1)
++
++
++def time_graph(torch, fn, reps, iters=15):
++    """us per call: median over iters of one graph of `reps` calls."""
++    side = torch.cuda.Stream()
++    side.wait_stream(torch.cuda.current_stream())
++    with torch.cuda.stream(side):
++        for r in range(min(reps, 4)):
++            fn(r)
++    torch.cuda.current_stream().wait_stream(side)
++    torch.cuda.synchronize()
++    graph = torch.cuda.CUDAGraph()
++    with torch.cuda.graph(graph):
++        for r in range(reps):
++            fn(r)
++    graph.replay()
++    torch.cuda.synchronize()
++    times = []
++    for _ in range(iters):
++        a = torch.cuda.Event(enable_timing=True)
++        b = torch.cuda.Event(enable_timing=True)
++        a.record()
++        graph.replay()
++        b.record()
++        b.synchronize()
++        times.append(a.elapsed_time(b) * 1000.0 / reps)
++    del graph
++    return {"median": round(statistics.median(times), 3), "min": round(min(times), 3)}
++
++
++def dense_part(torch, args, gen, report):
++    def planes(fmt, n, k):
++        tiles, groups = n // 32, k // 128
++        cw = 2 if fmt == Q8 else 1
++
++        def rb(count):
++            return torch.randint(0, 256, (count,), dtype=torch.uint8, device="cuda", generator=gen)
++
++        codes = rb(tiles * groups * 2048 * cw)
++        high = rb(tiles * groups * 512) if fmt == Q5K else torch.empty(0, dtype=torch.uint8, device="cuda")
++        words = tiles * groups * 128
++        u = torch.rand(words, 2, device="cuda", generator=gen)
++        st = torch.stack([0.002 + 0.018 * u[:, 0], -0.1 * u[:, 1] if fmt == Q5K else 0 * u[:, 1]], 1)
++        return codes, high, st.half().view(torch.uint8).flatten()
++
++    out = {}
++    for tp, roles in DENSE.items():
++        out[tp] = {}
++        for role, (fmt, k, widths, x_off, cfg) in roles.items():
++            x_off = list(x_off) if x_off else [0] * len(widths)
++            warps, split = default_config(k, cfg or widths)
++            tiles = sum(w // 32 for w in widths)
++            one = [planes(fmt, w, k) for w in widths]
++            nbytes = sum(t.numel() for p in one for t in p)
++            count = max(1, math.ceil(args.l2_mb * 2**20 / nbytes))
++            copies = [one] + [[planes(fmt, w, k) for w in widths] for _ in range(count - 1)]
++            copies = [tuple(list(t) for t in zip(*c)) for c in copies]
++            reps = len(copies) * max(1, math.ceil(48 / len(copies)))
++            row = {"bytes": nbytes, "warps": warps, "split": split, "tiles": tiles,
++                   "copies": len(copies), "us": {}, "best_us": {},
++                   "best_cfg": {}}  # fmt: skip
++            xcols = max(o + k for o in x_off)
++            # alternative (warps, split) a TP8 build could pick; split stays
++            # inside default_config's limit groups // 4.
++            limit = ((k // 32 + 3) // 4) // 4
++            cfgs = [(warps, split)] + [
++                c for c in ((4, 1), (8, 2), (8, 4)) if c != (warps, split) and c[1] <= max(1, limit)
++            ]
++            for m in args.m:
++                x = torch.randn(m, xcols, device="cuda", generator=gen).half()
++                outs = [torch.empty(m, w, dtype=torch.half, device="cuda") for w in widths]
++                ws = torch.zeros(tiles * 8 * 256, device="cuda")
++                cnt = torch.zeros(tiles, dtype=torch.int32, device="cuda")
++                times = {}
++                for cw, cs in cfgs:
++
++                    def fn(i, x=x, outs=outs, ws=ws, cnt=cnt, cw=cw, cs=cs):
++                        codes, high, scale = copies[i % len(copies)]
++                        torch.ops.v41k.dmv13_x(x, codes, high, scale, outs, x_off, fmt,
++                                               k, cs, cw, 1, ws, cnt, 0)  # fmt: skip
++
++                    times[f"w{cw}s{cs}"] = time_graph(torch, fn, reps)["median"]
++                row["us"][str(m)] = times[f"w{warps}s{split}"]
++                best = min(times, key=times.get)
++                row["best_us"][str(m)], row["best_cfg"][str(m)] = times[best], best
++            out[tp][role] = row
++            del copies, one
++            torch.cuda.empty_cache()
++            C.log(f"dense {tp} {role}: M6 {row['us'].get(str(max(args.m)))} us")
++    ratios = {}
++    for role in DENSE["tp4"]:
++        ratios[role] = {
++            m: round(out["tp8"][role]["us"][m] / out["tp4"][role]["us"][m], 3)
++            for m in out["tp4"][role]["us"]
++        }
++    best_ratios = {
++        role: {
++            m: round(out["tp8"][role]["best_us"][m] / out["tp4"][role]["us"][m], 3)
++            for m in out["tp4"][role]["us"]
++        }
++        for role in DENSE["tp4"]
++    }
++    report["dense"] = out
++    report["dense_ratio_tp8_over_tp4"] = ratios
++    report["dense_ratio_tp8best_over_tp4deployed"] = best_ratios
++    report["dense_prod_us_tp4_prof1103b"] = PROD_US
++
++
++def expert_part(torch, args, gen, report):
++    import expert_fast_check as E
++
++    dev = torch.device("cuda")
++    E_N, TOPK = E.E, E.TOP_K
++    board_of = torch.randperm(E_N, device=dev, generator=gen) < (E_N // 2)  # True = this board
++
++    def ids_for(m, slice_, mix):
++        ids = E._ids(m, 0, gen, dev, pool_experts=slice_).view(m, TOPK).clone()
++        if mix == "k3":
++            ids[:, 3:] = -1
++        elif mix == "ep2":
++            keep = board_of[ids.long()]
++            rows = []
++            for r in range(m):
++                live = ids[r][keep[r]]
++                pad = torch.full((TOPK - live.numel(),), -1, dtype=ids.dtype, device=dev)
++                rows.append(torch.cat([live, pad]))
++            ids = torch.stack(rows)
++        return ids.flatten().contiguous()
++
++    out = {}
++    for gtype in args.gtypes:
++        bb = E.BLOCK_BYTES[gtype]
++        gate = E._weights(gtype, E.GU_ROWS, E.GU_BLOCKS, gen, dev)
++        up = E._weights(gtype, E.GU_ROWS, E.GU_BLOCKS, gen, dev)
++        down = E._weights(gtype, E.ROWS_LOCAL, E.DN_BLOCKS, gen, dev)
++        obook = torch.ops.v41k.table(gtype, dev)
++        fbook = torch.ops.v41k.fast_table(gtype, dev)
++        res = {"gate_up": {}, "down": {}}
++        for mix in ("k6", "k3", "ep2"):
++            res["gate_up"][mix], res["down"][mix] = {}, {}
++            for m in args.m:
++                slices = torch.randperm(E_N, device=dev, generator=gen).view(E.LAYERS, -1)
++                gu, dn = [], []
++                for layer in range(E.LAYERS):
++                    ids = ids_for(m, slices[layer], mix)
++                    gu.append(E.GuCase(m, gtype, gate, up, obook, fbook, ids, 0.01, True, gen))
++                    x = torch.randn(m, E.N, device=dev, generator=gen).half()
++                    plan = E._plan(m, ids, x, gen, dev)
++                    gathered = E._gathered(m, ids, gen, dev)
++                    dn.append(E.Case(m, gtype, down, None, fbook, plan, gathered, layer % 4))
++                nu = sum(E._nu(c.plan0) for c in gu) / E.LAYERS
++                t_gu = E._graph_us([lambda c=c: c.new() for c in gu], args.reps)
++                t_dn = E._graph_us([lambda c=c: c.new(8) for c in dn], args.reps)
++                res["gate_up"][mix][str(m)] = {
++                    "us": round(t_gu, 3),
++                    "experts": round(nu, 2),
++                    "MB": round(nu * E.GU_ROWS * 2 * E.GU_BLOCKS * bb / 1e6, 3),
++                }
++                res["down"][mix][str(m)] = {
++                    "us": round(t_dn, 3),
++                    "experts": round(nu, 2),
++                    "MB": round(nu * E.ROWS_LOCAL * E.DN_BLOCKS * bb / 1e6, 3),
++                }
++                del gu, dn
++            C.log(f"experts gtype {gtype} {mix}: M6 gate_up {res['gate_up'][mix].get('6')} down {res['down'][mix].get('6')}")
++        ratios = {}
++        for role in ("gate_up", "down"):
++            ratios[role] = {
++                mix: {m: round(res[role][mix][m]["us"] / res[role]["k6"][m]["us"], 3) for m in res[role]["k6"]}
++                for mix in ("k3", "ep2")
++            }
++        res["ratio_over_k6"] = ratios
++        out[str(gtype)] = res
++        del gate, up, down
++        torch.cuda.empty_cache()
++    report["experts"] = out
++
++
++def attention_part(torch, args, gen, report):
++    out = {}
++    keys = 640
++    copies = 8
++    for heads in (16, 8):
++        out[str(heads)] = {}
++        for m in args.m:
++            q = torch.randn(m, heads, 512, device="cuda", generator=gen).half()
++            ks = [torch.randn(m, 512, keys, device="cuda", generator=gen).half() * 0.05 for _ in range(copies)]
++            vs = [torch.randn(m, keys, 512, device="cuda", generator=gen).half() for _ in range(copies)]
++
++            def fn(i, q=q, ks=ks, vs=vs):
++                s = torch.bmm(q, ks[i % copies])
++                p = torch.softmax(s.float(), -1).half()
++                return torch.bmm(p, vs[i % copies])
++
++            out[str(heads)][str(m)] = time_graph(torch, fn, 48)["median"]
++    out["ratio_8_over_16"] = {m: round(out["8"][m] / out["16"][m], 3) for m in out["16"]}
++    report["attention"] = out
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--out", required=True)
++    ap.add_argument("--lib", default=os.environ.get("VLLM_V41K_LIB", ""))
++    ap.add_argument("--watchdog", type=float, default=500)
++    ap.add_argument("--m", default="1,2,3,4,5,6")
++    ap.add_argument("--gtypes", default="29,16,17")
++    ap.add_argument("--parts", default="dense,experts,attention")
++    ap.add_argument("--l2-mb", type=float, default=48.0)
++    ap.add_argument("--reps", type=int, default=96)
++    ap.add_argument("--seed", type=int, default=0)
++    args = ap.parse_args()
++    args.m = [int(v) for v in args.m.split(",") if v]
++    args.gtypes = [int(v) for v in args.gtypes.split(",") if v]
++    report = {"step": "kernels", "start": C.now(), "status": "running"}
++
++    def partial(reason):
++        report["status"] = "hang"
++        report["hang_reason"] = reason
++        C.write_json(args.out, report)
++
++    wd = C.Watchdog(args.watchdog, args.out + ".stacks.txt", partial)
++    try:
++        import json
++
++        import torch
++
++        sel_json = os.environ.get("TP8PROBE_SELECTION")
++        sel = json.loads(sel_json) if sel_json else C.resolve()
++        torch.cuda.init()
++        bad = C.check_visible_uuids(sel["uuids"])
++        if bad:
++            report.update(status="precondition", error=bad)
++            C.write_json(args.out, report)
++            return C.EXIT_PRE
++        torch.cuda.set_device(0)
++        report["gpu"] = C.public_layout(sel)[0]
++        if not args.lib or not os.path.exists(args.lib):
++            report.update(status="precondition", error=f"v41k library not found: {args.lib!r}")
++            C.write_json(args.out, report)
++            return C.EXIT_PRE
++        torch.ops.load_library(args.lib)
++        need = ("dmv13_x", "q8_plan", "table", "fast_table", "gate_up_fast", "down_rows_fast")
++        missing = [op for op in need if not hasattr(torch.ops.v41k, op)]
++        if missing:
++            report.update(status="precondition", error=f"v41k lacks {missing}")
++            C.write_json(args.out, report)
++            return C.EXIT_PRE
++        report["lib"] = args.lib
++        gen = torch.Generator(device="cuda").manual_seed(args.seed)
++        parts = args.parts.split(",")
++        if "dense" in parts:
++            dense_part(torch, args, gen, report)
++            C.write_json(args.out, report)
++        if "experts" in parts:
++            expert_part(torch, args, gen, report)
++            C.write_json(args.out, report)
++        if "attention" in parts:
++            attention_part(torch, args, gen, report)
++        report["status"] = "ok"
++        report["end"] = C.now()
++        wd.cancel()
++        C.write_json(args.out, report)
++        return C.EXIT_OK
++    except SystemExit as e:
++        report.update(status="precondition", error=str(e))
++        C.write_json(args.out, report)
++        return C.EXIT_PRE
++    except Exception:
++        report.update(status="crash", error=traceback.format_exc()[-4000:])
++        C.write_json(args.out, report)
++        return C.EXIT_CRASH
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/benchmarks/deepseek_v41/tp8probe/p2p_probe.py b/benchmarks/deepseek_v41/tp8probe/p2p_probe.py
+new file mode 100644
+index 000000000..9e435cb16
+--- /dev/null
++++ b/benchmarks/deepseek_v41/tp8probe/p2p_probe.py
+@@ -0,0 +1,272 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""TP8PROBE1103 step a: P2P matrix, latency and bandwidth over the 8 board GPUs.
++
++One process, all 8 GPUs (Board B ranks 0-3, Board C ranks 4-7, see common.py).
++  1. cudaDeviceCanAccessPeer for all 56 ordered pairs; peer access enabled
++     where allowed (copies between other pairs are staged by the driver and
++     flagged).
++  2. Copy-engine P2P (cudaMemcpyPeerAsync) per ordered pair and size:
++     single-copy latency (median of 15, stream pre-blocked by a spin kernel so
++     the CPU issue rate is not measured) and pipelined us/copy (20 back to back).
++     Sizes: 256 B, 15/30/60/120 KiB (M6 decode payload /4, /2, x1, x2), 1 MiB,
++     16 MiB (bandwidth).
++  3. Concurrency: all cross-board pairs at once (i <-> i+4, one and both
++     directions), the rot2 pairing, two GPUs behind one PCIe switch, and an
++     in-board NVLink reference, at 15/60 KiB and 1 MiB.
++  4. Correctness: a 60 KiB pattern copied across every pair is compared.
++
++The copy engine is not what the custom all-reduce kernels use (they store
++over P2P from SMs); ar_probe.py measures those. This step answers "is P2P
++there across boards, and what do latency and bandwidth look like".
++
++  python p2p_probe.py --out p2p.json [--watchdog 200]
++"""
++
++import argparse
++import ctypes
++import os
++import sys
++import traceback
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++import common as C  # noqa: E402
++
++SIZES = [256, 15360, 30720, 61440, 122880, 1 << 20, 16 << 20]
++CONC_SIZES = [15360, 61440, 1 << 20]
++SLEEP_CYCLES = 3_000_000  # ~2 ms spin at 1.4-1.5 GHz, longer than the CPU issue
++
++
++def _cudart():
++    for line in open("/proc/self/maps"):
++        if "libcudart" in line:
++            path = line.split()[-1]
++            lib = ctypes.CDLL(path)
++            lib.cudaMemcpyPeerAsync.argtypes = [
++                ctypes.c_void_p,
++                ctypes.c_int,
++                ctypes.c_void_p,
++                ctypes.c_int,
++                ctypes.c_size_t,
++                ctypes.c_void_p,
++            ]
++            lib.cudaDeviceEnablePeerAccess.argtypes = [ctypes.c_int, ctypes.c_uint]
++            lib.cudaSetDevice.argtypes = [ctypes.c_int]
++            return lib, path
++    raise RuntimeError("libcudart is not loaded in this process")
++
++
++def _switch_of(bus: str) -> str:
++    """PCIe switch upstream port above a GPU (two bridges up), from sysfs."""
++    try:
++        real = os.path.realpath(f"/sys/bus/pci/devices/{bus}")
++        parts = real.split("/")
++        return parts[-3]
++    except OSError:
++        return "?"
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--out", required=True)
++    ap.add_argument("--watchdog", type=float, default=200)
++    ap.add_argument("--reps", type=int, default=15)
++    args = ap.parse_args()
++    sel_json = os.environ.get("TP8PROBE_SELECTION")
++    report = {"step": "p2p", "start": C.now(), "status": "running"}
++
++    def partial(reason):
++        report["status"] = "hang"
++        report["hang_reason"] = reason
++        C.write_json(args.out, report)
++
++    wd = C.Watchdog(args.watchdog, args.out + ".stacks.txt", partial)
++    try:
++        import json
++
++        sel = json.loads(sel_json) if sel_json else C.resolve()
++        report["layout"] = C.public_layout(sel)
++        switches = [_switch_of(b) for b in sel["bus"]]
++        for r, s in enumerate(switches):
++            report["layout"][r]["pcie_switch_port"] = s
++        import torch
++
++        torch.cuda.init()
++        bad = C.check_visible_uuids(sel["uuids"])
++        if bad:
++            report["status"] = "precondition"
++            report["error"] = bad
++            C.write_json(args.out, report)
++            return C.EXIT_PRE
++        n = torch.cuda.device_count()
++        lib, libpath = _cudart()
++        report["cudart"] = os.path.basename(libpath)
++
++        # 1. capability matrix + enable peer access
++        can = [[False] * n for _ in range(n)]
++        enabled = [[False] * n for _ in range(n)]
++        for i in range(n):
++            for j in range(n):
++                if i == j:
++                    continue
++                can[i][j] = bool(torch.cuda.can_device_access_peer(i, j))
++                if can[i][j]:
++                    lib.cudaSetDevice(i)
++                    rc = lib.cudaDeviceEnablePeerAccess(j, 0)
++                    enabled[i][j] = rc in (0, 704)  # 704: already enabled
++        lib.cudaGetLastError()
++        report["can_access_peer"] = can
++        report["peer_access_enabled"] = enabled
++        cross = [(i, j) for i in range(n) for j in range(n) if sel["board"][i] != sel["board"][j]]
++        report["cross_board_pairs_with_p2p"] = sum(can[i][j] for i, j in cross)
++        report["cross_board_pairs_total"] = len(cross)
++        C.log(f"p2p: cross-board can_access {report['cross_board_pairs_with_p2p']}/{len(cross)}")
++
++        streams = [torch.cuda.Stream(device=i) for i in range(n)]
++        maxb = max(SIZES)
++        send = [torch.empty(maxb, dtype=torch.uint8, device=i) for i in range(n)]
++        recv = [torch.empty(maxb, dtype=torch.uint8, device=i) for i in range(n)]
++        for i in range(n):
++            g = torch.Generator(device=i).manual_seed(1000 + i)
++            send[i].copy_(torch.randint(0, 256, (maxb,), dtype=torch.uint8, device=i, generator=g))
++        torch.cuda.synchronize()
++
++        def enqueue(src, dst, size, count, s):
++            for _ in range(count):
++                rc = lib.cudaMemcpyPeerAsync(
++                    ctypes.c_void_p(recv[dst].data_ptr()),
++                    dst,
++                    ctypes.c_void_p(send[src].data_ptr()),
++                    src,
++                    size,
++                    ctypes.c_void_p(s.cuda_stream),
++                )
++                if rc != 0:
++                    raise RuntimeError(f"cudaMemcpyPeerAsync {src}->{dst} rc={rc}")
++
++        def timed(flows, size, count):
++            """flows [(src, dst)]: us per copy for each flow (own stream)."""
++            ev = []
++            for src, dst in flows:
++                s = streams[src]
++                with torch.cuda.device(src), torch.cuda.stream(s):
++                    torch.cuda._sleep(SLEEP_CYCLES)
++                    a = torch.cuda.Event(enable_timing=True)
++                    b = torch.cuda.Event(enable_timing=True)
++                    a.record(s)
++                ev.append((a, b, s, src, dst))
++            for a, b, s, src, dst in ev:
++                with torch.cuda.device(src):
++                    enqueue(src, dst, size, count, s)
++                    b.record(s)
++            out = []
++            for a, b, s, src, dst in ev:
++                b.synchronize()
++                out.append(a.elapsed_time(b) * 1000.0 / count)
++            return out
++
++        # 4. correctness first (cheap, catches broken P2P before timing)
++        corr = {}
++        size = 61440
++        for i in range(n):
++            for j in range(n):
++                if i == j:
++                    continue
++                recv[j][:size].zero_()
++                torch.cuda.synchronize()
++                timed([(i, j)], size, 1)
++                ok = torch.equal(recv[j][:size].cpu(), send[i][:size].cpu())
++                corr[f"{i}->{j}"] = ok
++        report["copy_correct_all"] = all(corr.values())
++        report["copy_correct_failures"] = [k for k, v in corr.items() if not v]
++
++        # 2. per pair latency / pipelined
++        pairs = {}
++        for i in range(n):
++            for j in range(n):
++                if i == j:
++                    continue
++                row = {"cross_board": sel["board"][i] != sel["board"][j], "p2p": can[i][j]}
++                for size in SIZES:
++                    count = 5 if size >= (16 << 20) else 20
++                    single = [timed([(i, j)], size, 1)[0] for _ in range(args.reps)]
++                    piped = [timed([(i, j)], size, count)[0] for _ in range(3)]
++                    st = C.stats(single)
++                    pp = min(piped)
++                    row[str(size)] = {
++                        "single_us": st,
++                        "pipelined_us": round(pp, 3),
++                        "GBps_pipelined": round(size / pp / 1e3, 3),
++                    }
++                pairs[f"{i}->{j}"] = row
++            C.log(f"p2p: pairs from rank {i} done")
++        report["pairs"] = pairs
++
++        def summarize(keys, size):
++            vals = [pairs[k][str(size)]["single_us"]["median"] for k in keys]
++            bws = [pairs[k][str(size)]["GBps_pipelined"] for k in keys]
++            return {"single_us": C.stats(vals), "GBps": C.stats(bws)}
++
++        inb = [f"{i}->{j}" for i in range(n) for j in range(n) if i != j and sel["board"][i] == sel["board"][j]]
++        crs = [f"{i}->{j}" for i, j in cross]
++        report["summary"] = {
++            str(s): {"in_board": summarize(inb, s), "cross_board": summarize(crs, s)}
++            for s in SIZES
++        }
++
++        # 3. concurrency
++        half = n // 2
++        dep = [(i, i + half) for i in range(half)]
++        rot = [(i, half + (i + 2) % half) for i in range(half)]
++        by_switch = {}
++        for r, s in enumerate(switches):
++            by_switch.setdefault(s, []).append(r)
++        shared = next((v for v in by_switch.values() if len(v) >= 2), None)
++        scen = {
++            "pairs_deployed_uni_B2C": dep,
++            "pairs_deployed_bi": dep + [(b, a) for a, b in dep],
++            "pairs_rot2_bi": rot + [(b, a) for a, b in rot],
++            "board_nvlink_ring": [(i, (i + 1) % half) for i in range(half)]
++            + [(half + i, half + (i + 1) % half) for i in range(half)],
++        }
++        if shared:
++            a, b = shared[:2]
++            pa = next(j for j in range(n) if sel["board"][j] != sel["board"][a])
++            pb = next(j for j in range(n) if sel["board"][j] != sel["board"][a] and j != pa)
++            scen["one_switch_two_senders"] = [(a, pa), (b, pb)]
++            scen["one_switch_one_sender"] = [(a, pa)]
++        conc = {}
++        for name, flows in scen.items():
++            conc[name] = {"flows": flows}
++            for size in CONC_SIZES:
++                count = 20
++                runs = [timed(flows, size, count) for _ in range(3)]
++                worst = [max(r) for r in runs]
++                best_run = runs[worst.index(min(worst))]
++                conc[name][str(size)] = {
++                    "us_per_copy_each": [round(v, 3) for v in best_run],
++                    "us_per_copy_max": round(max(best_run), 3),
++                    "aggregate_GBps": round(len(flows) * size / max(best_run) / 1e3, 3),
++                }
++        report["concurrency"] = conc
++        report["status"] = "ok"
++        report["end"] = C.now()
++        wd.cancel()
++        C.write_json(args.out, report)
++        if not report["copy_correct_all"]:
++            return C.EXIT_CHECK
++        return C.EXIT_OK
++    except SystemExit as e:
++        report["status"] = "precondition"
++        report["error"] = str(e)
++        C.write_json(args.out, report)
++        return C.EXIT_PRE
++    except Exception:
++        report["status"] = "crash"
++        report["error"] = traceback.format_exc()[-4000:]
++        C.write_json(args.out, report)
++        return C.EXIT_CRASH
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/benchmarks/deepseek_v41/tp8probe/run_step.py b/benchmarks/deepseek_v41/tp8probe/run_step.py
+new file mode 100644
+index 000000000..4067ec19f
+--- /dev/null
++++ b/benchmarks/deepseek_v41/tp8probe/run_step.py
+@@ -0,0 +1,67 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""TP8PROBE1103: run one probe step under a hard timeout.
++
++  python run_step.py --name p2p --timeout 240 --dir OUT -- python p2p_probe.py ...
++
++The step runs in its own session (process group); output goes to
++OUT/<name>.log. On timeout the group gets SIGTERM, then SIGKILL after 15 s,
++and the step's exit code is recorded as 3 (hang). Writes OUT/<name>.status.json
++{name, cmd, exit, seconds, timed_out} and exits with the step's code. Only
++processes this wrapper started are signalled.
++"""
++
++import argparse
++import json
++import os
++import signal
++import subprocess
++import sys
++import time
++
++EXIT_HANG = 3
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--name", required=True)
++    ap.add_argument("--timeout", type=float, required=True)
++    ap.add_argument("--dir", required=True)
++    ap.add_argument("cmd", nargs=argparse.REMAINDER)
++    args = ap.parse_args()
++    cmd = args.cmd[1:] if args.cmd and args.cmd[0] == "--" else args.cmd
++    if not cmd:
++        sys.exit("run_step: no command")
++    log = open(os.path.join(args.dir, f"{args.name}.log"), "w")
++    t0 = time.time()
++    proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
++    timed_out = False
++    try:
++        code = proc.wait(timeout=args.timeout)
++    except subprocess.TimeoutExpired:
++        timed_out = True
++        try:
++            os.killpg(proc.pid, signal.SIGTERM)
++        except ProcessLookupError:
++            pass
++        try:
++            proc.wait(timeout=15)
++        except subprocess.TimeoutExpired:
++            try:
++                os.killpg(proc.pid, signal.SIGKILL)
++            except ProcessLookupError:
++                pass
++            proc.wait(timeout=15)
++        code = EXIT_HANG
++    secs = round(time.time() - t0, 1)
++    status = {"name": args.name, "cmd": cmd, "exit": code, "seconds": secs, "timed_out": timed_out}
++    path = os.path.join(args.dir, f"{args.name}.status.json")
++    with open(path + ".tmp", "w") as fh:
++        json.dump(status, fh, indent=1)
++    os.replace(path + ".tmp", path)
++    print(f"step {args.name}: exit {code} in {secs} s{' (TIMEOUT)' if timed_out else ''}", flush=True)
++    return code
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/benchmarks/deepseek_v41/tp8probe/tp8_model.py b/benchmarks/deepseek_v41/tp8probe/tp8_model.py
+new file mode 100644
+index 000000000..650982585
+--- /dev/null
++++ b/benchmarks/deepseek_v41/tp8probe/tp8_model.py
+@@ -0,0 +1,307 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""TP8PROBE1103: per-round decode model, TP8 designs vs today's PP2 x TP4.
++
++CPU only. Without --dir it prints the ESTIMATED table; with --dir it reads the
++window's p2p.json, ar-*.json and kernels.json, replaces every estimate it can
++with a MEASURED value (each input is labelled), and applies the go/no-go rule.
++
++Baseline (MEASURED): round T0 = 27.1 ms on the deployed PP2 x TP4 stack. Each
++decode round runs the 40 layers once (20 on Board B, then 20 on Board C), so a
++TP8 design runs the same 40 layers on all 8 GPUs and its round is
++
++  round = T0 - 40 * layer_saving - nonlayer_saving + n8 * (AR8 - AR4)
++
++layer_saving    per-layer kernel time a TP8 rank no longer spends (dense
++                halvable roles, routed experts, attention), from PROF1103b
++                stage-1 layer components and the TP8/TP4 time ratios f;
++nonlayer_saving PP hand-off (removed), lm head, Engram, drafter, index;
++n8              collectives per round that become 8-wide (ARs, and in design
++                A the expert all-gather peer_gather);
++AR8 - AR4       extra latency of one 8-way collective over today's in-board
++                4-way custom AR at the M6 decode payload (61,440 B).
++
++Designs
++  A  full TP8: attention heads, dense, experts (288/640 rows per rank)
++  B  TP8 attention + dense, experts EP2 x TP4 (each board owns half the
++     experts at today's TP4 kernels; peer_gather stays in-board)
++  C  attention/dense replicated per board at TP4, experts EP2 x TP4 (only the
++     MoE AR is 8-wide)
++
++  python tp8_model.py [--dir WINDOW_OUT] [--out model.json] [--target 22.0]
++"""
++
++import argparse
++import glob
++import json
++import os
++import sys
++
++T0 = 27.1  # MEASURED ms/round today (S8-D + PLAN_FUSE + PP_KEEP_BATCH + EXPERT_FAST + FUSE_ATTN)
++LAYERS = 40
++M6_BYTES = "61440"
++# PROF1103b stage-1 layer, us (MEASURED): halvable dense roles and the rest.
++DENSE_US = {"q_b": 20.4, "wo_a": 18.4, "wo_b": 17.3, "shared": 12.9, "shared_down": 17.4}
++ATTN_US = 44.3  # gather 10.9 + gemms 13.5 + 15.6 + softmax 4.3
++EXPERT_US = 156.0  # ESTIMATED: gate_up + down per layer after EXPERT_FAST
++EXPERT_SPLIT = {"gate_up": 0.565, "down": 0.435}  # PROF1103b 99.6 : 76.9
++HEAD_US, ENGRAM_US, ENGRAM_LAYERS = 167.1, 48.6, 2  # MEASURED prod medians
++HANDOFF_MS = 0.40  # ESTIMATED PP send/recv + its skew left after overlap
++DRAFTER_SAVE_MS = 0.41  # ESTIMATED: ~12 % of the 3.4 ms drafter GPU time
++INDEX_SAVE_MS = 0.06  # ESTIMATED
++C_REPLICATION_MS = 0.15  # ESTIMATED: C replicates head / drafter per board
++ASYNC_CREDIT_MS = 1.0  # ESTIMATED, unmeasured: async scheduling at PP1
++N8 = {"A": 106 + 40, "B": 106, "C": 40}  # 85 push AR + 8 fp32 + 8 index + 5 gather; +40 peer_gather
++AR4_EST = 8.75
++
++ESTIMATES = {
++    "f_dense": {"q_b": 0.67, "wo_a": 0.67, "wo_b": 0.67, "shared": 0.67, "shared_down": 0.67},
++    "f_expert_tp8": 0.53,
++    "f_expert_ep2": 0.60,
++    "f_attn": 0.85,
++    "f_head": 0.52,
++    "f_engram": 0.55,
++}
++
++
++def _load(path):
++    try:
++        return json.load(open(path))
++    except Exception:
++        return None
++
++
++def measured_inputs(d):
++    """MEASURED overrides from a window directory; (inputs, sources, gate)."""
++    inp, src, gate = {}, {}, {"notes": []}
++    p2p = _load(os.path.join(d, "p2p.json"))
++    if p2p:
++        gate["p2p_status"] = p2p.get("status")
++        gate["cross_board_p2p"] = f"{p2p.get('cross_board_pairs_with_p2p')}/{p2p.get('cross_board_pairs_total')}"
++        gate["p2p_ok"] = (
++            p2p.get("status") == "ok"
++            and p2p.get("copy_correct_all") is True
++            and p2p.get("cross_board_pairs_with_p2p") == p2p.get("cross_board_pairs_total")
++        )
++        summ = p2p.get("summary", {}).get(M6_BYTES, {})
++        if summ:
++            inp["p2p_cross_single_us_60k"] = summ["cross_board"]["single_us"].get("median")
++            inp["p2p_inboard_single_us_60k"] = summ["in_board"]["single_us"].get("median")
++    else:
++        gate["p2p_ok"] = False
++        gate["notes"].append("p2p.json missing")
++
++    def ar(group, name, key):
++        r = _load(os.path.join(d, f"ar-{group}.json"))
++        if not r:
++            return None, f"ar-{group}.json missing"
++        e = r.get("results", {}).get(name, {}).get(key)
++        if not e:
++            return None, f"{name}@{key} absent (status {r.get('status')})"
++        if e.get("admitted") is False:
++            return None, f"{name}@{key} not admitted"
++        ok = all(e.get("correct_per_rank", {}).values()) if e.get("correct_per_rank") else False
++        if not ok:
++            return None, f"{name}@{key} incorrect or unchecked"
++        return e.get("us_median_slowest_rank"), "ok"
++
++    statuses = {}
++    for g in ("ca", "nccl", "hier"):
++        r = _load(os.path.join(d, f"ar-{g}.json"))
++        statuses[g] = r.get("status") if r else "missing"
++    gate["ar_status"] = statuses
++    ar4, why = ar("ca", "ca4", M6_BYTES)
++    if ar4 is not None:
++        inp["AR4"], src["AR4"] = ar4, "MEASURED ca4 @ 61,440 B"
++    else:
++        gate["notes"].append(f"AR4: {why}")
++    cands = {}
++    for label, (g, n, k) in {
++        "nccl8": ("nccl", "nccl8", M6_BYTES),
++        "two_level_ca4+ca2x": ("ca", "two_level", M6_BYTES),
++        "two_level_ca4+nccl2x": ("nccl", "two_level_nccl", M6_BYTES),
++        "hier8@64KiB (upper bound for 60 KiB)": ("hier", "hier8", "65536"),
++    }.items():
++        v, why = ar(g, n, k)
++        if v is not None:
++            cands[label] = {"us": v, "kind": "MEASURED", "steps": [f"ar-{g}"]}
++        else:
++            cands[label] = {"us": None, "why": why}
++    q, why_q = ar("ca", "ca2x_q", "15360")
++    if ar4 is not None and q is not None:
++        # reduce-scatter in board + quarter cross exchange + all-gather in board:
++        # in-board RS + AG move what one in-board AR moves.
++        cands["rs_cross_ag (ca4 + ca2x_q)"] = {
++            "us": round(ar4 + q, 3),
++            "kind": "COMPOSED from MEASURED",
++            "steps": ["ar-ca"],
++        }
++    inp["AR8_candidates"] = cands
++    usable = {k: v["us"] for k, v in cands.items() if v.get("us") is not None}
++    if usable:
++        best = min(usable, key=usable.get)
++        inp["AR8"], src["AR8"] = usable[best], f"{cands[best]['kind']} {best}"
++        gate["ar8_built_from_existing_kernel"] = cands[best]["kind"] == "MEASURED"
++        gate["ar8_steps"] = cands[best]["steps"]
++
++    k = _load(os.path.join(d, "kernels.json"))
++    if k and k.get("dense_ratio_tp8best_over_tp4deployed"):
++        r = k["dense_ratio_tp8best_over_tp4deployed"]
++        fd = {role: r[role]["6"] for role in ("q_b", "wo_a", "wo_b", "shared") if role in r}
++        if "shared" in fd:
++            fd["shared_down"] = fd["shared"]
++        inp["f_dense"], src["f_dense"] = fd, "MEASURED dmv13_x M6 (shared_down uses shared's ratio)"
++        if "head" in r:
++            inp["f_head"], src["f_head"] = r["head"]["6"], "MEASURED"
++        if "engram" in r:
++            inp["f_engram"], src["f_engram"] = r["engram"]["6"], "MEASURED"
++    if k and k.get("experts"):
++
++        def mix_ratio(mix):
++            vals = []
++            for res in k["experts"].values():
++                rr = res.get("ratio_over_k6", {})
++                if "gate_up" in rr and "down" in rr:
++                    vals.append(
++                        EXPERT_SPLIT["gate_up"] * rr["gate_up"][mix]["6"]
++                        + EXPERT_SPLIT["down"] * rr["down"][mix]["6"]
++                    )
++            return round(sum(vals) / len(vals), 3) if vals else None
++
++        for key, mix in (("f_expert_tp8", "k3"), ("f_expert_ep2", "ep2")):
++            v = mix_ratio(mix)
++            if v is not None:
++                inp[key], src[key] = v, f"MEASURED proxy ({mix}/k6, M6, mean of gtypes)"
++    if k and k.get("attention", {}).get("ratio_8_over_16"):
++        inp["f_attn"], src["f_attn"] = k["attention"]["ratio_8_over_16"]["6"], "MEASURED bmm proxy"
++    for name in ("p2p", "ar-ca", "ar-nccl", "ar-hier", "kernels"):
++        st = _load(os.path.join(d, f"{name}.status.json"))
++        if st and st.get("exit") == 3:
++            gate["notes"].append(f"{name}: watchdog / hang (exit 3)")
++    gate["hang_steps"] = [
++        os.path.basename(p).replace(".status.json", "")
++        for p in glob.glob(os.path.join(d, "*.status.json"))
++        if (_load(p) or {}).get("exit") == 3
++    ]
++    return inp, src, gate
++
++
++def evaluate(inp, target):
++    f = {**ESTIMATES, **{k: v for k, v in inp.items() if k in ESTIMATES}}
++    fd = {**ESTIMATES["f_dense"], **f["f_dense"]}
++    dense_save = sum(DENSE_US[r] * (1 - fd[r]) for r in DENSE_US)
++    attn_save = ATTN_US * (1 - f["f_attn"])
++    exp_tp8 = EXPERT_US * (1 - f["f_expert_tp8"])
++    exp_ep2 = EXPERT_US * (1 - f["f_expert_ep2"])
++    head_save = HEAD_US * (1 - f["f_head"]) / 1000
++    eng_save = ENGRAM_LAYERS * ENGRAM_US * (1 - f["f_engram"]) / 1000
++    nonlayer_ab = HANDOFF_MS + head_save + eng_save + DRAFTER_SAVE_MS + INDEX_SAVE_MS
++    layer = {"A": dense_save + attn_save + exp_tp8, "B": dense_save + attn_save + exp_ep2, "C": exp_ep2}
++    nonlayer = {"A": nonlayer_ab, "B": nonlayer_ab, "C": HANDOFF_MS - C_REPLICATION_MS}
++    ar4 = inp.get("AR4", AR4_EST)
++    ar8 = inp.get("AR8")
++    out = {}
++    for d in ("A", "B", "C"):
++        base = T0 - LAYERS * layer[d] / 1000 - nonlayer[d]
++        n = N8[d]
++        row = {
++            "layer_saving_us": round(layer[d], 1),
++            "layer_saving_ms_x40": round(LAYERS * layer[d] / 1000, 2),
++            "nonlayer_saving_ms": round(nonlayer[d], 2),
++            "base_ms_if_AR8_eq_AR4": round(base, 2),
++            "n8_collectives": n,
++            "breakeven_dAR_us_for_target": round((target - base) / n * 1000, 2),
++            "breakeven_dAR_us_for_target_with_async": round((target + ASYNC_CREDIT_MS - base) / n * 1000, 2),
++            "breakeven_dAR_us_for_parity": round((T0 - base) / n * 1000, 2),
++            "breakeven_AR8_us_for_target": round(ar4 + (target - base) / n * 1000, 2),
++            "breakeven_AR8_us_for_parity": round(ar4 + (T0 - base) / n * 1000, 2),
++        }
++        if ar8 is not None:
++            r = base + n * (ar8 - ar4) / 1000
++            row["round_ms"] = round(r, 2)
++            row["round_ms_with_async_credit"] = round(r - ASYNC_CREDIT_MS, 2)
++        out[d] = row
++    return {
++        "f": {**{k: f[k] for k in ESTIMATES if k != "f_dense"}, "f_dense": fd},
++        "AR4_us": ar4,
++        "AR8_us": ar8,
++        "designs": out,
++        "savings_detail_us": {
++            "dense": round(dense_save, 1),
++            "attn": round(attn_save, 1),
++            "experts_tp8": round(exp_tp8, 1),
++            "experts_ep2": round(exp_ep2, 1),
++        },
++    }
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--dir", default="")
++    ap.add_argument("--out", default="")
++    ap.add_argument("--target", type=float, default=22.0)
++    args = ap.parse_args()
++    report = {"T0_ms": T0, "target_ms": args.target, "estimates": ESTIMATES}
++    est = evaluate({"AR4": AR4_EST}, args.target)
++    best_case = evaluate(
++        {
++            "f_dense": dict.fromkeys(DENSE_US, 0.5),
++            "f_expert_tp8": 0.5,
++            "f_expert_ep2": 0.5,
++            "f_attn": 0.5,
++            "f_head": 0.5,
++            "f_engram": 0.5,
++            "AR4": AR4_EST,
++        },
++        args.target,
++    )
++    report["estimated"] = est
++    report["estimated_best_case_all_f_0.5"] = best_case
++    verdict = {"decision": "NO WINDOW DATA", "kind": "ESTIMATED"}
++    if args.dir:
++        inp, src, gate = measured_inputs(args.dir)
++        meas = evaluate(inp, args.target)
++        report.update(measured_inputs=inp, sources=src, gate=gate, measured=meas)
++        reasons = []
++        if not gate.get("p2p_ok"):
++            reasons.append("cross-board P2P not complete/correct")
++        # A hang blocks GO when it is in a step TP8 cannot avoid: P2P, the
++        # kernels, NCCL at world 8 (vLLM needs it for init / gathers), or the
++        # step that supplied the chosen AR8. Other hangs are reported only.
++        must = {"p2p", "kernels", "ar-nccl", *gate.get("ar8_steps", [])}
++        blocking = [s for s in gate.get("hang_steps", []) if s in must]
++        if blocking:
++            reasons.append(f"hang in {blocking}")
++        if meas["AR8_us"] is None:
++            reasons.append("no correct 8-way AR measured")
++        missing = [k for k in ("f_dense", "f_expert_tp8", "f_expert_ep2", "f_attn", "AR4") if k not in inp]
++        if missing:
++            reasons.append(f"unmeasured inputs {missing}")
++        best = None
++        if meas["AR8_us"] is not None:
++            best = min(("A", "B"), key=lambda d: meas["designs"][d]["round_ms"])
++            if meas["designs"][best]["round_ms"] > args.target:
++                reasons.append(
++                    f"best modeled round {meas['designs'][best]['round_ms']} ms (design {best}) > {args.target}"
++                )
++        verdict = {
++            "decision": "GO" if not reasons else "NO-GO",
++            "best_design": best,
++            "best_round_ms": meas["designs"][best]["round_ms"] if best else None,
++            "best_round_ms_with_async_credit": meas["designs"][best]["round_ms_with_async_credit"] if best else None,
++            "reasons": reasons,
++            "kind": "MODELED from MEASURED inputs (sources listed)",
++        }
++    report["verdict"] = verdict
++    text = json.dumps(report, indent=1)
++    if args.out:
++        tmp = args.out + ".tmp"
++        with open(tmp, "w") as fh:
++            fh.write(text)
++        os.replace(tmp, args.out)
++    print(text)
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/benchmarks/deepseek_v41/tp8probe/window.sh b/benchmarks/deepseek_v41/tp8probe/window.sh
+new file mode 100755
+index 000000000..61fbf4e99
+--- /dev/null
++++ b/benchmarks/deepseek_v41/tp8probe/window.sh
+@@ -0,0 +1,119 @@
++#!/usr/bin/env bash
++# TP8PROBE1103: the whole GPU window in one command (server DOWN, the 8-GPU host).
++#
++#   bash benchmarks/deepseek_v41/tp8probe/window.sh [OUT_DIR]
++#
++# Steps (each under run_step.py with a hard timeout; a hang = exit 3, the
++# window continues with the next step):
++#   preflight  refuse (exit 2) if :18042 or :8000 is listening or any process
++#              other than nvidia-persistenced holds one of the 8 board GPUs
++#   p2p        P2P matrix, copy-engine latency/bandwidth, concurrency  180 s
++#   kernels    TP8 vs TP4 half-width kernels on one GPU                480 s
++#   ar-ca      custom AR: ca4, ca2x, ca2x_q, two_level                 300 s
++#   ar-hier    in-tree SM70 TP8 hierarchical push AR                   180 s
++#   ar-nccl    NCCL 8 / 4 / 2x, two_level_nccl (last: #1224 hang risk) 240 s
++#   model      tp8_model.py on the JSONs -> model.json, GO / NO-GO      30 s
++# Worst case 1410 s (23.5 min) plus preflight; expected 8-12 min.
++# Uses the deployed engine read-only (venv python, src-pp2, v41k.so); writes
++# only OUT_DIR (default /path/to/out).
++# Exit: 0 all steps ok, 1 some step failed a check / crashed, 2 preflight,
++# 3 some step hung (watchdog).
++set -u
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++ENGINE=${ENGINE_HOME}
++PY="$ENGINE/.venv-pp2/bin/python"
++TS="$(date -u +%Y%m%dT%H%M%SZ)"
++OUT="${1:-/path/to/out"
++mkdir -p "$OUT/cache" || exit 2
++cd "$OUT" || exit 2
++
++export CUDA_DEVICE_ORDER=PCI_BUS_ID
++export PYTHONPATH="$ENGINE/.venv-pp2/lib/python3.12/site-packages:$ENGINE/src-pp2"
++export XDG_CACHE_HOME="$OUT/cache" XDG_CONFIG_HOME="$OUT/cache/config"
++export TRITON_CACHE_DIR="$OUT/cache/triton" FLASHINFER_WORKSPACE_BASE="$OUT/cache"
++export VLLM_NO_USAGE_STATS=1 OMP_NUM_THREADS=1 PYTHONUNBUFFERED=1
++export VLLM_V41K_LIB="$ENGINE/src-pp2/benchmarks/deepseek_v41/v41k/build/v41k.so"
++unset VLLM_SM70_TP8_HIERARCHICAL_CUSTOM_AR VLLM_SM70_TP8_HIERARCHICAL_PUSH_AR
++
++# --- preflight -------------------------------------------------------------
++"$PY" - "$HERE" "$OUT" <<'EOF'
++import json, os, sys
++sys.path.insert(0, sys.argv[1])
++import common as C
++
++out = sys.argv[2]
++pre = {"step": "preflight", "time": C.now()}
++
++def listening(port):
++    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
++        try:
++            rows = open(path).read().splitlines()[1:]
++        except OSError:
++            continue
++        for row in rows:
++            f = row.split()
++            if f[3] == "0A" and int(f[1].rsplit(":", 1)[1], 16) == port:
++                return True
++    return False
++
++try:
++    sel = C.resolve("deployed")
++except SystemExit as e:
++    pre["error"] = str(e)
++    C.write_json(os.path.join(out, "preflight.json"), pre)
++    sys.exit(2)
++pre["layout"] = C.public_layout(sel)
++pre["listening"] = {p: listening(p) for p in (18042, 8000)}
++holders = [h for h in C.gpu_holders(sel["minor"]) if not h["comm"].startswith("nvidia-persist")]
++pre["gpu_holders"] = holders
++bad = [f"port {p} listening" for p, v in pre["listening"].items() if v]
++if holders and os.environ.get("TP8PROBE_ALLOW_HOLDERS") != "1":
++    bad.append(f"GPU holders {[(h['pid'], h['comm']) for h in holders]}")
++pre["refused"] = bad
++C.write_json(os.path.join(out, "preflight.json"), pre)
++if bad:
++    print("preflight: REFUSED: " + "; ".join(bad), file=sys.stderr)
++    sys.exit(2)
++fd = os.open(os.path.join(out, ".selection"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
++with os.fdopen(fd, "w") as fh:
++    json.dump(sel, fh)
++print("preflight: ok, " + " ".join(f"{l['rank']}:{l['board']}{l['pci_bus_id_index']}" for l in pre["layout"]))
++EOF
++[ $? -eq 0 ] || { echo "window: preflight refused, see $OUT/preflight.json" >&2; exit 2; }
++SEL="$OUT/.selection"
++export TP8PROBE_SELECTION="$(cat "$SEL")"
++export CUDA_VISIBLE_DEVICES="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["cuda_visible_devices"])' "$SEL")"
++rm -f "$SEL"   # full UUIDs live only in this process's environment
++
++step() {  # name timeout cmd...
++  local name=$1 t=$2; shift 2
++  "$PY" "$HERE/run_step.py" --name "$name" --timeout "$t" --dir "$OUT" -- "$@"
++}
++T_START=$(date +%s)
++step p2p 180 "$PY" "$HERE/p2p_probe.py" --out "$OUT/p2p.json" --watchdog 160
++step kernels 480 "$PY" "$HERE/kernel_scale.py" --out "$OUT/kernels.json" --watchdog 450
++step ar-ca 300 "$PY" "$HERE/ar_probe.py" --group ca --out "$OUT/ar-ca.json" --watchdog 270
++step ar-hier 180 "$PY" "$HERE/ar_probe.py" --group hier --out "$OUT/ar-hier.json" --watchdog 150
++step ar-nccl 240 "$PY" "$HERE/ar_probe.py" --group nccl --out "$OUT/ar-nccl.json" --watchdog 210
++step model 30 "$PY" "$HERE/tp8_model.py" --dir "$OUT" --out "$OUT/model.json"
++echo "window: $(( $(date +%s) - T_START )) s"
++
++"$PY" - "$OUT" <<'EOF'
++import glob, json, os, sys
++out = sys.argv[1]
++codes = {}
++for p in sorted(glob.glob(os.path.join(out, "*.status.json"))):
++    s = json.load(open(p))
++    codes[s["name"]] = s["exit"]
++print("exit codes:", codes)
++try:
++    v = json.load(open(os.path.join(out, "model.json")))["verdict"]
++    print("verdict:", json.dumps(v))
++except Exception as e:
++    print("verdict: unavailable", e)
++probe = [c for n, c in codes.items() if n != "model"]
++sys.exit(3 if 3 in probe else (1 if any(probe) else 0))
++EOF
++RC=$?
++ls -la "$OUT"
++exit $RC

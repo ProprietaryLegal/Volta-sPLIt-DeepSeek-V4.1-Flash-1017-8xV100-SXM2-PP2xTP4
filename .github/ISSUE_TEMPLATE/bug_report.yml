@@ -1,0 +1,42 @@
+name: Bug report
+description: Something fails, crashes, hangs or gives wrong output with this build or our patches.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please remove addresses, host names and any prompt text you would not post publicly.
+  - type: input
+    id: tree
+    attributes:
+      label: Source tree
+      description: The tree printed by tools/apply_series.sh, and whether engine/production/0050-expert-diet.patch is applied.
+    validations:
+      required: true
+  - type: textarea
+    id: switches
+    attributes:
+      label: Switches
+      description: Your VLLM_V41_* environment (rec.env or your changes to it) and the serving profile you used.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The request (settings, prompt length) or the command that triggers it.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Engine log lines around the failure.
+      render: text
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware and software
+      description: GPUs and boards, PCIe layout, GPU clock cap and power limit, driver, CUDA, torch.

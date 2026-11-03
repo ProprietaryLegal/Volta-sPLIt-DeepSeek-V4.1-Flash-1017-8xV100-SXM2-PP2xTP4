@@ -1,0 +1,37 @@
+name: Performance report
+description: A measurement on V100 hardware, with this build or another.
+labels: [performance]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Token counts and timings only, never prompt or output text. Same-conditions numbers for other builds are welcome.
+  - type: input
+    id: config
+    attributes:
+      label: Build and switches
+      description: e.g. this repository's production stack (series + 0050 + rec.env), or another build.
+    validations:
+      required: true
+  - type: input
+    id: conditions
+    attributes:
+      label: GPU clock cap and power limit
+      description: e.g. 1522 MHz cap, 150 W.
+    validations:
+      required: true
+  - type: textarea
+    id: protocol
+    attributes:
+      label: Protocol
+      description: T=0 / T=1, thinking on or off, prompt sizes, output length, ABBA order or single runs.
+  - type: textarea
+    id: table
+    attributes:
+      label: Results
+      description: ms per round and tok/s, with accepted drafts per round if you have them.
+      render: markdown
+  - type: textarea
+    id: other
+    attributes:
+      label: Anything else running, and other differences

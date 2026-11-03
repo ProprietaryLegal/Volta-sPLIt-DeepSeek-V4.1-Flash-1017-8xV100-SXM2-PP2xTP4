@@ -1,0 +1,50 @@
+# patch	from	to	tree_after	group	knob	note
+0001-pp2-port.patch	899e9ed33	0a63bb6f4	d2d08d731488	port	VLLM_V41_PP_*, VLLM_V41_MARKOV_SHARD, VLLM_V41_INDEX_OVERLAP	V41PKG PP2xTP4 port (P0/P1/P2, KFUS1 sharded Markov head, KMOE1 guard, L4 knob); PP=1 kept admissible
+0002-upstream-main-6db9c81.patch	0a63bb6f4	4d101457d	1f1477e355bf	upstream	-	1Cat main 6db9c81 (41 commits after 899e9ed)
+0003-upstream-pr1344.patch	4d101457d	f461c6b44	1caa369034f6	upstream	-	1Cat #1344 fused compress kernel off the stack
+0004-upstream-pr1345.patch	f461c6b44	a36d73871	4b0cbae96553	upstream	-	1Cat #1345 grouped FP16 verify, several KV heads per rank
+0005-upstream-pr1328.patch	a36d73871	7f71be2a1	91ea7716da53	upstream	-	1Cat #1328 indexer cuBLAS prefill score tile in fp32
+0006-upstream-pr1325.patch	7f71be2a1	9530d59c5	322fc337f3f5	upstream	-	1Cat #1325 mHC prenorm staging
+0007-upstream-pr1321.patch	9530d59c5	9c8564669	fc8ba735e2b8	upstream	-	1Cat #1321 FP8 bridge workspace budget
+0008-upstream-pr1320.patch	9c8564669	67566781e	4dc10aae670f	upstream	-	1Cat #1320 QPN4 scratch for eager profiled engines
+0009-upstream-pr1294.patch	67566781e	b493f38a8	3939f1e2fb76	upstream	-	1Cat #1294 PP send overlaps the next eager step
+0010-upstream-pr1293.patch	b493f38a8	59975bbe0	b86ef37dc768	upstream	-	1Cat #1293 log the SM70 indexer decode route per stage
+0011-upstream-pr1300.patch	59975bbe0	38519fdb5	2a4ef5dbda0e	upstream	-	1Cat #1300 ExpertCache.resolve arity
+0012-upstream-pr1273.patch	38519fdb5	0526faa0f	3c90432547a6	upstream	-	1Cat #1273 warmup tests policy ABI
+0013-upstream-pr1338.patch	0526faa0f	3ab6d67fb	ac30053ef3f9	upstream	-	1Cat #1338 cache output blocks of reasoning requests
+0014-upstream-pr1322.patch	3ab6d67fb	0756bbb8c	dfa520d34ece	upstream	-	1Cat #1322 SM70-only build fix
+0015-upstream-pr1319.patch	0756bbb8c	9d66efe73	ec221c9630c0	upstream	-	1Cat #1319 model-load allocator scope
+0016-upstream-pr1318.patch	9d66efe73	61fb67b42	e1cf83cf12cc	upstream	-	1Cat #1318 prompt logprobs merge
+0017-upstream-pr1317.patch	61fb67b42	a25edaf1c	a35d19bba9bd	upstream	-	1Cat #1317 streaming tool calls metadata
+0018-upstream-pr1316.patch	a25edaf1c	e7691b273	f1c86955ba27	upstream	-	1Cat #1316 parallel_tool_calls=false grammar
+0019-upstream-pr1315.patch	e7691b273	2c44e26bf	7790bc5ab5a1	upstream	-	1Cat #1315 named tool without parameters
+0020-upstream-pr1314.patch	2c44e26bf	2d5410ca4	093813909faf	upstream	-	1Cat #1314 tool_choice=none streaming
+0021-upstream-pr1309.patch	2d5410ca4	1318e8869	527fd9aaf426	upstream	-	1Cat #1309 non-finite tool arguments
+0022-upstream-pr1308.patch	1318e8869	3b8b6d940	1264c19137b3	upstream	-	1Cat #1308 large integer tool arguments
+0023-upstream-pr1307.patch	3b8b6d940	b308c09ee	dbf114fd3aab	upstream	-	1Cat #1307 cudart runtime filename match
+0024-upstream-pr1306.patch	b308c09ee	de90e47d1	880534d07123	upstream	-	1Cat #1306 shm notifications while readers busy
+0025-upstream-pr1305.patch	de90e47d1	5019a3cb2	8a767212dcb8	upstream	-	1Cat #1305 stop strings vs emitted output
+0026-upstream-pr1304.patch	5019a3cb2	434126ebf	03c7abf04429	upstream	-	1Cat #1304 prefix cache skips at external lookup layers
+0027-upstream-pr1282.patch	434126ebf	45183f0d6	433a5e653a41	upstream	-	1Cat #1282 (includes #1280) SM70 tensor-core Triton prefill routes
+0028-pp2-runtime-fixes.patch	45183f0d6	947041be3	60b700bb4617	port	-	PP2 boot/runtime fixes (dummy-run unwrap, v41k-missing warning, stage-2 anchor ring, PP draft timing, accepted drafts on non-last ranks); every PP2 path gated on PP>1 or a non-last rank
+0029-expert-topp-prune.patch	947041be3	9df99b18a	0456e39656d5	lever-lost	VLLM_V41_PRUNE_TOPP	lossy expert top-p prune; LOST (greedy FAIL); default off
+0030-coupled-drafts.patch	9df99b18a	69208adcc	a3cf37ed4235	lever	VLLM_V41_COUPLED_DRAFTS	exact coupled DSpark drafts, keyed-draw verification
+0031-index-reduce.patch	69208adcc	fcba166f3	5210128fdc5b	lever	VLLM_V41_INDEX_REDUCE	TOK1103 live-prefix decode index reduce
+0032-topp-router-epilogue.patch	fcba166f3	4b306f415	f1a05652968b	lever-lost	VLLM_V41_PRUNE_TOPP	top-p prune folded into the router epilogue; off
+0033-router-floor.patch	4b306f415	be566498a	902fd7397534	lever-lost	VLLM_V41_GATE_COLS, VLLM_V41_ROUTE_FAST	column-major gate projection; LOST; off
+0034-plan-fuse.patch	be566498a	b076246e1	b064668556b9	lever	VLLM_V41_PLAN_FUSE	expert plan built inside q8 (v41k q8_plan, gate_up7p)
+0035-coupled-drafts-fused.patch	b076246e1	24e622927	d538da1e5cf5	lever	VLLM_V41_COUPLED_DRAFTS	fused keyed picks, no key-copy sync
+0036-dmv-x.patch	24e622927	eaa3a3e39	e13236bc04a0	lever	VLLM_V41_DMV_X	dense small-M on v41k dmv13_x
+0037-gpu-checks-gate-cols.patch	eaa3a3e39	3a31c86a9	1c5a75f44d22	lever-lost	VLLM_V41_GATE_COLS	GPU checks cover serving dtypes; GATE_COLS only on checked ones
+0038-coupled-shard.patch	3a31c86a9	e90198f30	50f81d049ded	lever	VLLM_V41_COUPLED_SHARD	coupled drafts from vocabulary shards in a captured graph
+0039-coupled-local.patch	e90198f30	f54308fcd	6bc80d2e3c0a	lever	VLLM_V41_COUPLED_LOCAL	coupled verify from vocabulary shards
+0040-plan-fuse-check-fix.patch	f54308fcd	8a7bd7bb4	7ce5d72cd137	tools	-	plan_fuse_check finiteness gate
+0041-knob-hygiene.patch	8a7bd7bb4	112c1ea31	1a029315aa59	lever	VLLM_V41_MARKOV_SHARD	register MARKOV_SHARD, log PLAN_FUSE, guard local logits
+0042-pp-keep-batch.patch	112c1ea31	49cb1b795	e44dbe0c9d52	lever	VLLM_V41_PP_KEEP_BATCH	keep the batch across PP empty steps (PP>1 only)
+0043-expert-fast.patch	49cb1b795	0824f8b33	841761e18653	lever	VLLM_V41_EXPERT_FAST	down_rows_fast + gate_up_fast (3 commits)
+0044-fuse-transition-v1.patch	0824f8b33	cfb1e82a6	44d5103b36cd	lever-lost	VLLM_V41_FUSE_TRANSITION	HC transition in one launch; LOST; off
+0045-fuse-attn-prep-post.patch	cfb1e82a6	c2d83a0bf	4d712ec17f5a	lever	VLLM_V41_FUSE_ATTN_PREP, VLLM_V41_FUSE_ATTN_POST	decode attention folds (2 commits)
+0046-expert-fast-hints-net.patch	c2d83a0bf	6f564a6fe	5ca66c22108d	lever-lost	-	L1 prefetch / evict-first hints, then backed out (NEUTRAL d21); net diff
+0047-fuse-transition-v2.patch	6f564a6fe	b9b0bc8e4	8287296bf004	lever-lost	VLLM_V41_FUSE_TRANSITION	TRANSITION v2; not deployed on the 8-GPU host (the 8-GPU host runs v1 of this off-knob file); off
+0048-hot-refill-1341.patch	b9b0bc8e4	7e9a15686	6e72b034f88b	lever	VLLM_V41_HOT_REFILL, VLLM_V41_RING_REACH	port of 1Cat #1341 (2 commits)
+0049-fork4card-pp1-test.patch	7e9a15686	e4b21f060	b0d692425297	fork	-	CPU test: coupled drafts under PP1 cold-expert verify truncation

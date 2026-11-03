@@ -1,0 +1,25 @@
+{
+ "name": "Volta sPLIt: DeepSeek-V4.1-Flash-1017 on 8x V100-SXM2 (PP2 x TP4)",
+ "assembled": "2026-11-03",
+ "source": {
+  "engine": "private V41PKG fork of 1CatAI/1Cat-vLLM: the 49-patch series cut from 899e9ed33..e4b21f060 (sanitized: added lines only, trees recomputed, end tree b0d692425297); patch 0050 = the production v41k diet source on top of that tree (end tree 4447483248bb), checked byte-identical to the deployed v41k source",
+  "in_testing": "T01-T05 cut from the production branch head to each test branch; T06 from the test kit (applies in v41k/); T07 from its own base b9b0bc8e4",
+  "configs": "the production serving profile and run scripts, paths replaced by ${ENGINE_HOME}/${MODEL_HOME} placeholders",
+  "harness": "the bench directory scripts, paths and host names replaced by our scrubber",
+  "evidence": "the 2026-11-03 queue state log, paths and host names replaced by our scrubber",
+  "previous_build": "the published record of our previous build (Volta sPLIce), files copied unchanged except a banner and relative links",
+  "docs": "written for publication from the build records"
+ },
+ "left_out": [
+  "model weights, wheels and compiled libraries",
+  "prompt sets, generated text, arm outputs (*.jsonl)",
+  "greedy reference outputs and the quality tools",
+  "server logs",
+  "host names, internal paths, session names and GPU UUIDs (replaced)"
+ ],
+ "checks": [
+  "tools/check_data_boundary.sh --tree HEAD",
+  "a forbidden-term scan for host names, internal paths and personal addresses",
+  "git apply --check of every patch on its stated base"
+ ]
+}

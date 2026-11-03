@@ -1,0 +1,446 @@
+diff --git a/tests/detokenizer/test_check_stop_strings.py b/tests/detokenizer/test_check_stop_strings.py
+new file mode 100644
+index 000000000..2fae373f6
+--- /dev/null
++++ b/tests/detokenizer/test_check_stop_strings.py
+@@ -0,0 +1,76 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Unit tests for check_stop_strings.
++
++These are pure-function tests (no model / GPU). They pin down which stop
++string is selected when several stop strings match within the text that was
++appended in a single step -- which happens under speculative decoding, where
++multiple tokens (and therefore multiple stop strings) can be appended at once.
++"""
++
++import pytest
++
++from vllm.v1.engine.detokenizer import check_stop_strings
++
++
++@pytest.mark.parametrize("stop", [["a", "is"], ["is", "a"]])
++def test_earliest_completing_stop_wins_regardless_of_list_order(stop):
++    # " The user is a": " is a" (5 chars) was appended in one step. Both "is"
++    # (index 10) and " a" (index 13) land in the same window. "is" completes
++    # earlier in the text, so it must win over list order.
++    text = " The user is a"
++    new_char_count = len(" is a")
++
++    assert check_stop_strings(text, new_char_count, stop, include_in_output=False) == (
++        "is",
++        10,
++    )
++
++
++@pytest.mark.parametrize("stop", [["a", "is"], ["is", "a"]])
++def test_earliest_completing_stop_include_in_output(stop):
++    text = " The user is a"
++    new_char_count = len(" is a")
++
++    # Truncate to the end of "is" (index 12) -> " The user is".
++    assert check_stop_strings(text, new_char_count, stop, include_in_output=True) == (
++        "is",
++        12,
++    )
++
++
++def test_completion_position_not_start_position():
++    # "b" starts later than "abc" but completes earlier, so it must win.
++    text = "abc"
++    assert check_stop_strings(
++        text, len(text), ["abc", "b"], include_in_output=False
++    ) == ("b", 1)
++
++
++@pytest.mark.parametrize(
++    "stop,expected",
++    [
++        (["ab", "b"], ("ab", 0)),
++        (["b", "ab"], ("b", 1)),
++    ],
++)
++def test_ties_broken_by_list_order(stop, expected):
++    # "ab" and "b" both complete at index 2; list order decides the winner.
++    text = "ab"
++    assert (
++        check_stop_strings(text, len(text), stop, include_in_output=False) == expected
++    )
++
++
++def test_single_stop_in_window_unchanged():
++    # The common case (one stop in the window) is unaffected by the change.
++    text = "hello world."
++    assert check_stop_strings(text, 1, ["."], include_in_output=False) == (".", 11)
++    # Stop completes at the very end -> no truncation needed (-1).
++    assert check_stop_strings(text, 1, ["."], include_in_output=True) == (".", -1)
++
++
++def test_no_match_and_empty_inputs_return_none():
++    assert check_stop_strings("hello", 5, ["zzz"], include_in_output=False) is None
++    assert check_stop_strings("hello", 0, ["h"], include_in_output=False) is None
++    assert check_stop_strings("hello", 5, [], include_in_output=False) is None
+diff --git a/tests/detokenizer/test_stop_byte_fallback.py b/tests/detokenizer/test_stop_byte_fallback.py
+new file mode 100644
+index 000000000..9cb1540b1
+--- /dev/null
++++ b/tests/detokenizer/test_stop_byte_fallback.py
+@@ -0,0 +1,58 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++import pytest
++from tokenizers import Tokenizer, decoders, models
++from transformers import PreTrainedTokenizerFast
++
++from vllm.sampling_params import SamplingParams
++from vllm.v1.engine import EngineCoreRequest
++from vllm.v1.engine.detokenizer import (
++    FastIncrementalDetokenizer,
++    SlowIncrementalDetokenizer,
++)
++
++
++@pytest.mark.parametrize(
++    "detokenizer_cls", [FastIncrementalDetokenizer, SlowIncrementalDetokenizer]
++)
++@pytest.mark.parametrize("include", [False, True])
++@pytest.mark.parametrize("split", [0, 1, 2, 3])
++def test_stop_after_incomplete_utf8_bytes(detokenizer_cls, include, split):
++    # A real tokenizer decoder buffers incomplete UTF-8 rather than emitting
++    # one character per token. The final token also contains text after stop.
++    backend = Tokenizer(
++        models.WordLevel(
++            {
++                "a": 0,
++                "<0xE4>": 1,
++                "<0xB8>": 2,
++                "<0xAD>": 3,
++                "!tail": 4,
++                "x": 5,
++            }
++        )
++    )
++    backend.decoder = decoders.ByteFallback()
++    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend)
++    request = EngineCoreRequest(
++        request_id="bytes",
++        external_req_id="bytes",
++        prompt_token_ids=[],
++        mm_features=None,
++        sampling_params=SamplingParams(
++            stop=["中!"],
++            include_stop_str_in_output=include,
++        ),
++        pooling_params=None,
++        arrival_time=0,
++        lora_request=None,
++        cache_salt=None,
++        data_parallel_rank=None,
++    )
++    detokenizer = detokenizer_cls(tokenizer, request)
++    ids = [0, 1, 2, 3, 4, 5]
++    assert detokenizer.update(ids[:split], False) is None
++    assert detokenizer.update(ids[split:], False) == "中!"
++    assert detokenizer.output_text == ("a中!" if include else "a")
++    assert detokenizer.output_token_ids == ids[:5]
+diff --git a/tests/detokenizer/test_stop_string_while_stop_model_terminates.py b/tests/detokenizer/test_stop_string_while_stop_model_terminates.py
+index 44215cb72..57d32a690 100644
+--- a/tests/detokenizer/test_stop_string_while_stop_model_terminates.py
++++ b/tests/detokenizer/test_stop_string_while_stop_model_terminates.py
+@@ -1,11 +1,14 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++import numpy as np
+ import pytest
+ 
+-from vllm.sampling_params import SamplingParams
+-from vllm.v1.engine import EngineCoreRequest
++from vllm.sampling_params import RequestOutputKind, SamplingParams
++from vllm.v1.engine import EngineCoreOutput, EngineCoreRequest, FinishReason
+ from vllm.v1.engine.detokenizer import BaseIncrementalDetokenizer
++from vllm.v1.engine.output_processor import OutputProcessor
++from vllm.v1.outputs import LogprobsLists
+ 
+ 
+ @pytest.fixture(params=[True, False])
+@@ -84,7 +87,7 @@ def test_stop_string_while_stop_token_terminates(include_stop_str_in_output: boo
+     # Simulate that the last token ('Z') is a stop token (stop_terminated=True).
+     result = detok.update(new_token_ids=token_ids, stop_terminated=True)
+ 
+-    # The update should not report a stop string
++    # The update should report the matched stop string.
+     assert result == stop_string
+ 
+     # Output text should reflect stop-string handling:
+@@ -93,9 +96,110 @@ def test_stop_string_while_stop_token_terminates(include_stop_str_in_output: boo
+     expected_text = "abcd" if include_stop_str_in_output else "ab"
+     assert detok.output_text == expected_text
+ 
+-    # The skipped final token should still be recorded in token_ids.
+-    assert detok.output_token_ids == token_ids
++    # Tokens after the stop string, including the stop token, are dropped.
++    assert detok.output_token_ids == token_ids[:4]
+ 
+     # get_next_output_text should return the full text when finished=True.
+     # (Buffering only applies during streaming when finished=False.)
+     assert detok.get_next_output_text(finished=True, delta=False) == expected_text
++
++
++@pytest.mark.parametrize(
++    "min_tokens,num_kept",
++    [(0, 2), (1, 2), (2, 4), (3, 4), (4, None)],
++)
++@pytest.mark.parametrize("num_prev_tokens", [0, 1])
++def test_stop_string_min_tokens_within_step(
++    include_stop_str_in_output: bool, min_tokens, num_kept, num_prev_tokens
++):
++    """Stop strings completing within min_tokens are ignored, even when the
++    min_tokens boundary falls in the middle of a multi-token step."""
++    token_ids = [ord(c) for c in "cdcdx"]
++    req = _make_request(
++        stop=["cd"],
++        include_stop_str_in_output=include_stop_str_in_output,
++        min_tokens=min_tokens,
++    )
++    detok = _DummyDetokenizer(req)
++
++    if num_prev_tokens:
++        assert detok.update(token_ids[:num_prev_tokens], False) is None
++    result = detok.update(token_ids[num_prev_tokens:], False)
++
++    if num_kept is None:
++        assert result is None
++        assert detok.output_text == "cdcdx"
++        assert detok.output_token_ids == token_ids
++        return
++    assert result == "cd"
++    text_len = num_kept if include_stop_str_in_output else num_kept - 2
++    assert detok.output_text == "cdcdx"[:text_len]
++    assert detok.output_token_ids == token_ids[:num_kept]
++
++
++@pytest.mark.parametrize(
++    "decoded_tokens,keep",
++    [
++        (["a", "b", "c", "d", "e", "f"], 4),
++        (["ab", "cdx", "ef"], 2),
++        (["ab", "", "c", "", "d", "", "ef"], 5),
++    ],
++)
++@pytest.mark.parametrize("stop_terminated", [False, True])
++@pytest.mark.parametrize("output_kind", list(RequestOutputKind))
++def test_stop_string_trims_speculative_overflow(
++    include_stop_str_in_output: bool,
++    decoded_tokens,
++    keep,
++    stop_terminated: bool,
++    output_kind,
++    monkeypatch,
++):
++    if stop_terminated:
++        # The engine also stopped on a stop token at the end of the batch.
++        decoded_tokens = decoded_tokens + [""]
++    token_ids = list(range(len(decoded_tokens)))
++    stop_string = "cd"
++    expected_token_ids = token_ids[:keep]
++
++    req = _make_request(
++        stop=[stop_string], include_stop_str_in_output=include_stop_str_in_output
++    )
++    req.external_req_id = req.request_id
++    assert req.sampling_params is not None
++    req.sampling_params.logprobs = 0
++    req.sampling_params.output_kind = output_kind
++    detok = _DummyDetokenizer(req)
++    monkeypatch.setattr(detok, "decode_next", decoded_tokens.__getitem__)
++    processor = OutputProcessor(tokenizer=None, log_stats=False)
++    processor.add_request(req, prompt=None)
++    processor.request_states[req.request_id].detokenizer = detok
++
++    outputs = processor.process_outputs(
++        [
++            EngineCoreOutput(
++                request_id=req.request_id,
++                new_token_ids=token_ids,
++                finish_reason=FinishReason.STOP if stop_terminated else None,
++                new_logprobs=LogprobsLists(
++                    np.array(token_ids).reshape(-1, 1),
++                    np.full((len(token_ids), 1), -0.5),
++                    np.ones(len(token_ids), dtype=int),
++                    None,
++                ),
++                routed_experts=np.array(token_ids).reshape(-1, 1, 1),
++            )
++        ]
++    )
++    result = outputs.request_outputs[0].outputs[0]
++
++    assert result.stop_reason == stop_string
++    expected_text = "abcd" if include_stop_str_in_output else "ab"
++    assert detok.output_text == expected_text
++    assert detok.output_token_ids == expected_token_ids
++    assert result.token_ids == expected_token_ids
++    assert result.logprobs is not None
++    assert len(result.logprobs) == len(expected_token_ids)
++    assert result.cumulative_logprob == -0.5 * len(expected_token_ids)
++    assert result.routed_experts is not None
++    assert result.routed_experts.ravel().tolist() == expected_token_ids
+diff --git a/vllm/v1/engine/detokenizer.py b/vllm/v1/engine/detokenizer.py
+index 4700eecb5..2814b1536 100644
+--- a/vllm/v1/engine/detokenizer.py
++++ b/vllm/v1/engine/detokenizer.py
+@@ -1,6 +1,8 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++import sys
+ from abc import ABC, abstractmethod
++from bisect import bisect_left
+ 
+ import tokenizers
+ import tokenizers.decoders
+@@ -113,21 +115,27 @@ class BaseIncrementalDetokenizer(IncrementalDetokenizer, ABC):
+             skipped_stop_token_id = None
+ 
+         # 1) Detokenize the new token ids incrementally.
+-        stop_check_offset = len(self.output_text)
++        num_prev_tokens = self.num_output_tokens()
++        first_new_token_index = len(self.token_ids)
++        # Output text offsets at the boundaries of the new tokens.
++        token_offsets = [len(self.output_text)] if self.stop else None
+         for new_token_id in new_token_ids:
+             self.token_ids.append(new_token_id)
+             self.output_text += self.decode_next(new_token_id)
+-            # Support min_tokens, see https://github.com/vllm-project/vllm/pull/22014
+-            if self.min_tokens and self.num_output_tokens() <= self.min_tokens:
+-                stop_check_offset = len(self.output_text)
++            if token_offsets is not None:
++                token_offsets.append(len(self.output_text))
+ 
+         if skipped_stop_token_id is not None:
+             # Cleanup after skipping detokenization.
+             self.token_ids.append(skipped_stop_token_id)
++            if token_offsets is not None:
++                token_offsets.append(len(self.output_text))
+ 
+         # 2) Evaluate stop strings.
+         stop_string = None
+-        if self.stop and self.num_output_tokens() > self.min_tokens:
++        if token_offsets is not None and self.num_output_tokens() > self.min_tokens:
++            # Support min_tokens, see https://github.com/vllm-project/vllm/pull/22014
++            stop_check_offset = token_offsets[max(self.min_tokens - num_prev_tokens, 0)]
+             stop = check_stop_strings(
+                 output_text=self.output_text,
+                 new_char_count=len(self.output_text) - stop_check_offset,
+@@ -136,6 +144,13 @@ class BaseIncrementalDetokenizer(IncrementalDetokenizer, ABC):
+             )
+             if stop is not None:
+                 stop_string, truncate_to = stop
++                stop_end = len(self.output_text) if truncate_to == -1 else truncate_to
++                if not self.include_stop_str_in_output:
++                    stop_end += len(stop_string)
++                # Keep the token completing the stop, including any characters
++                # after the stop inside that token, but drop later tokens.
++                num_kept = bisect_left(token_offsets, stop_end, lo=1)
++                del self.token_ids[first_new_token_index + num_kept :]
+                 if truncate_to != -1:
+                     self.output_text = self.output_text[:truncate_to]
+ 
+@@ -320,10 +335,19 @@ def check_stop_strings(
+     Where stop_string is the matched stop string and offset is the
+     length to which output_text should be truncated, or -1 for no
+     truncation.
++
++    When several stop strings match within the newly generated text (for
++    example when speculative decoding appends multiple tokens in a single
++    step), the stop string that completes earliest in the text is selected,
++    so the result matches appending one token at a time. Ties are broken by
++    stop-list order.
+     """
+     if not new_char_count or not stop:
+         return None
+ 
++    best_stop_str: str | None = None
++    best_stop_index = 0
++    best_end = sys.maxsize
+     for stop_str in stop:
+         stop_string_len = len(stop_str)
+         # Avoid searching already-searched text.
+@@ -331,14 +355,22 @@ def check_stop_strings(
+         if stop_index == -1:
+             continue
+ 
+-        if include_in_output:
+-            # Truncate to end of stop string.
+-            stop_index += stop_string_len
+-            if stop_index >= len(output_text):
+-                # No truncation required.
+-                return stop_str, -1
+-
+-        # Truncate the output text to either the beginning
+-        # or end of the stop string.
+-        return stop_str, stop_index
+-    return None
++        # Prefer the stop string that completes earliest in the text.
++        end = stop_index + stop_string_len
++        if end < best_end:
++            best_stop_str = stop_str
++            best_stop_index = stop_index
++            best_end = end
++
++    if best_stop_str is None:
++        return None
++
++    if include_in_output:
++        # Truncate to end of stop string.
++        if best_end >= len(output_text):
++            # No truncation required.
++            return best_stop_str, -1
++        return best_stop_str, best_end
++
++    # Truncate the output text to the beginning of the stop string.
++    return best_stop_str, best_stop_index
+diff --git a/vllm/v1/engine/output_processor.py b/vllm/v1/engine/output_processor.py
+index e1032cfd1..226684520 100644
+--- a/vllm/v1/engine/output_processor.py
++++ b/vllm/v1/engine/output_processor.py
+@@ -636,12 +636,16 @@ class OutputProcessor:
+                 assert req_state.detokenizer is not None
+                 assert req_state.logprobs_processor is not None
+                 # 2) Detokenize the token ids into text and perform stop checks.
++                num_prev_tokens = req_state.detokenizer.num_output_tokens()
+                 stop_string = req_state.detokenizer.update(
+                     new_token_ids, finish_reason == FinishReason.STOP
+                 )
+                 if stop_string:
+                     finish_reason = FinishReason.STOP
+                     stop_reason = stop_string
++                    self._trim_surplus_tokens(
++                        req_state, engine_core_output, num_prev_tokens
++                    )
+ 
+                 # 3) Compute sample and prompt logprobs for request,
+                 # if required.
+@@ -692,6 +696,21 @@ class OutputProcessor:
+             reqs_to_abort=reqs_to_abort,
+         )
+ 
++    @staticmethod
++    def _trim_surplus_tokens(
++        req_state: RequestState, output: EngineCoreOutput, num_prev_tokens: int
++    ) -> None:
++        """Drop new tokens generated past a stop string in a multi-token step."""
++        assert req_state.detokenizer is not None
++        num_kept = req_state.detokenizer.num_output_tokens() - num_prev_tokens
++        if num_kept >= len(output.new_token_ids):
++            return
++        del output.new_token_ids[num_kept:]
++        if output.new_logprobs is not None:
++            output.new_logprobs = output.new_logprobs.slice_request(0, num_kept)
++        if output.routed_experts is not None:
++            req_state.routed_experts_chunks[-1] = output.routed_experts[:num_kept]
++
+     def _finish_request(self, req_state: RequestState) -> None:
+         req_id = req_state.request_id
+         self.request_states.pop(req_id)

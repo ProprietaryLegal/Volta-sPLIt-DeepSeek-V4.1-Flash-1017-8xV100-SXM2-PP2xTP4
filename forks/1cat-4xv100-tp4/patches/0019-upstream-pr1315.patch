@@ -1,0 +1,125 @@
+diff --git a/tests/tool_use/test_tool_choice_named_empty_params.py b/tests/tool_use/test_tool_choice_named_empty_params.py
+new file mode 100644
+index 000000000..655e50bed
+--- /dev/null
++++ b/tests/tool_use/test_tool_choice_named_empty_params.py
+@@ -0,0 +1,77 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""A forced named tool without parameters must still get an object grammar.
++
++OpenAI tools may omit `parameters`. The named tool_choice path returned the
++tool's parameters as the JSON schema, so a missing schema installed no grammar
++at all and the raw model text (for Qwen3 Coder its XML call) became the
++arguments. Like tool_choice="required", constrain the arguments to an object.
++"""
++
++import pytest
++from openai.types.responses import FunctionTool, ToolChoiceFunction
++
++from vllm.entrypoints.openai.chat_completion.protocol import (
++    ChatCompletionNamedToolChoiceParam,
++    ChatCompletionRequest,
++    ChatCompletionToolsParam,
++)
++from vllm.tool_parsers.utils import get_json_schema_from_tools
++
++pytestmark = pytest.mark.cpu_test
++
++EMPTY_OBJECT = {"type": "object", "properties": {}}
++PARAMS = {"type": "object", "properties": {"x": {"type": "string"}}}
++
++
++def _chat_tool(params):
++    function = {"name": "ping"}
++    if params is not ...:
++        function["parameters"] = params
++    return ChatCompletionToolsParam.model_validate(
++        {"type": "function", "function": function}
++    )
++
++
++@pytest.mark.parametrize("params", [..., None, {}])
++def test_chat_named_empty_params_constrain_an_object(params):
++    choice = ChatCompletionNamedToolChoiceParam.model_validate(
++        {"type": "function", "function": {"name": "ping"}}
++    )
++    assert get_json_schema_from_tools(choice, [_chat_tool(params)]) == EMPTY_OBJECT
++
++
++@pytest.mark.parametrize("params", [None, {}])
++def test_responses_named_empty_params_constrain_an_object(params):
++    tool = FunctionTool(type="function", name="ping", parameters=params)
++    choice = ToolChoiceFunction(type="function", name="ping")
++    assert get_json_schema_from_tools(choice, [tool]) == EMPTY_OBJECT
++
++
++def test_named_params_are_unchanged():
++    choice = ChatCompletionNamedToolChoiceParam.model_validate(
++        {"type": "function", "function": {"name": "ping"}}
++    )
++    assert get_json_schema_from_tools(choice, [_chat_tool(PARAMS)]) == PARAMS
++    tool = FunctionTool(type="function", name="ping", parameters=PARAMS)
++    choice = ToolChoiceFunction(type="function", name="ping")
++    assert get_json_schema_from_tools(choice, [tool]) == PARAMS
++
++
++def test_required_schema_is_unchanged():
++    schema = get_json_schema_from_tools("required", [_chat_tool(None)])
++    assert schema["items"]["anyOf"][0]["properties"]["parameters"] == EMPTY_OBJECT
++
++
++def test_named_request_without_params_gets_a_grammar():
++    from vllm.tool_parsers.abstract_tool_parser import ToolParser
++
++    request = ChatCompletionRequest(
++        model="test",
++        messages=[{"role": "user", "content": "ping"}],
++        tools=[{"type": "function", "function": {"name": "ping"}}],
++        tool_choice={"type": "function", "function": {"name": "ping"}},
++    )
++    request = ToolParser.adjust_request(ToolParser.__new__(ToolParser), request)
++    assert request.structured_outputs is not None
++    assert request.structured_outputs.json == EMPTY_OBJECT
+diff --git a/vllm/tool_parsers/utils.py b/vllm/tool_parsers/utils.py
+index 42be5494a..507f098cb 100644
+--- a/vllm/tool_parsers/utils.py
++++ b/vllm/tool_parsers/utils.py
+@@ -169,13 +169,17 @@ def find_tool_properties(
+     return {}
+ 
+ 
++def _params_or_empty_object(params: dict[str, Any] | None) -> dict[str, Any]:
++    # Missing or empty parameters still constrain the arguments to an object.
++    return params if params else {"type": "object", "properties": {}}
++
++
+ def _get_tool_schema_from_tool(tool: Tool) -> dict:
+     name, params = _extract_tool_info(tool)
+-    params = params if params else {"type": "object", "properties": {}}
+     return {
+         "properties": {
+             "name": {"type": "string", "enum": [name]},
+-            "parameters": params,
++            "parameters": _params_or_empty_object(params),
+         },
+         "required": ["name", "parameters"],
+     }
+@@ -238,7 +242,7 @@ def get_json_schema_from_tools(
+         tool_map = {tool.name: tool for tool in tools if isinstance(tool, FunctionTool)}
+         if tool_name not in tool_map:
+             raise ValueError(f"Tool '{tool_name}' has not been passed in `tools`.")
+-        return tool_map[tool_name].parameters
++        return _params_or_empty_object(tool_map[tool_name].parameters)
+     # tool_choice: Forced Function (ChatCompletion)
+     if (not isinstance(tool_choice, str)) and isinstance(
+         tool_choice, ChatCompletionNamedToolChoiceParam
+@@ -251,7 +255,7 @@ def get_json_schema_from_tools(
+         }
+         if tool_name not in tool_map:
+             raise ValueError(f"Tool '{tool_name}' has not been passed in `tools`.")
+-        return tool_map[tool_name].function.parameters
++        return _params_or_empty_object(tool_map[tool_name].function.parameters)
+     # tool_choice: "required"
+     if tool_choice == "required":
+         return _get_json_schema_from_tools(tools, parallel_tool_calls)

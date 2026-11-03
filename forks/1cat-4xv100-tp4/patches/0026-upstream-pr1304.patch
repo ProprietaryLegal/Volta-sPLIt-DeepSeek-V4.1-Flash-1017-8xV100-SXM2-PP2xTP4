@@ -1,0 +1,95 @@
+diff --git a/tests/v1/core/test_scheduler.py b/tests/v1/core/test_scheduler.py
+index 0c71ec5d2..92a932eef 100644
+--- a/tests/v1/core/test_scheduler.py
++++ b/tests/v1/core/test_scheduler.py
+@@ -4480,3 +4480,28 @@ def test_eagle3_mm_encoder_cache_with_shift():
+         f"shifted_end={scheduled_end_with_shift}) overlapping MM at "
+         f"{start_pos}. The fix must schedule encoder inputs."
+     )
++
++
++@pytest.mark.parametrize("is_async", [False, True])
++def test_kv_connector_honors_skip_reading_prefix_cache(is_async):
++    """A request that must score every prompt row takes no external hit."""
++    BLOCK_SIZE = 16
++    scheduler = create_scheduler(
++        enable_prefix_caching=True,
++        use_kv_connector=mock_kv(matched_tokens=BLOCK_SIZE * 2, is_async=is_async),
++        block_size=BLOCK_SIZE,
++    )
++    plain, scoring = create_requests(num_requests=2, num_tokens=BLOCK_SIZE * 4)
++    scoring.sampling_params.prompt_logprobs = 1
++    scoring.skip_reading_prefix_cache = True
++    scheduler.add_request(plain)
++    scheduler.add_request(scoring)
++
++    output = scheduler.schedule()
++    if is_async:
++        assert plain.request_id not in output.num_scheduled_tokens
++        assert plain.status == RequestStatus.WAITING_FOR_REMOTE_KVS
++    else:
++        assert output.num_scheduled_tokens[plain.request_id] == BLOCK_SIZE * 2
++    assert output.num_scheduled_tokens[scoring.request_id] == BLOCK_SIZE * 4
++    assert scoring.status == RequestStatus.RUNNING
+diff --git a/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py b/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py
+index d4ce51ff4..9393b05c2 100644
+--- a/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py
++++ b/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py
+@@ -1691,6 +1691,7 @@ def _make_scratch_scheduler(*, full_attention_only=False, eagle=False):
+     )
+     req = MagicMock()
+     req.request_id = "scratch"
++    req.skip_reading_prefix_cache = False
+     req.kv_transfer_params = None
+     req.block_hashes = [BlockHash(f"s{i}".encode()) for i in range(4)]
+     req.num_computed_tokens = 0
+@@ -1949,3 +1950,19 @@ def test_external_junction_not_recorded_without_sparse_groups():
+     num_hit, _ = scheduler.get_num_new_matched_tokens(req, 0)
+     assert num_hit == 0
+     assert req.shared_prefix_boundary == 0
++
++
++def test_review_skip_reading_prefix_cache_ignores_cpu_hit():
++    scheduler, req, _ = _make_scratch_scheduler()
++    req.block_hashes = [BlockHash(f"s{i}".encode()) for i in range(12)]
++    req.num_prompt_tokens = req.num_tokens = 48
++    state = scheduler._req_status[req.request_id]
++    state.update_offload_keys()
++    scheduler.manager.lookup.side_effect = lambda key, ctx: True
++    num_hit, load_async = scheduler.get_num_new_matched_tokens(req, 0)
++    assert num_hit > 0 and load_async  # CPU tier would serve this prompt
++    req.skip_reading_prefix_cache = True
++    scheduler.manager.lookup.reset_mock()
++    num_hit, load_async = scheduler.get_num_new_matched_tokens(req, 0)
++    assert (num_hit, load_async) == (0, False)
++    assert not scheduler.manager.lookup.called
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py b/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py
+index 4d6db2a7b..4e65eb27e 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py
+@@ -680,7 +680,11 @@ class OffloadingConnectorScheduler:
+         req_status.update_offload_keys()
+         req_status.num_locally_computed_tokens = num_computed_tokens
+ 
+-        num_hit_tokens = self._lookup(req_status)
++        num_hit_tokens: int | None
++        if request.skip_reading_prefix_cache:
++            num_hit_tokens = 0
++        else:
++            num_hit_tokens = self._lookup(req_status)
+         served_tokens = num_computed_tokens + (num_hit_tokens or 0)
+         req_status.update_num_hit_blocks(served_tokens)
+ 
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index 73d6c1663..f7e6c59e0 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -1034,6 +1034,8 @@ class Scheduler(SchedulerInterface):
+                                 request, num_new_local_computed_tokens
+                             )
+                         )
++                        if request.skip_reading_prefix_cache:
++                            ext_tokens, load_kv_async = 0, False
+ 
+                         if ext_tokens is None:
+                             # The request cannot be scheduled because

@@ -1,0 +1,89 @@
+diff --git a/vllm/envs.py b/vllm/envs.py
+index 0d8fc7eee..bc3009ee7 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -451,6 +451,7 @@ if TYPE_CHECKING:
+     VLLM_PYNCCL_ALLGATHER: str = "1"
+     VLLM_V41_ATTN_TIMING: str = "0"
+     VLLM_V41_MARKOV_FUSED: str | None = None
++    VLLM_V41_MARKOV_SHARD: str = "0"
+     VLLM_SM70_MXFP4_GROUPED_ANY: str | None = None
+     VLLM_V41K_LIB: str | None = None
+     VLLM_V41_ACT_PROGRAMS: str = "1024"
+@@ -8408,6 +8409,19 @@ environment_variables: dict[str, Callable[[], Any]] = {
+         acceleration_paths=(),
+         user_visible=False,
+     ),
++    "VLLM_V41_MARKOV_SHARD": env_var(
++        lambda: os.getenv("VLLM_V41_MARKOV_SHARD", "0"),
++        description=(
++            "Experimental DS-V4.1 DSpark: 1 = one-request greedy drafts from "
++            "vocabulary shards (markov_shard.py); read in models/deepseek_v41/dspark.py."
++        ),
++        category="experimental",
++        declared_default="'0'",
++        effective_default="'0'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
+     "VLLM_TM_COLD_DMA": env_var(
+         lambda: os.getenv("VLLM_TM_COLD_DMA", "1") == "1",
+         description=(
+@@ -20596,6 +20610,7 @@ def compile_factors(kernel_config=None, *, vllm_config=None) -> dict[str, object
+         "VLLM_PYNCCL_ALLGATHER",
+         "VLLM_V41_ATTN_TIMING",
+         "VLLM_V41_MARKOV_FUSED",
++        "VLLM_V41_MARKOV_SHARD",
+         "VLLM_SM70_MXFP4_GROUPED_ANY",
+         "VLLM_V41K_LIB",
+         "VLLM_V41_ACT_PROGRAMS",
+diff --git a/vllm/model_executor/layers/quantization/gguf_v41_moe.py b/vllm/model_executor/layers/quantization/gguf_v41_moe.py
+index 0e72c670f..d51347dd8 100644
+--- a/vllm/model_executor/layers/quantization/gguf_v41_moe.py
++++ b/vllm/model_executor/layers/quantization/gguf_v41_moe.py
+@@ -157,6 +157,7 @@ os.environ.setdefault("VLLM_V41_EM8", "0")  # single-barrier down: no gain measu
+ 
+ 
+ _PLAN_FUSE = envs.VLLM_V41_PLAN_FUSE == "1"
++_PLAN_FUSE_LOGGED = False
+ 
+ 
+ def _q8_and_plan(xq, xd, x, ids32, plan):
+@@ -174,6 +175,10 @@ def _q8_and_plan(xq, xd, x, ids32, plan):
+             "VLLM_V41_PLAN_FUSE=1 needs a v41k.so with q8_plan and gate_up7p "
+             "(rebuild benchmarks/deepseek_v41/v41k); loaded: " + default_v41k_library()
+         )
++    global _PLAN_FUSE_LOGGED
++    if not _PLAN_FUSE_LOGGED:
++        _PLAN_FUSE_LOGGED = True
++        logger.info("VLLM_V41_PLAN_FUSE=1: expert plan built in q8_plan, gate_up7p")
+     torch.ops.v41k.q8_plan(xq, xd, x, ids32, plan)
+     return torch.ops.v41k.gate_up7p
+ 
+diff --git a/vllm/models/deepseek_v41/model.py b/vllm/models/deepseek_v41/model.py
+index c9c6d7970..7eb672693 100644
+--- a/vllm/models/deepseek_v41/model.py
++++ b/vllm/models/deepseek_v41/model.py
+@@ -1293,6 +1293,8 @@ class DeepseekV41ForCausalLM(nn.Module, SupportsEagle3, SupportsPP):
+             return None
+         if proc.scale != 1.0 or proc.soft_cap is not None:
+             return None
++        if getattr(head, "bias", None) is not None:  # local_logits passes bias=None
++            return None
+         vocab, per_rank = proc.org_vocab_size, head.num_embeddings_per_partition
+         if head.num_added_embeddings or vocab != head.org_vocab_size:
+             return None
+diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
+index 9b1b118a2..936eae171 100644
+--- a/vllm/v1/sample/rejection_sampler.py
++++ b/vllm/v1/sample/rejection_sampler.py
+@@ -629,6 +629,8 @@ class RejectionSampler(nn.Module):
+         the gathered processed values bit for bit, and ``shard``
+         (coupled_draw.KeyedShard) picks keyed_argmax's tokens.
+         """
++        # forward() is skipped on this path; clear what it would have cleared.
++        self._last_target_candidate_ids = None
+         num_rows = local_logits.shape[0]
+         assert sampling_metadata.temperature is not None
+         cu = metadata.cu_num_sampled_tokens

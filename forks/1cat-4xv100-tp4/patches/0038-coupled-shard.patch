@@ -1,0 +1,589 @@
+diff --git a/tests/models/test_deepseek_v41_coupled_shard.py b/tests/models/test_deepseek_v41_coupled_shard.py
+new file mode 100644
+index 000000000..30a710475
+--- /dev/null
++++ b/tests/models/test_deepseek_v41_coupled_shard.py
+@@ -0,0 +1,158 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""V4.1 coupled drafts from vocabulary shards (CPU, interpreter, 4 TP ranks).
++
++``markov_coupled.coupled_shard_tokens`` (each rank scores its own rows with
++keyed draws at the global ids, one slot all-reduce per step) must give every
++rank exactly ``coupled_markov_tokens``' drafts on the gathered logits: random
++rows, mixed temperatures, a greedy row (then also ``MarkovGreedy``), and
++infinite ties across shard boundaries. The TP ranks are threads in lockstep,
++reusing test_deepseek_v41_markov_shard's emulation (ROWS 16, N 40 per rank).
++
++    python tests/models/test_deepseek_v41_coupled_shard.py   # or pytest
++"""
++
++import os
++
++os.environ["TRITON_INTERPRET"] = "1"  # before triton is imported
++
++import importlib.util  # noqa: E402
++import sys  # noqa: E402
++import types  # noqa: E402
++from pathlib import Path  # noqa: E402
++
++import pytest  # noqa: E402
++import torch  # noqa: E402
++import triton  # noqa: E402
++import triton.language as tl  # noqa: E402
++
++ROOT = Path(__file__).resolve().parents[2]
++V41 = ROOT / "vllm" / "models" / "deepseek_v41"
++PKG = "vllm.models.deepseek_v41"
++
++
++def _load(name, path):
++    spec = importlib.util.spec_from_file_location(name, path)
++    mod = importlib.util.module_from_spec(spec)
++    sys.modules[name] = mod
++    spec.loader.exec_module(mod)
++    return mod
++
++
++MS = _load(
++    "v41_coupled_shard_emulation",
++    ROOT / "tests/models/test_deepseek_v41_markov_shard.py",
++)
++
++
++def _coupled():
++    sys.modules.setdefault("vllm", types.ModuleType("vllm"))
++    if "vllm.triton_utils" not in sys.modules:
++        tu = types.ModuleType("vllm.triton_utils")
++        tu.tl, tu.triton = tl, triton
++        sys.modules["vllm.triton_utils"] = tu
++    cd = _load(
++        "vllm.v1.spec_decode.coupled_draw",
++        ROOT / "vllm" / "v1" / "spec_decode" / "coupled_draw.py",
++    )
++    names = [f"{PKG}.markov_fused", f"{PKG}.markov_shard"]
++    saved = {n: sys.modules.get(n) for n in names}
++    sys.modules[names[0]], sys.modules[names[1]] = MS.FUSED, MS.SHARD
++    try:
++        mc = _load(f"{PKG}.markov_coupled", V41 / "markov_coupled.py")
++    finally:
++        for n, m in saved.items():
++            if m is None:
++                sys.modules.pop(n, None)
++            else:
++                sys.modules[n] = m
++    for name in ("_markov_keyed_block", "_markov_keyed_reduce"):
++        setattr(mc, name, MS._Locked(getattr(mc, name)))
++    return cd, mc
++
++
++CD, MC = _coupled()
++TP, N, V = MS.TP, MS.N, MS.V
++
++
++def _run(logits, anchor, temperature, key, positions, seed):
++    head, embed = MS._weights(seed)
++    anchor = torch.tensor([anchor], dtype=torch.int64)
++    temperature = torch.tensor([temperature], dtype=torch.float32)
++    keys = torch.tensor([key], dtype=torch.int64)
++    want = MC.coupled_markov_tokens(
++        MS.FUSED.MarkovGreedy(head, embed),
++        logits.view(1, 5, V),
++        anchor,
++        temperature,
++        keys,
++        positions.view(1, 5),
++        0.5,
++    )[0]
++    group = MS.Group()
++    shards = MS._shards(head, embed, group)
++    got = group.run(
++        lambda r: MC.coupled_shard_tokens(
++            shards[r],
++            logits[:, r * N : (r + 1) * N],
++            anchor,
++            temperature,
++            keys,
++            positions,
++            0.5,
++        )
++    )
++    return want, got, (head, embed, anchor)
++
++
++@pytest.mark.parametrize("temperature", [1.0, 0.6, 2.0])
++@pytest.mark.parametrize("seed", [0, 1])
++def test_shard_drafts_equal_full_coupled_drafts(temperature, seed):
++    g = torch.Generator().manual_seed(100 + seed)
++    logits = MS._rows(g, scale=3.0)
++    positions = torch.arange(5, dtype=torch.int64) + 1000 * seed + 7
++    want, got, _ = _run(
++        logits, 5 + seed, temperature, (1 << 61) + seed, positions, seed
++    )
++    MS._assert_tokens(f"T{temperature}", want, got)
++
++
++def test_greedy_row_equals_markov_greedy():
++    g = torch.Generator().manual_seed(3)
++    logits = MS._rows(g)
++    positions = torch.arange(5, dtype=torch.int64)
++    want, got, (head, embed, anchor) = _run(logits, 9, 0.0, 12345, positions, 2)
++    MS._assert_tokens("greedy", want, got)
++    assert torch.equal(want, MS.FUSED.MarkovGreedy(head, embed)(logits, anchor))
++
++
++def test_infinite_ties_across_shards_take_the_lowest_global_id():
++    g = torch.Generator().manual_seed(4)
++    logits = MS._rows(g)
++    logits[:, N - 1] = logits[:, 2 * N] = float("inf")
++    positions = torch.arange(5, dtype=torch.int64) + 50
++    want, got, _ = _run(logits, 1, 1.0, 777, positions, 3)
++    MS._assert_tokens("inf tie", want, got)
++    assert want.tolist() == [N - 1] * 5
++
++
++def test_wiring_and_knobs():
++    model = (V41 / "dspark.py").read_text()
++    assert '"VLLM_V41_COUPLED_SHARD", "0") == "1"' in model
++    assert "if not _COUPLED_SHARD or self._markov_shard is None:" in model
++    assert "V41CoupledDraftGraph(self._coupled_shard_draft)" in model
++    graph = (V41 / "query_graph.py").read_text()
++    assert "class V41CoupledDraftGraph:" in graph
++    proposer = (ROOT / "vllm/v1/spec_decode/dspark.py").read_text()
++    assert 'getattr(self.model, "coupled_shard_draft_tokens", None)' in proposer
++    assert "hidden_states, self.input_ids[:1], temperature, keys, positions[0]" in (
++        proposer
++    )
++    envs = (ROOT / "vllm/envs.py").read_text()
++    for name in ("VLLM_V41_COUPLED_SHARD", "VLLM_V41_COUPLED_SHARD_CHECK"):
++        assert f'    {name}: str = "0"\n' in envs
++        assert f'lambda: os.getenv("{name}", "0")' in envs
++
++
++if __name__ == "__main__":
++    sys.exit(pytest.main([__file__, "-q"]))
+diff --git a/vllm/envs.py b/vllm/envs.py
+index 16dbb4eb8..5c76e8879 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -464,6 +464,8 @@ if TYPE_CHECKING:
+     VLLM_V41_COUPLED_DRAFT_TEMP: str = "0.5"
+     VLLM_V41_COUPLED_TRACE: str = ""
+     VLLM_V41_COUPLED_DRAFTS: str = "0"
++    VLLM_V41_COUPLED_SHARD: str = "0"
++    VLLM_V41_COUPLED_SHARD_CHECK: str = "0"
+     VLLM_V41_COORD_DEBUG: str | None = None
+     VLLM_V41_DENSE_TM: str = "1"
+     VLLM_V41_DMA_DEBUG: str | None = None
+@@ -7292,6 +7294,32 @@ environment_variables: dict[str, Callable[[], Any]] = {
+         acceleration_paths=(),
+         user_visible=False,
+     ),
++    "VLLM_V41_COUPLED_SHARD": env_var(
++        lambda: os.getenv("VLLM_V41_COUPLED_SHARD", "0"),
++        description=(
++            "Experimental DS-V4.1 coupled drafts: 1 = one-request drafts from "
++            "vocabulary shards in a captured graph (needs VLLM_V41_MARKOV_SHARD=1)."
++        ),
++        category="experimental",
++        declared_default="'0'",
++        effective_default="'0'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
++    "VLLM_V41_COUPLED_SHARD_CHECK": env_var(
++        lambda: os.getenv("VLLM_V41_COUPLED_SHARD_CHECK", "0"),
++        description=(
++            "Debug for VLLM_V41_COUPLED_SHARD: also run the full coupled path "
++            "each round and log rounds whose drafts differ (slow)."
++        ),
++        category="experimental",
++        declared_default="'0'",
++        effective_default="'0'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
+     "VLLM_V41_COUPLED_TRACE": env_var(
+         lambda: os.getenv("VLLM_V41_COUPLED_TRACE", ""),
+         description=(
+@@ -20550,6 +20578,8 @@ def compile_factors(kernel_config=None, *, vllm_config=None) -> dict[str, object
+         "VLLM_V41_COL_PROJ",
+         "VLLM_V41_COUPLED_DRAFTS",
+         "VLLM_V41_COUPLED_DRAFT_TEMP",
++        "VLLM_V41_COUPLED_SHARD",
++        "VLLM_V41_COUPLED_SHARD_CHECK",
+         "VLLM_V41_COUPLED_TRACE",
+         "VLLM_V41_COL_W",
+         "VLLM_V41_COORD_DEBUG",
+diff --git a/vllm/models/deepseek_v41/dspark.py b/vllm/models/deepseek_v41/dspark.py
+index d938819af..f921fd5ba 100644
+--- a/vllm/models/deepseek_v41/dspark.py
++++ b/vllm/models/deepseek_v41/dspark.py
+@@ -34,12 +34,24 @@ from .markov_fused import MarkovGreedy, markov_bias
+ from .markov_shard import MarkovShardGreedy
+ from .model import V41Attention, V41Block, V41MoE, V41Norm, _SharedAttention
+ from .quant_rope import apply_rope, attention_qdq, rope_table
+-from .query_graph import V41ContextGraphs, V41GreedyDraftGraph, V41QueryGraph
++from .query_graph import (
++    V41ContextGraphs,
++    V41CoupledDraftGraph,
++    V41GreedyDraftGraph,
++    V41QueryGraph,
++)
+ 
+ _MARKOV_FUSED = __import__("os").environ.get("VLLM_V41_MARKOV_FUSED", "1") == "1"
+ # Greedy B=1 drafts from vocabulary shards (markov_shard.py); see
+ # DSparkDeepseekV41ForCausalLM.prepare_markov_shard.
+ _MARKOV_SHARD = __import__("os").environ.get("VLLM_V41_MARKOV_SHARD", "0") == "1"
++# Coupled (keyed) B=1 drafts from vocabulary shards in their own graph; needs
++# VLLM_V41_MARKOV_SHARD=1. The check runs the full fused coupled path too and
++# counts rounds whose drafts differ (debug: one all-gather and a sync per round).
++_COUPLED_SHARD = __import__("os").environ.get("VLLM_V41_COUPLED_SHARD", "0") == "1"
++_COUPLED_SHARD_CHECK = (
++    __import__("os").environ.get("VLLM_V41_COUPLED_SHARD_CHECK", "0") == "1"
++)
+ 
+ logger = init_logger(__name__)
+ 
+@@ -283,6 +295,12 @@ class DSparkDeepseekV41ForCausalLM(nn.Module):
+             if vllm_config.speculative_config.enforce_eager
+             else V41ContextGraphs(self.model.precompute_and_store_context_kv)
+         )
++        self.coupled_graph = (
++            None
++            if vllm_config.speculative_config.enforce_eager
++            else V41CoupledDraftGraph(self._coupled_shard_draft)
++        )
++        self._coupled_check = [0, 0]  # rounds checked, rounds with different drafts
+ 
+     def embed_input_ids(self, input_ids):
+         return self.model.embed_tokens(input_ids)
+@@ -369,6 +387,75 @@ class DSparkDeepseekV41ForCausalLM(nn.Module):
+             return None
+         return self.greedy_graph(hidden_states, anchor)
+ 
++    def _coupled_shard_draft(self, hidden_states, anchor, temperature, keys, positions):
++        from vllm.v1.spec_decode.coupled_draw import DRAFT_TEMP_SCALE
++
++        from .markov_coupled import coupled_shard_tokens
++
++        return coupled_shard_tokens(
++            self._markov_shard,
++            self.local_logits(hidden_states),
++            anchor,
++            temperature,
++            keys,
++            positions,
++            DRAFT_TEMP_SCALE,
++        )
++
++    def coupled_shard_draft_tokens(
++        self, hidden_states, anchor, temperature, keys, positions
++    ):
++        """[5] coupled drafts for one request from vocabulary shards (graph),
++        or None unless VLLM_V41_COUPLED_SHARD=1 and the shard path is on."""
++        if not _COUPLED_SHARD or self._markov_shard is None:
++            return None
++        run = self.coupled_graph or self._coupled_shard_draft
++        tokens = run(hidden_states, anchor, temperature, keys, positions)
++        if _COUPLED_SHARD_CHECK:
++            self._coupled_shard_check(
++                hidden_states, anchor, temperature, keys, positions, tokens
++            )
++        return tokens
++
++    def _coupled_shard_check(
++        self, hidden_states, anchor, temperature, keys, positions, tokens
++    ):
++        """Debug: the full fused coupled drafts for the same round must equal
++        the shard drafts; logs the running count of rounds that differ."""
++        from vllm.v1.spec_decode.coupled_draw import DRAFT_TEMP_SCALE
++
++        from .markov_coupled import coupled_markov_tokens
++
++        steps = positions.shape[0]
++        full = coupled_markov_tokens(
++            self._markov,
++            self.compute_logits(hidden_states).view(1, steps, -1),
++            anchor,
++            temperature,
++            keys,
++            positions.view(1, steps),
++            DRAFT_TEMP_SCALE,
++        )[0]
++        same = bool(torch.equal(full, tokens))
++        self._coupled_check[0] += 1
++        self._coupled_check[1] += int(not same)
++        checked, differ = self._coupled_check
++        if not same:
++            logger.warning(
++                "V4.1 coupled shard self-check: drafts differ (shard %s, full %s); "
++                "%d of %d rounds differ",
++                tokens.tolist(),
++                full.tolist(),
++                differ,
++                checked,
++            )
++        elif checked % 200 == 0:
++            logger.info(
++                "V4.1 coupled shard self-check: %d of %d rounds differ",
++                differ,
++                checked,
++            )
++
+     def coupled_draft_tokens(
+         self, base_logits, prev, temperature, keys, positions, scale
+     ):
+diff --git a/vllm/models/deepseek_v41/markov_coupled.py b/vllm/models/deepseek_v41/markov_coupled.py
+index e233dd078..a304cf438 100644
+--- a/vllm/models/deepseek_v41/markov_coupled.py
++++ b/vllm/models/deepseek_v41/markov_coupled.py
+@@ -21,6 +21,7 @@ from vllm.triton_utils import tl, triton
+ from vllm.v1.spec_decode.coupled_draw import gumbel, row_seed
+ 
+ from .markov_fused import ROWS
++from .markov_shard import _markov_shard_slot
+ 
+ 
+ @triton.jit
+@@ -36,11 +37,13 @@ def _markov_keyed_block(
+     p_stride,
+     best_val,
+     best_idx,
++    start,
+     V: tl.constexpr,
+     K: tl.constexpr,
+     NB: tl.constexpr,
+     ROWS: tl.constexpr,
+ ):
++    # rows v of a vocabulary slice starting at global id `start` (0: full)
+     pid, b = tl.program_id(0), tl.program_id(1)
+     v = pid * ROWS + tl.arange(0, ROWS)
+     k = tl.arange(0, K)
+@@ -53,7 +56,7 @@ def _markov_keyed_block(
+     t = tl.load(temperature + b)
+     if t > 0:
+         seed = row_seed(tl.load(keys + b), tl.load(positions + b * p_stride))
+-        x = x / (t * scale) + gumbel(seed, v.to(tl.int64))
++        x = x / (t * scale) + gumbel(seed, (v + start).to(tl.int64))
+     x = tl.where(valid, x, float("-inf"))
+     m = tl.max(x, 0)
+     tl.store(best_val + b * NB + pid, m)
+@@ -129,6 +132,7 @@ def coupled_markov_tokens(
+             positions.stride(0),
+             best_val,
+             best_idx,
++            0,
+             V=vocab,
+             K=greedy.rank,
+             NB=nb,
+@@ -149,3 +153,68 @@ def coupled_markov_tokens(
+             num_warps=4,
+         )
+     return tokens
++
++
++def coupled_shard_tokens(
++    shard,
++    local_logits: torch.Tensor,
++    anchor: torch.Tensor,
++    temperature: torch.Tensor,
++    keys: torch.Tensor,
++    positions: torch.Tensor,
++    scale: float,
++) -> torch.Tensor:
++    """[steps] int64 coupled drafts for one request from vocabulary shards.
++
++    The keyed twin of ``MarkovShardGreedy.__call__``: each rank scores its
++    rows ``[start, start + n)`` with ``_markov_keyed_block`` (keyed draws at
++    the global ids), reduces them into its exchange slot, and one all-reduce
++    per step picks the token (largest value, lowest global id) and its next
++    Markov row on every rank, exactly as the greedy shard steps do. The
++    drafts equal ``coupled_markov_tokens`` on the gathered logits. Every rank
++    must call it with the same inputs (the exchanges pair up).
++
++    local_logits: this rank's [steps, n] logits; anchor: [1] token id;
++    temperature: [1]; keys: [1] int64; positions: [steps] int64.
++    """
++    tokens = torch.empty(shard.steps, dtype=torch.int64, device=local_logits.device)
++    logits = local_logits.float().contiguous()
++    first = anchor.reshape(-1)[:1].long().clamp(0, shard.vocab - 1)
++    shard.row.copy_(torch.index_select(shard.embed, 0, first).reshape(-1))
++    best_val = shard.best_val.view(1, -1)
++    best_idx = shard.best_idx.view(1, -1)
++    for step in range(shard.steps):
++        _markov_keyed_block[(shard.blocks, 1)](
++            shard.weight,
++            shard.row,
++            logits[step],
++            logits.stride(0),
++            temperature,
++            float(scale),
++            keys,
++            positions[step:],
++            1,
++            best_val,
++            best_idx,
++            shard.start,
++            V=shard.n,
++            K=shard.rank,
++            NB=shard.blocks,
++            ROWS=ROWS,
++            num_warps=4,
++        )
++        _markov_shard_slot[(1,)](
++            shard.best_val,
++            shard.best_idx,
++            shard.slots[step],
++            shard.start,
++            shard.tp_rank,
++            N=shard.n,
++            BLOCKS=shard.blocks,
++            PB=triton.next_power_of_2(shard.blocks),
++            TP=shard.tp,
++            TPP=triton.next_power_of_2(shard.tp),
++            num_warps=4,
++        )
++        shard._pick(shard.exchange(shard.slots[step]), tokens[step : step + 1])
++    return tokens
+diff --git a/vllm/models/deepseek_v41/query_graph.py b/vllm/models/deepseek_v41/query_graph.py
+index 4f6d2cb12..05be19fac 100644
+--- a/vllm/models/deepseek_v41/query_graph.py
++++ b/vllm/models/deepseek_v41/query_graph.py
+@@ -134,6 +134,71 @@ class V41GreedyDraftGraph:
+         return self.output
+ 
+ 
++class V41CoupledDraftGraph:
++    """The coupled (keyed) twin of V41GreedyDraftGraph for one request.
++
++    Captures the shared head and the five keyed Markov shard steps. The
++    hidden rows, anchor, temperature, stream key and draft positions are
++    copied into owned graph inputs every round, so the graph never holds an
++    address of a per-round temporary.
++    """
++
++    def __init__(self, forward):
++        self.forward = forward
++        self.graph: torch.cuda.CUDAGraph | None = None
++        self.inputs: tuple[torch.Tensor, ...] | None = None
++        self.output: torch.Tensor | None = None
++        self.captures = self.replays = 0
++
++    def __call__(self, hidden, anchor, temperature, keys, positions):
++        if (
++            hidden.ndim != 2
++            or hidden.shape[0] != 5
++            or not hidden.is_cuda
++            or anchor.shape != (1,)
++            or anchor.dtype not in (torch.int32, torch.int64)
++            or temperature.shape != (1,)
++            or temperature.dtype != torch.float32
++            or keys.shape != (1,)
++            or keys.dtype != torch.int64
++            or positions.shape != (5,)
++            or positions.dtype != torch.int64
++            or any(
++                t.device != hidden.device
++                for t in (anchor, temperature, keys, positions)
++            )
++        ):
++            raise ValueError(
++                "V4.1 coupled draft graph requires M5, one anchor, temperature "
++                "and key, and five int64 positions"
++            )
++        args = (hidden, anchor, temperature, keys, positions)
++        if self.graph is None:
++            self.inputs = tuple(t.clone() for t in args)
++            self.forward(*self.inputs)
++            torch.accelerator.synchronize(hidden.device)
++            self.graph = torch.cuda.CUDAGraph()
++            with (
++                graph_capture(device=hidden.device) as context,
++                torch.cuda.graph(
++                    self.graph,
++                    pool=current_platform.get_global_graph_pool(),
++                    stream=context.stream,
++                ),
++            ):
++                self.output = self.forward(*self.inputs)
++            self.captures += 1
++        else:
++            assert self.inputs is not None
++            for owned, new in zip(self.inputs, args):
++                if _storage(new)[1:] != _storage(owned)[1:]:
++                    raise ValueError("V4.1 coupled graph input geometry changed")
++                owned.copy_(new)
++        self.graph.replay()
++        self.replays += 1
++        return self.output
++
++
+ class V41ContextGraphs:
+     """Bounded M1..6 context-insertion graphs with fresh owned inputs."""
+ 
+diff --git a/vllm/v1/spec_decode/dspark.py b/vllm/v1/spec_decode/dspark.py
+index 837034d5c..27b9d78bf 100644
+--- a/vllm/v1/spec_decode/dspark.py
++++ b/vllm/v1/spec_decode/dspark.py
+@@ -150,6 +150,23 @@ class DSparkProposer(DFlashProposer):
+         positions = (self.positions[: batch_size * k] + 1).view(batch_size, k)
+         return temperature, keys, positions
+ 
++    def _graph_draft_result(
++        self, tokens: torch.Tensor, hidden_states: torch.Tensor
++    ) -> tuple[torch.Tensor, None]:
++        """Result of a captured B=1 draft graph (greedy or coupled)."""
++        self._last_confidence_logits = None
++        self._last_verification_lengths = (
++            torch.full(
++                (1,),
++                self._max_verification_tokens,
++                dtype=torch.int32,
++                device=hidden_states.device,
++            )
++            if self.confidence_scheduling_enabled
++            else None
++        )
++        return tokens, None
++
+     @override
+     def _sample_draft_tokens(
+         self,
+@@ -179,18 +196,23 @@ class DSparkProposer(DFlashProposer):
+         ):
+             tokens = greedy_graph(hidden_states, self.input_ids[:1])
+             if tokens is not None:
+-                self._last_confidence_logits = None
+-                self._last_verification_lengths = (
+-                    torch.full(
+-                        (1,),
+-                        self._max_verification_tokens,
+-                        dtype=torch.int32,
+-                        device=hidden_states.device,
+-                    )
+-                    if self.confidence_scheduling_enabled
+-                    else None
++                return self._graph_draft_result(tokens, hidden_states)
++        coupled_graph = getattr(self.model, "coupled_shard_draft_tokens", None)
++        if (
++            coupled_graph is not None
++            and batch_size == 1
++            and logits is None
++            and not self.collect_confidence_logits
++            and self._static_draft_vocab is None
++        ):
++            coupled = self._coupled_inputs(sampling_metadata, 1)
++            if coupled is not None:
++                temperature, keys, positions = coupled
++                tokens = coupled_graph(
++                    hidden_states, self.input_ids[:1], temperature, keys, positions[0]
+                 )
+-                return tokens, None
++                if tokens is not None:
++                    return self._graph_draft_result(tokens, hidden_states)
+         if logits is None:
+             logits = self.model.compute_logits(hidden_states)
+         base_logits = logits.view(batch_size, self.num_speculative_tokens, -1)

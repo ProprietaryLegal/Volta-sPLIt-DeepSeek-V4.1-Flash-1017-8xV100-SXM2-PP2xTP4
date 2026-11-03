@@ -1,0 +1,66 @@
+# DS-V4.1-Flash on ONE 4x V100-SXM2-32GB NVLink board: TP4, PP=1, all 40 layers (1Cat #1277 layout).
+# Template: start.sh fills the @...@ fields from configs/4card.env and writes $FORK_HOME/run/serve-4card.yaml.
+# Differences from upstream benchmarks/deepseek_v41/serve-ds41-phase3.yaml: loopback host and a spare port, no API key,
+# synchronous scheduling (the adopted levers were all measured synchronous; async is a pending arm), and the cold-expert
+# share comes from DS41_OFFLOAD (default 0.33 = upstream).
+model: @DS41_GGUF@
+hf-config-path: @DS41_BASE@
+tokenizer: @DS41_BASE@
+tokenizer-mode: deepseek_v41
+served-model-name: @DS41_SERVED_NAME@
+host: @DS41_HOST@
+port: @DS41_PORT@
+dtype: half
+quantization: gguf
+load-format: gguf
+tensor-parallel-size: 4
+pipeline-parallel-size: 1
+max-model-len: 524288
+max-num-seqs: 1
+max-num-batched-tokens: 8192
+kv-cache-memory-bytes: 268435456
+gpu-memory-utilization: 0.96
+no-enforce-eager: true
+compilation-config:
+  mode: 0
+  cudagraph_mode: FULL
+  cudagraph_capture_sizes: [1, 2, 3, 4, 5, 6]
+  max_cudagraph_capture_size: 6
+# This baseline's YAML loader omits false scalar flags; use explicit negations. start.sh ASYNC=1 swaps this line for
+# async-scheduling: true and exports VLLM_V41_ASYNC=1 (the model contract admits async only with that env).
+no-async-scheduling: true
+enable-prefix-caching: true
+enable-chunked-prefill: true
+no-disable-custom-all-reduce: true
+enable-auto-tool-choice: true
+tool-call-parser: deepseek_v41
+# Thinking on by default (R1-style <think>...</think>); a request can pass
+# chat_template_kwargs {"thinking": false} or reasoning_effort.
+reasoning-parser: deepseek_v4
+default-chat-template-kwargs: '{"thinking": true}'
+model-loader-extra-config:
+  engram_path: @DS41_ENGRAM@
+speculative-config:
+  method: dspark
+  model: @DS41_DSPARK@
+  quantization: fp8
+  num_speculative_tokens: 5
+  draft_load_config:
+    load_format: safetensors
+  enforce_eager: false
+kernel-config:
+  sm70_ring:
+    enabled: false
+  sm70_gguf:
+    expert_storage: original
+    expert_arena: true
+    expert_cache_host_storage: shared_original
+    expert_cache_offload_fraction: @DS41_OFFLOAD@
+    expert_cache_fraction: 0
+    expert_cache_host_slack: 0
+    expert_load_prefetch_banks: 1
+    expert_cache_prefill_tokens: 4096
+    dense_storage: original
+    embedding_storage: original
+    prefill_min_m: 1
+    dequant_workspace_bytes: 33554432

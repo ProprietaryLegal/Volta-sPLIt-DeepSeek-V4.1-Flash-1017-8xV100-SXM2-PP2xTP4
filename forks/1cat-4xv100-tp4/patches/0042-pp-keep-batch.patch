@@ -1,0 +1,926 @@
+diff --git a/tests/v1/core/test_pp_keep_batch.py b/tests/v1/core/test_pp_keep_batch.py
+new file mode 100644
+index 000000000..c96e47936
+--- /dev/null
++++ b/tests/v1/core/test_pp_keep_batch.py
+@@ -0,0 +1,302 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""VLLM_V41_PP_KEEP_BATCH, scheduler side and the shared decision.
++
++With pipeline parallelism and synchronous scheduling a single running request is
++in flight on every other engine step, so that step schedules nothing. With the
++knob on, the scheduler keeps its previous-step record across such a step and
++does not resend the request's whole token history on the next decode step.
++With the knob off, the default path is unchanged.
++"""
++
++from types import SimpleNamespace
++
++import pytest
++
++from vllm.v1.core.sched.output import SchedulerOutput
++from vllm.v1.core.sched.pp_keep_batch import (
++    pp_keep_batch_decision,
++    pp_keep_batch_requested,
++)
++from vllm.v1.outputs import ModelRunnerOutput
++from vllm.v1.request import RequestStatus
++
++from .utils import create_requests, create_scheduler
++
++pytestmark = pytest.mark.cpu_test
++
++KNOB = "VLLM_V41_PP_KEEP_BATCH"
++
++
++@pytest.fixture
++def two_devices(monkeypatch):
++    # Scheduler bookkeeping is CPU-only; do not require two physical GPUs.
++    monkeypatch.setattr("vllm.config.parallel.current_platform.device_count", lambda: 2)
++
++
++def _knob(monkeypatch, value: str | None) -> None:
++    if value is None:
++        monkeypatch.delenv(KNOB, raising=False)
++    else:
++        monkeypatch.setenv(KNOB, value)
++
++
++def _runner_output(
++    scheduler_output: SchedulerOutput, token_id: int
++) -> ModelRunnerOutput:
++    req_ids = list(scheduler_output.num_scheduled_tokens.keys())
++    return ModelRunnerOutput(
++        req_ids=req_ids,
++        req_id_to_index={req_id: i for i, req_id in enumerate(req_ids)},
++        sampled_token_ids=[[token_id] for _ in req_ids],
++        logprobs=None,
++        prompt_logprobs_dict={},
++        pooler_output=[],
++    )
++
++
++def _pp2_scheduler(monkeypatch, knob: str | None):
++    _knob(monkeypatch, knob)
++    scheduler = create_scheduler(pipeline_parallel_size=2)
++    assert not scheduler.use_v2_model_runner
++    assert not scheduler.scheduler_config.async_scheduling
++    return scheduler
++
++
++def _decode_rounds(scheduler, request, num_rounds: int):
++    """Drive the PP=2 batch-queue cadence: each round schedules the request,
++    then runs one empty step while it is in flight, then applies its output.
++    Returns the cached-request data of every scheduled step."""
++    cached = []
++    token_id = 100
++    for _ in range(num_rounds):
++        scheduled = scheduler.schedule()
++        assert request.request_id in scheduled.num_scheduled_tokens
++        cached.append(scheduled.scheduled_cached_reqs)
++        in_flight = scheduler.schedule()
++        assert in_flight.total_num_scheduled_tokens == 0
++        assert not in_flight.num_scheduled_tokens
++        scheduler.update_from_output(scheduled, _runner_output(scheduled, token_id))
++        token_id += 1
++    return cached
++
++
++@pytest.mark.parametrize(
++    ("knob", "history_sent"), [(None, True), ("0", True), ("1", False)]
++)
++def test_empty_pipeline_step_keeps_record_only_with_knob(
++    two_devices, monkeypatch, knob, history_sent
++):
++    scheduler = _pp2_scheduler(monkeypatch, knob)
++    assert scheduler.pp_keep_batch is (knob == "1")
++    (request,) = create_requests(num_requests=1, num_tokens=40, max_tokens=8)
++    scheduler.add_request(request)
++
++    cached = _decode_rounds(scheduler, request, num_rounds=4)
++
++    # Round 0 is the prefill (a new request, not cached data).
++    assert cached[0].req_ids == []
++    for round_data in cached[1:]:
++        assert round_data.req_ids == [request.request_id]
++        assert not round_data.resumed_req_ids
++        # The sampled token is always sent to the first stage.
++        assert len(round_data.new_token_ids) == 1
++        assert len(round_data.new_token_ids[0]) == 1
++        assert (request.request_id in round_data.all_token_ids) is history_sent
++        if history_sent:
++            history = round_data.all_token_ids[request.request_id]
++            assert history == list(request.all_token_ids[: len(history)])
++    if knob == "1":
++        assert scheduler._pp_keep_batch_kept_logged
++    else:
++        assert not scheduler._pp_keep_batch_kept_logged
++
++
++def test_new_token_ids_match_default_path(two_devices, monkeypatch):
++    """The token ids sent to the first stage are identical with and without the
++    knob; only the history resend differs."""
++    sent = {}
++    for knob in ("0", "1"):
++        scheduler = _pp2_scheduler(monkeypatch, knob)
++        (request,) = create_requests(num_requests=1, num_tokens=33, max_tokens=8)
++        scheduler.add_request(request)
++        cached = _decode_rounds(scheduler, request, num_rounds=5)
++        sent[knob] = (
++            [c.new_token_ids for c in cached],
++            [c.num_computed_tokens for c in cached],
++            [c.num_output_tokens for c in cached],
++        )
++    assert sent["0"] == sent["1"]
++
++
++def test_finished_request_leaves_record_on_empty_step(two_devices, monkeypatch):
++    scheduler = _pp2_scheduler(monkeypatch, "1")
++    request_a, request_b = create_requests(num_requests=2, num_tokens=20)
++    scheduler.add_request(request_a)
++    scheduler.add_request(request_b)
++    prefill = scheduler.schedule()
++    assert set(prefill.num_scheduled_tokens) == {"0", "1"}
++    assert scheduler.prev_step_scheduled_req_ids == {"0", "1"}
++
++    scheduler.finish_requests("1", RequestStatus.FINISHED_ABORTED)
++    in_flight = scheduler.schedule()
++    assert in_flight.total_num_scheduled_tokens == 0
++    # The aborted request is no longer running and leaves the record.
++    assert scheduler.prev_step_scheduled_req_ids == {"0"}
++
++
++def test_preempted_request_leaves_record_on_empty_step(two_devices, monkeypatch):
++    scheduler = _pp2_scheduler(monkeypatch, "1")
++    (request,) = create_requests(num_requests=1, num_tokens=20)
++    scheduler.add_request(request)
++    prefill = scheduler.schedule()
++    scheduler.update_from_output(prefill, _runner_output(prefill, 7))
++    assert scheduler.prev_step_scheduled_req_ids == {request.request_id}
++
++    # Preempted outside schedule() (as reset_prefix_cache does, minus its own
++    # record clear): the empty step must still drop it from the record.
++    scheduler.running.remove(request)
++    scheduler._preempt_request(request, 0.0)
++    scheduler._keep_prev_step_record_on_empty_step()
++    assert scheduler.prev_step_scheduled_req_ids == set()
++
++    # The resumed request is sent with its history and is not treated as held
++    # (Scheduler asserts that a resumed request did not run in the prior step).
++    resumed = scheduler.schedule()
++    cached = resumed.scheduled_cached_reqs
++    assert cached.resumed_req_ids == {request.request_id}
++    assert request.request_id in cached.all_token_ids
++
++
++def test_reset_prefix_cache_with_running_requests_after_empty_step(
++    two_devices, monkeypatch
++):
++    scheduler = _pp2_scheduler(monkeypatch, "1")
++    (request,) = create_requests(num_requests=1, num_tokens=20)
++    scheduler.add_request(request)
++    prefill = scheduler.schedule()
++    assert scheduler.schedule().total_num_scheduled_tokens == 0
++    assert scheduler.prev_step_scheduled_req_ids == {request.request_id}
++    scheduler.update_from_output(prefill, _runner_output(prefill, 7))
++
++    assert scheduler.reset_prefix_cache(reset_running_requests=True)
++    resumed = scheduler.schedule()
++    cached = resumed.scheduled_cached_reqs
++    assert cached.resumed_req_ids == {request.request_id}
++    assert request.request_id in cached.all_token_ids
++
++
++def test_non_empty_step_replaces_record_as_default(two_devices, monkeypatch):
++    """Only a fully empty step keeps the record; a step that schedules any
++    request replaces it exactly as the default path does."""
++    scheduler = _pp2_scheduler(monkeypatch, "1")
++    request_a, request_b = create_requests(num_requests=2, num_tokens=20)
++    scheduler.add_request(request_a)
++    first = scheduler.schedule()
++    assert scheduler.prev_step_scheduled_req_ids == {"0"}
++    scheduler.add_request(request_b)
++    second = scheduler.schedule()
++    assert set(second.num_scheduled_tokens) == {"1"}
++    assert scheduler.prev_step_scheduled_req_ids == {"1"}
++    scheduler.update_from_output(first, _runner_output(first, 5))
++    third = scheduler.schedule()
++    assert set(third.num_scheduled_tokens) == {"0"}
++    # Request 0 skipped the second step, which was not empty: history resent.
++    assert "0" in third.scheduled_cached_reqs.all_token_ids
++
++
++@pytest.mark.parametrize("value", ["2", "true", "on", "yes"])
++def test_invalid_knob_value_raises(monkeypatch, value):
++    _knob(monkeypatch, value)
++    with pytest.raises(ValueError, match=KNOB):
++        pp_keep_batch_requested()
++
++
++@pytest.mark.parametrize(
++    ("value", "expected"), [(None, False), ("0", False), (" 1 ", True)]
++)
++def test_knob_values(monkeypatch, value, expected):
++    _knob(monkeypatch, value)
++    assert pp_keep_batch_requested() is expected
++
++
++def _fake_config(**overrides):
++    spec = overrides.pop("speculative_config", None)
++    config = SimpleNamespace(
++        parallel_config=SimpleNamespace(
++            pipeline_parallel_size=overrides.pop("pp", 2),
++            distributed_executor_backend=overrides.pop("backend", "mp"),
++        ),
++        scheduler_config=SimpleNamespace(
++            async_scheduling=overrides.pop("async_scheduling", False)
++        ),
++        model_config=SimpleNamespace(
++            runner_type=overrides.pop("runner_type", "generate"),
++            is_hybrid=overrides.pop("is_hybrid", False),
++        ),
++        speculative_config=spec,
++        use_v2_model_runner=overrides.pop("v2", False),
++        kv_transfer_config=overrides.pop("kv_transfer_config", None),
++        ec_transfer_config=overrides.pop("ec_transfer_config", None),
++    )
++    assert not overrides
++    return config
++
++
++def _fake_spec(ngram_gpu=False, ddtree=False):
++    return SimpleNamespace(
++        use_ngram_gpu=lambda: ngram_gpu, use_dflash_ddtree=lambda: ddtree
++    )
++
++
++def test_decision_off_returns_no_reason(monkeypatch):
++    _knob(monkeypatch, None)
++    assert pp_keep_batch_decision(_fake_config()) == (False, "")
++    _knob(monkeypatch, "0")
++    # Even for shapes the knob would not cover: off means silent default.
++    assert pp_keep_batch_decision(_fake_config(async_scheduling=True)) == (False, "")
++
++
++def test_decision_on_for_covered_shape(monkeypatch):
++    _knob(monkeypatch, "1")
++    enabled, reason = pp_keep_batch_decision(
++        _fake_config(speculative_config=_fake_spec())
++    )
++    assert enabled
++    assert "PP=2" in reason
++
++
++@pytest.mark.parametrize(
++    ("overrides", "needle"),
++    [
++        ({"pp": 1}, "pipeline_parallel_size is 1"),
++        ({"v2": True}, "V2 model runner"),
++        ({"async_scheduling": True}, "async scheduling"),
++        ({"backend": "external_launcher"}, "external_launcher"),
++        ({"kv_transfer_config": object()}, "KV connector"),
++        ({"ec_transfer_config": object()}, "encoder-cache connector"),
++        ({"runner_type": "pooling"}, "pooling"),
++        ({"is_hybrid": True}, "hybrid"),
++        ({"speculative_config": _fake_spec(ngram_gpu=True)}, "ngram_gpu"),
++        ({"speculative_config": _fake_spec(ddtree=True)}, "dflash_ddtree"),
++    ],
++)
++def test_decision_falls_back_with_reason(monkeypatch, overrides, needle):
++    _knob(monkeypatch, "1")
++    enabled, reason = pp_keep_batch_decision(_fake_config(**overrides))
++    assert not enabled
++    assert needle in reason
++
++
++def test_scheduler_falls_back_without_pp(monkeypatch):
++    _knob(monkeypatch, "1")
++    scheduler = create_scheduler()
++    assert scheduler.pp_keep_batch is False
++
++
++def test_env_registration():
++    import vllm.envs as envs
++
++    assert "VLLM_V41_PP_KEEP_BATCH" in envs.environment_variables
++    factors = envs.compile_factors()
++    assert "VLLM_V41_PP_KEEP_BATCH" not in factors
+diff --git a/tests/v1/worker/test_gpu_model_runner.py b/tests/v1/worker/test_gpu_model_runner.py
+index 77e20a21c..dfef3601c 100644
+--- a/tests/v1/worker/test_gpu_model_runner.py
++++ b/tests/v1/worker/test_gpu_model_runner.py
+@@ -2022,7 +2022,9 @@ def test_pp_prepend_accepted_drafts():
+ 
+     fn = GPUModelRunner._pp_prepend_accepted_drafts
+     req_state = SimpleNamespace(num_tokens=11)  # prompt + outputs through pos 10
+-    runner = SimpleNamespace(input_batch=SimpleNamespace(spec_token_ids=[[7, 8, 9]]))
++    runner = SimpleNamespace(
++        pp_keep_batch=False, input_batch=SimpleNamespace(spec_token_ids=[[7, 8, 9]])
++    )
+     # 2 of 3 drafts accepted: computed 11 -> 13, bonus at position 13.
+     assert fn(runner, "r", req_state, 0, 13, [42], {}) == [7, 8, 42]
+     # No drafts accepted (or no spec decode): unchanged.
+diff --git a/tests/v1/worker/test_pp_keep_batch_runner.py b/tests/v1/worker/test_pp_keep_batch_runner.py
+new file mode 100644
+index 000000000..26f4b1825
+--- /dev/null
++++ b/tests/v1/worker/test_pp_keep_batch_runner.py
+@@ -0,0 +1,248 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""VLLM_V41_PP_KEEP_BATCH, runner side.
++
++The real scheduler drives the real ``GPUModelRunner._update_states`` on a CPU
++``InputBatch`` through the PP=2 batch-queue cadence (scheduled step, empty step,
++output). The runner is built without ``__init__`` so no GPU or process group is
++needed; ``get_pp_group`` is replaced by a stub that names the rank.
++"""
++
++import dataclasses
++from types import SimpleNamespace
++from unittest.mock import Mock
++
++import pytest
++import torch
++
++import vllm.v1.worker.gpu_model_runner as gpu_model_runner
++from tests.v1.core.utils import create_requests, create_scheduler
++from vllm.v1.outputs import DraftTokenIds, ModelRunnerOutput
++from vllm.v1.worker.gpu_input_batch import InputBatch
++from vllm.v1.worker.gpu_model_runner import GPUModelRunner
++
++pytestmark = pytest.mark.cpu_test
++
++KNOB = "VLLM_V41_PP_KEEP_BATCH"
++BLOCK_SIZE = 16
++MAX_MODEL_LEN = 512
++
++
++@pytest.fixture(autouse=True)
++def two_devices(monkeypatch):
++    # Scheduler bookkeeping is CPU-only; do not require two physical GPUs.
++    monkeypatch.setattr("vllm.config.parallel.current_platform.device_count", lambda: 2)
++
++
++def _runner(monkeypatch, keep: bool, is_last_rank: bool) -> GPUModelRunner:
++    runner = object.__new__(GPUModelRunner)
++    runner.pp_keep_batch = keep
++    runner._pp_keep_batch_kept_logged = False
++    runner.device = torch.device("cpu")
++    runner.input_batch = InputBatch(
++        max_num_reqs=4,
++        max_model_len=MAX_MODEL_LEN,
++        max_num_batched_tokens=MAX_MODEL_LEN,
++        device=torch.device("cpu"),
++        pin_memory=False,
++        vocab_size=50272,
++        block_sizes=[BLOCK_SIZE],
++        kernel_block_sizes=[BLOCK_SIZE],
++        num_spec_tokens=4,
++    )
++    runner.requests = {}
++    runner.num_prompt_logprobs = {}
++    runner.encoder_cache = {}
++    runner.late_interaction_runner = Mock()
++    runner._dynamic_draft_vocab_prefill_bootstrap = Mock()
++    runner.speculative_config = None
++    runner.use_async_spec_decode = False
++    runner.sync_spec_decode_accept_counts = False
++    runner.use_async_scheduling = False
++    runner.is_pooling_model = False
++    runner.uses_mrope = False
++    runner.uses_xdrope_dim = 0
++    runner.kv_cache_config = SimpleNamespace(kv_cache_groups=[])
++    monkeypatch.setattr(
++        gpu_model_runner,
++        "get_pp_group",
++        lambda: SimpleNamespace(
++            is_last_rank=is_last_rank, is_first_rank=not is_last_rank
++        ),
++    )
++    adds = []
++    real_add = runner.input_batch.add_request
++
++    def counting_add(request):
++        adds.append(request.req_id)
++        return real_add(request)
++
++    runner.input_batch.add_request = counting_add
++    runner.adds = adds
++    return runner
++
++
++def _row(runner: GPUModelRunner, req_id: str) -> dict:
++    batch = runner.input_batch
++    idx = batch.req_id_to_index[req_id]
++    num_tokens = int(batch.num_tokens_no_spec[idx])
++    table = batch.block_table.block_tables[0]
++    return {
++        "tokens": batch.token_ids_cpu[idx, :num_tokens].tolist(),
++        "num_computed": int(batch.num_computed_tokens_cpu[idx]),
++        "spec": list(batch.spec_token_ids[idx]),
++        "blocks": table.block_table.np[idx, : table.num_blocks_per_row[idx]].tolist(),
++        "outputs": list(runner.requests[req_id].output_token_ids),
++        "req_num_computed": runner.requests[req_id].num_computed_tokens,
++    }
++
++
++def _runner_output(req_id: str, sampled: list[int]) -> ModelRunnerOutput:
++    return ModelRunnerOutput(
++        req_ids=[req_id],
++        req_id_to_index={req_id: 0},
++        sampled_token_ids=[sampled],
++        logprobs=None,
++        prompt_logprobs_dict={},
++        pooler_output=[],
++    )
++
++
++def _simulate(monkeypatch, knob: str, accepted: list[int]):
++    """Run len(accepted) rounds of the PP=2 cadence with 3 drafts per decode
++    step; ``accepted[i]`` drafts of round i are accepted. Returns the runner's
++    row after every scheduled step, the cached data sent, and the runner."""
++    monkeypatch.setenv(KNOB, knob)
++    scheduler = create_scheduler(
++        pipeline_parallel_size=2,
++        num_speculative_tokens=3,
++        block_size=BLOCK_SIZE,
++        max_model_len=MAX_MODEL_LEN,
++    )
++    assert scheduler.pp_keep_batch is (knob == "1")
++    runner = _runner(monkeypatch, keep=scheduler.pp_keep_batch, is_last_rank=False)
++    (request,) = create_requests(
++        num_requests=1, num_tokens=37, max_tokens=200, block_size=BLOCK_SIZE
++    )
++    req_id = request.request_id
++    scheduler.add_request(request)
++
++    rows, sent = [], []
++    token = 1000
++    for num_accepted in accepted:
++        scheduled = scheduler.schedule()
++        assert req_id in scheduled.num_scheduled_tokens
++        drafts = list(scheduled.scheduled_spec_decode_tokens.get(req_id, []))
++        runner._update_states(scheduled)
++        row = _row(runner, req_id)
++        rows.append(row)
++        sent.append(scheduled.scheduled_cached_reqs)
++
++        # The first stage holds exactly the scheduler's history up to the
++        # tokens it feeds the model, then this step's drafts.
++        cached = scheduled.scheduled_cached_reqs
++        if cached.req_ids:
++            expected_len = cached.num_computed_tokens[0] + len(cached.new_token_ids[0])
++        else:
++            expected_len = request.num_prompt_tokens
++        assert row["tokens"] == request.all_token_ids[:expected_len]
++        assert row["spec"] == drafts
++
++        in_flight = scheduler.schedule()
++        assert in_flight.total_num_scheduled_tokens == 0
++        runner._update_states(in_flight)
++
++        assert num_accepted <= len(drafts)
++        sampled = drafts[:num_accepted] + [token]
++        scheduler.update_from_output(scheduled, _runner_output(req_id, sampled))
++        scheduler.update_draft_token_ids(
++            DraftTokenIds([req_id], [[token + 1, token + 2, token + 3]])
++        )
++        token += 10
++    return rows, sent, runner
++
++
++ACCEPTED = [0, 0, 3, 1, 0, 2, 3, 3, 0, 1, 2]
++
++
++def test_first_stage_history_matches_default_path(monkeypatch):
++    rows_off, sent_off, runner_off = _simulate(monkeypatch, "0", ACCEPTED)
++    rows_on, sent_on, runner_on = _simulate(monkeypatch, "1", ACCEPTED)
++
++    assert rows_on == rows_off
++    # The default path re-adds the row on every decode round and resends the
++    # whole history; the knob adds it once and never resends.
++    assert runner_off.adds == ["0"] * len(ACCEPTED)
++    assert runner_on.adds == ["0"]
++    assert all("0" in c.all_token_ids for c in sent_off[1:])
++    assert not any(c.all_token_ids for c in sent_on)
++    assert runner_on._pp_keep_batch_kept_logged
++    assert not runner_off._pp_keep_batch_kept_logged
++
++
++def test_empty_step_keeps_rows_only_with_knob(monkeypatch):
++    for knob, kept in (("0", False), ("1", True)):
++        monkeypatch.setenv(KNOB, knob)
++        scheduler = create_scheduler(pipeline_parallel_size=2)
++        runner = _runner(monkeypatch, keep=scheduler.pp_keep_batch, is_last_rank=True)
++        (request,) = create_requests(num_requests=1, num_tokens=20)
++        scheduler.add_request(request)
++        runner._update_states(scheduler.schedule())
++        before = _row(runner, request.request_id)
++        in_flight = scheduler.schedule()
++        assert in_flight.total_num_scheduled_tokens == 0
++        runner._update_states(in_flight)
++        assert (request.request_id in runner.input_batch.req_id_to_index) is kept
++        # The cached request state survives either way.
++        assert request.request_id in runner.requests
++        if kept:
++            assert _row(runner, request.request_id) == before
++
++
++def test_empty_step_drops_preempted_and_finished_rows(monkeypatch):
++    monkeypatch.setenv(KNOB, "1")
++    scheduler = create_scheduler(pipeline_parallel_size=2)
++    runner = _runner(monkeypatch, keep=True, is_last_rank=True)
++    request_a, request_b, request_c = create_requests(num_requests=3, num_tokens=20)
++    for request in (request_a, request_b, request_c):
++        scheduler.add_request(request)
++    runner._update_states(scheduler.schedule())
++    assert set(runner.input_batch.req_id_to_index) == {"0", "1", "2"}
++
++    in_flight = scheduler.schedule()
++    assert in_flight.total_num_scheduled_tokens == 0
++    in_flight = dataclasses.replace(
++        in_flight, preempted_req_ids={"1"}, finished_req_ids={"2"}
++    )
++    runner._update_states(in_flight)
++    assert set(runner.input_batch.req_id_to_index) == {"0"}
++    # A preempted request keeps its cached state; a finished one does not.
++    assert set(runner.requests) == {"0", "1"}
++
++
++def test_prepend_fails_closed_with_knob():
++    """With the knob on, the scheduler omits the history for a request it
++    believes the runner holds; a runner that cannot rebuild the accepted
++    drafts must raise instead of corrupting the first stage's history."""
++    fn = GPUModelRunner._pp_prepend_accepted_drafts
++    req_state = SimpleNamespace(num_tokens=11)
++    on = SimpleNamespace(
++        pp_keep_batch=True, input_batch=SimpleNamespace(spec_token_ids=[[7, 8, 9]])
++    )
++    # Kept row: drafts come from the previous step, as on the default path.
++    assert fn(on, "r", req_state, 0, 13, [42], {}) == [7, 8, 42]
++    assert fn(on, "r", req_state, None, 13, [42], {"r": list(range(100, 114))}) == [
++        111,
++        112,
++        42,
++    ]
++    with pytest.raises(RuntimeError, match=KNOB):
++        fn(on, "r", req_state, None, 13, [42], {})
++    with pytest.raises(RuntimeError, match=KNOB):
++        fn(on, "r", req_state, 0, 15, [42], {})
++
++    off = SimpleNamespace(
++        pp_keep_batch=False, input_batch=SimpleNamespace(spec_token_ids=[[7, 8, 9]])
++    )
++    # Knob off: unchanged default (warn once, return the sent tokens).
++    assert fn(off, "r", req_state, None, 13, [42], {}) == [42]
+diff --git a/vllm/envs.py b/vllm/envs.py
+index bc3009ee7..3933feac2 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -516,6 +516,7 @@ if TYPE_CHECKING:
+     VLLM_V41_PLAN_FUSE: str = "0"
+     VLLM_V41_PLAN_STATS: str | None = None
+     VLLM_V41_PP_BOUNDARY_SIM: str | None = None
++    VLLM_V41_PP_KEEP_BATCH: str = "0"
+     VLLM_V41_PRED_STATS: str = "0"
+     VLLM_V41_PREFETCH: str = "0"
+     VLLM_V41_PREFETCH_EVAL: str | None = None
+@@ -7909,6 +7910,24 @@ environment_variables: dict[str, Callable[[], Any]] = {
+         acceleration_paths=(),
+         user_visible=False,
+     ),
++    "VLLM_V41_PP_KEEP_BATCH": env_var(
++        lambda: os.getenv("VLLM_V41_PP_KEEP_BATCH", "0"),
++        description=(
++            "Pipeline parallel, V1 model runner, synchronous scheduling: 1 ="
++            " a fully empty pipeline step (the batch queue's in-flight cadence"
++            " schedules nothing) keeps the runner's persistent batch and the"
++            " scheduler's previous-step record, so a running request's whole"
++            " token history is not copied, serialized and re-added every"
++            " decode round (V1 port of 1Cat-vLLM #1263). Other shapes log the"
++            " reason and run the default path."
++        ),
++        category="tuning",
++        declared_default="'0'",
++        effective_default="'0'",
++        automatic_conditions=(),
++        acceleration_paths=(),
++        user_visible=False,
++    ),
+     "VLLM_V41_PRED_STATS": env_var(
+         lambda: os.getenv("VLLM_V41_PRED_STATS", "0"),
+         description=("DS-V4.1 SM70 runtime switch (developer)."),
+@@ -20669,6 +20688,7 @@ def compile_factors(kernel_config=None, *, vllm_config=None) -> dict[str, object
+         "VLLM_V41_PACKED_KV",
+         "VLLM_V41_PLAN_STATS",
+         "VLLM_V41_PP_BOUNDARY_SIM",
++        "VLLM_V41_PP_KEEP_BATCH",
+         "VLLM_V41_PRED_STATS",
+         "VLLM_V41_PREFETCH",
+         "VLLM_V41_PREFETCH_EVAL",
+diff --git a/vllm/v1/core/sched/pp_keep_batch.py b/vllm/v1/core/sched/pp_keep_batch.py
+new file mode 100644
+index 000000000..1c3be47e5
+--- /dev/null
++++ b/vllm/v1/core/sched/pp_keep_batch.py
+@@ -0,0 +1,118 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""VLLM_V41_PP_KEEP_BATCH: keep a running request across empty pipeline steps.
++
++With pipeline parallelism the engine keeps ``pipeline_parallel_size`` batches
++in flight (``EngineCore.step_with_batch_queue``). With one request and
++synchronous scheduling the request is still in flight on every other engine
++step, so that step schedules nothing. On such an empty step the V1 runner drops
++the request from its persistent batch (it was not scheduled) and the scheduler
++forgets that the request ran in the previous step. The next step then copies
++and serializes the request's whole token history
++(``CachedRequestData.all_token_ids``) to every worker, and every runner
++rebuilds the request's persistent-batch row from its prompt and output lists.
++All of that is O(context) host work on the critical path of each decode round.
++
++With the knob on, a fully empty step (no request scheduled at all) changes
++neither side:
++
++- the scheduler keeps its previous-step record for the requests that are
++  still running, so it does not resend their history;
++- the runner keeps its persistent-batch rows (except a request preempted in
++  that step), so their token ids, block table and previous drafts stay in
++  place for the next step.
++
++Both sides take the decision from the same config through
++:func:`pp_keep_batch_decision`, so they agree. This is the V1-runner
++counterpart of 1Cat-vLLM PR #1263, which removed the resend for the V2 runner
++only.
++"""
++
++from __future__ import annotations
++
++from typing import TYPE_CHECKING
++
++import vllm.envs as envs
++
++if TYPE_CHECKING:
++    from vllm.config import VllmConfig
++
++KNOB = "VLLM_V41_PP_KEEP_BATCH"
++
++
++def pp_keep_batch_requested() -> bool:
++    """Whether the knob is set to 1. Any value other than unset, 0 or 1 is an
++    error, so a typo cannot leave the operator believing the path ran."""
++    value = (envs.VLLM_V41_PP_KEEP_BATCH or "0").strip()
++    if value not in ("0", "1"):
++        raise ValueError(f"{KNOB} must be 0 or 1, got {value!r}")
++    return value == "1"
++
++
++def pp_keep_batch_decision(vllm_config: VllmConfig) -> tuple[bool, str]:
++    """Return ``(enabled, reason)``.
++
++    ``enabled`` is False when the knob is off (``reason`` is then empty) or
++    when the configuration is outside the covered shape (``reason`` names
++    why; the caller logs it and runs the default path). The result depends
++    only on the environment and the config, so the engine-core scheduler and
++    every worker's runner compute the same answer.
++    """
++    if not pp_keep_batch_requested():
++        return False, ""
++
++    parallel_config = vllm_config.parallel_config
++    scheduler_config = vllm_config.scheduler_config
++    model_config = vllm_config.model_config
++    speculative_config = vllm_config.speculative_config
++
++    pp_size = parallel_config.pipeline_parallel_size
++    if pp_size <= 1:
++        return False, (
++            "pipeline_parallel_size is 1, so there are no empty pipeline steps"
++        )
++    if vllm_config.use_v2_model_runner:
++        return False, (
++            "the V2 model runner keeps request state on the GPU and already "
++            "skips the history resend (1Cat-vLLM #1263)"
++        )
++    if scheduler_config.async_scheduling:
++        return False, (
++            "async scheduling is on; its PP path sends no new_token_ids and "
++            "rebuilds requests from all_token_ids, which this knob does not cover"
++        )
++    if parallel_config.distributed_executor_backend == "external_launcher":
++        return False, "the external_launcher backend is not covered"
++    if vllm_config.kv_transfer_config is not None:
++        return False, (
++            "a KV connector is configured; its empty steps run "
++            "kv_connector_no_forward, which this knob does not cover"
++        )
++    if vllm_config.ec_transfer_config is not None:
++        return False, "an encoder-cache connector is configured"
++    if model_config is not None:
++        if model_config.runner_type == "pooling":
++            return False, "pooling models are not covered"
++        if model_config.is_hybrid:
++            return False, (
++                "hybrid (Mamba/linear-attention) models read per-row accepted "
++                "counts that a re-added row resets; not covered"
++            )
++    if speculative_config is not None:
++        if speculative_config.use_ngram_gpu():
++            return False, (
++                "ngram_gpu drafting updates its GPU token tensors incrementally "
++                "from re-added rows; not covered"
++            )
++        if speculative_config.use_dflash_ddtree():
++            # A non-last stage rebuilds the accepted drafts as a prefix of the
++            # previous step's scheduled drafts once the history is not sent;
++            # tree verification accepts a path, not a prefix.
++            return False, (
++                "dflash_ddtree verification accepts a tree path, not a prefix "
++                "of the scheduled drafts; not covered"
++            )
++    return True, (
++        f"PP={pp_size}, V1 model runner, synchronous scheduling: a fully empty "
++        "pipeline step keeps the persistent batch and the previous-step record"
++    )
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index 47dcf902a..84523c6fc 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -47,6 +47,7 @@ from vllm.v1.core.sched.output import (
+     NewRequestData,
+     SchedulerOutput,
+ )
++from vllm.v1.core.sched.pp_keep_batch import pp_keep_batch_decision
+ from vllm.v1.core.sched.request_queue import (
+     RequestQueue,
+     SchedulingPolicy,
+@@ -77,6 +78,11 @@ def _ddtree_debug_log(message: str, *args: object) -> None:
+ 
+ 
+ class Scheduler(SchedulerInterface):
++    # VLLM_V41_PP_KEEP_BATCH (set in __init__); class defaults keep schedulers
++    # built without __init__ (unit-test stubs) on the default path.
++    pp_keep_batch: bool = False
++    _pp_keep_batch_kept_logged: bool = False
++
+     def __init__(
+         self,
+         vllm_config: VllmConfig,
+@@ -290,6 +296,22 @@ class Scheduler(SchedulerInterface):
+ 
+         self.use_pp = self.parallel_config.pipeline_parallel_size > 1
+         self.use_v2_model_runner = vllm_config.use_v2_model_runner
++        # VLLM_V41_PP_KEEP_BATCH: keep the previous-step record across a fully
++        # empty pipeline step, so a running request's history is not resent.
++        # The runner takes the same decision (pp_keep_batch.py).
++        self.pp_keep_batch, pp_keep_batch_reason = pp_keep_batch_decision(vllm_config)
++        self._pp_keep_batch_kept_logged = False
++        if self.pp_keep_batch:
++            logger.info(
++                "VLLM_V41_PP_KEEP_BATCH=1 active (scheduler): %s.",
++                pp_keep_batch_reason,
++            )
++        elif pp_keep_batch_reason:
++            logger.warning(
++                "VLLM_V41_PP_KEEP_BATCH=1 ignored (scheduler): %s; the default "
++                "path runs.",
++                pp_keep_batch_reason,
++            )
+         self.current_step = 0
+         self.scheduler_reserve_full_isl = (
+             self.scheduler_config.scheduler_reserve_full_isl
+@@ -1329,8 +1351,11 @@ class Scheduler(SchedulerInterface):
+             )
+ 
+         # Record the request ids that were scheduled in this step.
+-        self.prev_step_scheduled_req_ids.clear()
+-        self.prev_step_scheduled_req_ids.update(num_scheduled_tokens.keys())
++        if self.pp_keep_batch and not num_scheduled_tokens:
++            self._keep_prev_step_record_on_empty_step()
++        else:
++            self.prev_step_scheduled_req_ids.clear()
++            self.prev_step_scheduled_req_ids.update(num_scheduled_tokens.keys())
+ 
+         new_block_ids_to_zero = (
+             (self.kv_cache_manager.take_new_block_ids() or None)
+@@ -1519,6 +1544,27 @@ class Scheduler(SchedulerInterface):
+         if self.log_stats:
+             session.record_event(EngineCoreEventType.QUEUED)
+ 
++    def _keep_prev_step_record_on_empty_step(self) -> None:
++        """VLLM_V41_PP_KEEP_BATCH: this step scheduled no request at all.
++
++        The runner keeps its persistent batch across such a step, so a request
++        that ran in the step before it is still held there and needs no
++        resend of its history. Keep the record for the requests that are still
++        running: a request preempted or finished meanwhile leaves the record,
++        so a resumed request is never treated as held.
++        """
++        if self.prev_step_scheduled_req_ids:
++            running_ids = {request.request_id for request in self.running}
++            kept = self.prev_step_scheduled_req_ids
++            kept.intersection_update(running_ids)
++            if kept and not self._pp_keep_batch_kept_logged:
++                self._pp_keep_batch_kept_logged = True
++                logger.info(
++                    "VLLM_V41_PP_KEEP_BATCH: first empty pipeline step kept the "
++                    "previous-step record of %d running request(s).",
++                    len(kept),
++                )
++
+     def _make_cached_request_data(
+         self,
+         running_reqs: list[Request],
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 3fecf9bed..ce0675193 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -152,6 +152,7 @@ from vllm.v1.attention.backends.utils import (
+     reorder_batch_to_split_decodes_and_prefills,
+ )
+ from vllm.v1.core.sched.output import NewRequestData
++from vllm.v1.core.sched.pp_keep_batch import pp_keep_batch_decision
+ from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
+ from vllm.v1.kv_cache_interface import (
+     AttentionSpec,
+@@ -1093,6 +1094,11 @@ _COUPLED_LOCAL_CHECK = envs.VLLM_V41_COUPLED_LOCAL_CHECK == "1"
+ class GPUModelRunner(
+     LoRAModelRunnerMixin, KVConnectorModelRunnerMixin, ECConnectorModelRunnerMixin
+ ):
++    # VLLM_V41_PP_KEEP_BATCH (set in __init__); class defaults keep runners
++    # built without __init__ (unit-test stubs) on the default path.
++    pp_keep_batch: bool = False
++    _pp_keep_batch_kept_logged: bool = False
++
+     @contextmanager
+     def _dflash_ddtree_target_forward_profile_scope(
+         self,
+@@ -1234,6 +1240,23 @@ class GPUModelRunner(
+             self.parallel_config.distributed_executor_backend == "external_launcher"
+             and len(get_pp_group().ranks) > 1
+         )
++        # VLLM_V41_PP_KEEP_BATCH: keep the persistent batch across a fully
++        # empty pipeline step. The scheduler takes the same decision from the
++        # same config (vllm/v1/core/sched/pp_keep_batch.py).
++        self.pp_keep_batch, pp_keep_batch_reason = pp_keep_batch_decision(vllm_config)
++        self._pp_keep_batch_kept_logged = False
++        if self.pp_keep_batch:
++            logger.info(
++                "VLLM_V41_PP_KEEP_BATCH=1 active (runner, pp rank %d of %d): %s.",
++                get_pp_group().rank_in_group,
++                get_pp_group().world_size,
++                pp_keep_batch_reason,
++            )
++        elif pp_keep_batch_reason:
++            logger.warning(
++                "VLLM_V41_PP_KEEP_BATCH=1 ignored (runner): %s; the default path runs.",
++                pp_keep_batch_reason,
++            )
+ 
+         # Model-related.
+         self.num_query_heads = model_config.get_num_attention_heads(parallel_config)
+@@ -2203,6 +2226,18 @@ class GPUModelRunner(
+         )
+         if num_accepted <= len(prev_spec):
+             return list(prev_spec[:num_accepted]) + list(sent_token_ids)
++        if self.pp_keep_batch:
++            # VLLM_V41_PP_KEEP_BATCH: the scheduler omits all_token_ids for a
++            # request it believes this rank still holds; continuing would
++            # corrupt the token history this rank feeds the model.
++            raise RuntimeError(
++                f"VLLM_V41_PP_KEEP_BATCH=1: {num_accepted} accepted draft "
++                f"token(s) of request {req_id} are not available on this "
++                f"pipeline rank ({len(prev_spec)} held, in persistent batch: "
++                f"{req_index is not None}, history sent: {full is not None}). "
++                "The scheduler and the runner disagree about which requests "
++                "the runner holds; unset VLLM_V41_PP_KEEP_BATCH."
++            )
+         logger.warning_once(
+             "PP spec decode: %d accepted draft token(s) of request %s are not "
+             "available on this pipeline rank (%d held); its token history on "
+@@ -2268,6 +2303,23 @@ class GPUModelRunner(
+         # that they get cleared from the persistent batch before being re-scheduled
+         # in the normal resumed request path.
+         unscheduled_req_ids = cached_req_ids - (scheduled_req_ids - resumed_req_ids)
++        if self.pp_keep_batch and not scheduled_req_ids:
++            # VLLM_V41_PP_KEEP_BATCH: a fully empty pipeline step (the batch
++            # queue's in-flight cadence) keeps every row except a request
++            # preempted in this step, so the next step neither resends nor
++            # re-adds the history. The scheduler keeps its previous-step
++            # record for the requests still running, the same set.
++            unscheduled_req_ids = cached_req_ids & (
++                scheduler_output.preempted_req_ids or set()
++            )
++            num_kept = len(cached_req_ids) - len(unscheduled_req_ids)
++            if num_kept and not self._pp_keep_batch_kept_logged:
++                self._pp_keep_batch_kept_logged = True
++                logger.info(
++                    "VLLM_V41_PP_KEEP_BATCH: first empty pipeline step kept %d "
++                    "request(s) in the persistent batch.",
++                    num_kept,
++                )
+         # NOTE(woosuk): The persistent batch optimization assumes that
+         # consecutive batches contain mostly the same requests. If batches
+         # have low request overlap (e.g., alternating between two distinct
