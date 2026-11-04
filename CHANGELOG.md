@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-04: tiled decode index scorer adopted; no cross-hardware comparisons
+
+- Adopted `VLLM_V41_INDEX_TILED=1` (D48), our register-tiled decode index scorer (`engine/production/0052-index-tiled.patch`,
+  `v41idx.so`): decode round at 150K 29.98 → 27.88 ms (−7.0 %), at 300K 34.33 → 29.62 ms (−13.7 %), MEASURED, bitwise,
+  texts identical. Short context not detectable (+0.03 ms); headline unchanged at 119.0 / 120.8 tok/s.
+- Removed every comparison with builds on other hardware: not comparable. The long-context rows keep
+  their V100 numbers.
+
 ## 2026-11-03 (evening): post-move production baseline, prefill skip and hot ring adopted
 
 - **Hero numbers are now MEASURED**: one production boot with all 17 switches, T=0 **119.0 tok/s**, T=1 **120.8 tok/s**

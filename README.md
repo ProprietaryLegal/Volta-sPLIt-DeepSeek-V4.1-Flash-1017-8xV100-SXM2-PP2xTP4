@@ -6,6 +6,7 @@
 [![thinking on: 120.8 tok/s](https://img.shields.io/badge/thinking%20on-120.8%20tok%2Fs-1F6FEB?style=for-the-badge)](#tokens-per-second)
 [![vs previous V100 build: 2.7x](https://img.shields.io/badge/vs%20previous%20V100%20build-2.7x%20per%20round-8250DF?style=for-the-badge)](#the-progression-in-toks)
 [![first token at 300K: -31.5%](https://img.shields.io/badge/first%20token%20at%20300K-%E2%88%9231.5%25-D29922?style=for-the-badge)](#long-prompts)
+[![decode round at 300K: -13.7%](https://img.shields.io/badge/decode%20round%20at%20300K-%E2%88%9213.7%25-D29922?style=for-the-badge)](#long-context-decode-the-tiled-index-scorer)
 [![context: 524K](https://img.shields.io/badge/context-524K%20per%20request-555555?style=for-the-badge)](docs/measurements.md#long-context)
 
 Built by **Nick Mermiges, Esq.**, founder of [PLI Labs](https://proprietarylegal.ai/labs.html) · [proprietarylegal.ai](https://proprietarylegal.ai)
@@ -91,7 +92,23 @@ Those rows were measured before the prefill skip and the hot ring; they will be 
 "Was" is the same stack without the prefill skip (its A/B, below). "Before the switch move" is the prefill-profile test's
 three base arms of the same afternoon. Mean change across the move: 32K −2.1 %, 150K −1.7 %, 300K −2.0 % (ESTIMATED
 arithmetic on 1-3 runs per side: 20.24 vs 20.68 s, 86.97 vs 88.51 s, 177.98 vs 181.59 s). Prompt reading = prompt tokens
-/ first-token time.
+/ first-token time. The "ms per round after it" column predates the tiled index scorer (next).
+
+#### Long-context decode: the tiled index scorer
+
+Adopted 2026-11-04 (`VLLM_V41_INDEX_TILED=1`, test D48): a register-tiled, persistent replacement for the decode
+indexer's scoring kernel, bitwise-identical to it. MEASURED on the production stack, A/B harness depth runs (T=0, 512
+tokens, arms OFF ON ON2 OFF2):
+
+| context | ms per round OFF | ms per round ON | change | pairs (ON − OFF) | A/A (OFF2 − OFF) | output |
+|---|---:|---:|---:|---:|---:|---|
+| 150,000 tokens | 29.98 | **27.88** | **−7.0 %** | −2.10 / −1.73 | +0.08 | identical, 139 rounds every arm |
+| 300,000 tokens | 34.33 | **29.62** | **−13.7 %** | −4.71 / −4.57 | +0.10 | identical, 89 rounds every arm |
+| short (A/B harness T=0 and T=1) | – | – | +0.032 ms average | +0.067, +0.069, −0.006, −0.001 | – | texts identical; not detectable |
+
+Short-context speed is unchanged, so the headline stays 119.0 / 120.8 tok/s. At long context a round is now 2.1 ms
+shorter at 150K and 4.7 ms shorter at 300K; the sparse-attention scorer was most of the growth of round time with
+context depth.
 
 ### Time per round: the engineering metric behind the tok/s
 
@@ -127,7 +144,8 @@ admitted only by a paired A/B on this machine.
 
 **99 to 119 tok/s in one day.** On 2026-11-03 the port went from 31.1 to 26.3 ms per round (MEASURED; 25.30 decode-only)
 through thirteen adopted changes, most of them our own CUDA and host-path work, every one bitwise-identical or proven
-output-identical. The same day the prefill skip cut the first token of a 300,000-token prompt from 264 to 178 seconds.
+output-identical. The same day the prefill skip cut the first token of a 300,000-token prompt from 264 to 178 seconds,
+and on 2026-11-04 our tiled index scorer cut a decode round at 300K context by 13.7 % (34.33 → 29.62 ms).
 About twenty more ideas lost their A/B or failed a numerics gate; they are all listed below with the reason.
 
 **Exact outputs.** The target verifies every draft with the speculative-sampling acceptance rule, so the text keeps the
@@ -138,8 +156,8 @@ here with the prefill skip) and served three requests at once; this build takes 
 two-request build is in testing (its first boot and a boot diagnostic both failed and rolled back cleanly), and so
 are two prefill kernels. Details of that build: [previous-build/](previous-build/).
 
-**Everything is published:** the measurements, the 49-patch engine series, our two production patches (expert-kernel
-diet, prefill skip), the patches still in testing, the serving profile and environment, the A/B harness, and the log of the day's test queue.
+**Everything is published:** the measurements, the 49-patch engine series, our three production patches (expert-kernel
+diet, prefill skip, tiled index scorer), the patches still in testing, the serving profile and environment, the A/B harness, and the log of the day's test queue.
 
 <!-- pli:blurb:start -->
 
@@ -155,7 +173,7 @@ diet, prefill skip), the patches still in testing, the serving profile and envir
 | Host | AMD Threadripper PRO 3945WX (12 cores), one NUMA node, 251 GB RAM |
 | Power and clocks | 150 W per card, graphics clock capped at 1522 MHz (200 W measured neutral: −0.06 ms per round) |
 | Model | DeepSeek-V4.1-Flash-1017: [ISTA-DASLab GSQ-RCO GGUF](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF) @ `ad1e8991` (IQ2_XXS experts, 138.24 GB; IQ4_NL Engram, 110.60 GB); config, tokenizer and DSpark drafter (FP8, 7.93 GB) from [deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017) @ `1bae0e10` |
-| Engine | 1Cat-vLLM #1277 (merge `899e9ed33`) + 1Cat main `6db9c81` and 25 open 1Cat PRs + our PP2 port and lever stack: the [49-patch series](forks/1cat-4xv100-tp4/), [our expert-kernel diet](engine/production/0050-expert-diet.patch) and [our prefill skip](engine/production/0051-prefill-skip.patch); the `v41k` SM70 CUDA extension built from that source |
+| Engine | 1Cat-vLLM #1277 (merge `899e9ed33`) + 1Cat main `6db9c81` and 25 open 1Cat PRs + our PP2 port and lever stack: the [49-patch series](forks/1cat-4xv100-tp4/), [our expert-kernel diet](engine/production/0050-expert-diet.patch), [our prefill skip](engine/production/0051-prefill-skip.patch) and [our tiled index scorer](engine/production/0052-index-tiled.patch); the `v41k` SM70 CUDA extension built from that source |
 | Layout | PP2 x TP4. Stage 1 (board B): layers 0-19, Engram tables, hash state. Stage 2 (board C): layers 20-39, the head, the drafter. TP all-reduce over NVLink; the stage hand-off over PCIe |
 | Engine settings | vLLM V1 runner, synchronous scheduling, FULL CUDA graphs for 1-6 tokens per step, chunked prefill 8,192, prefix caching, every expert resident |
 | Drafter | DSpark, 5 drafts per round, coupled (keyed) sampled drafts at T>0 |
@@ -183,6 +201,7 @@ ABBA averages, 2026-11-03.
 | Expert-kernel instruction diet (`EXPERT_DIET=3`) | ours | **−0.871 ms** (T=0 −0.74/−1.02, T=1 −0.79/−0.93) | T=1 texts 11/11; greedy 7/8 + one known near-tie; memcheck, racecheck, synccheck 0 errors |
 | Router floor (`ROUTE_FAST`, 4 warps) | ours, code from our Sparks research lane | −0.165 ms, inside the session's drift: not a significant win | greedy bitwise; kept on as upstream-backed |
 | **Prefill skip (`PREFILL_SKIP_ROWS=3072`)** | ours; design reference: [philbert440/deepseek-v4.1-v100](https://github.com/philbert440/deepseek-v4.1-v100)'s replay rows | **first token −8.8 % at 32K, −20.6 % at 150K, −31.5 % at 300K** (two repetitions per arm, OFF ON ON OFF) | identical output at every length; abort-and-resend guard identical; prefix-cache test pass |
+| **Tiled decode index scorer (`INDEX_TILED`, `v41idx`)** | ours | **decode round −7.0 % at 150K (29.98 → 27.88 ms), −13.7 % at 300K (34.33 → 29.62 ms)**; short context not detectable (+0.03 ms) | bitwise; texts identical in every arm; GPU matrix 51,090 cases 0 mismatches; memcheck and racecheck 0 errors |
 | Larger GPU hot ring (`KV_HOT_POSITIONS=524288`) | our setting of #1277's packed KV | 300K −1.09 ms per round, 150K −0.25 (ABBA); KV pool unchanged at 2,076,870 | identical output; prefix-cache test 3 of 3 |
 
 Two lessons: two of the winners were predicted near zero by isolated kernel benchmarks, so only the full A/B decides; and
@@ -230,7 +249,6 @@ Not results yet. Each is reported with its A/B when it finishes; queue order and
 | Expert "wave" down kernel | rolled, four rows per block, bitwise | −0.3..−0.8 ms per round | ESTIMATED |
 | Thinking-mode acceptance | probabilistic drafts (as in 1Cat [#183](https://github.com/1CatAI/1Cat-vLLM/pull/183)), sharded; draft temperature 1.2 / 0.85 | – | – |
 | Tensor-core decode attention | split-K HMMA, near-tie numerics | – | – |
-| Tiled indexer scorer for long context | register-tiled persistent decode scorer, bitwise | −0.29 ms short; −2.5..−6 ms per round at 150K-300K | ESTIMATED |
 | Shared-expert down kernel | FP16-packed, near-tie numerics | – | – |
 | Fused layer transition, no-early variant | bitwise | ~0.12 ms per round, under the win bar | ESTIMATED |
 | Tensor-core prefill expert GEMM | grouped HMMA for prefill only; report-only | – | – |
@@ -294,7 +312,9 @@ instruction diet won.
    49 patches to 1Cat-vLLM #1277 (`899e9ed33`) and checks the result against the recorded tree (`b0d692425297`).
 2. Apply [engine/production/0050-expert-diet.patch](engine/production/0050-expert-diet.patch) (result tree
    `4447483248bb`) and [engine/production/0051-prefill-skip.patch](engine/production/0051-prefill-skip.patch) (result
-   tree `32d4a9d9b0c1`), then build vLLM and the `v41k` extension ([engine/README.md](engine/README.md)).
+   tree `32d4a9d9b0c1`) and [engine/production/0052-index-tiled.patch](engine/production/0052-index-tiled.patch)
+   (result tree `4760febd4fe7`), then build vLLM, the `v41k` extension and the `v41idx` library
+   ([engine/README.md](engine/README.md)).
 3. Download the weights (links above; none are distributed here), set `ENGINE_HOME`, `MODEL_HOME` and
    `CUDA_VISIBLE_DEVICES`, source [engine/configs/rec.env](engine/configs/rec.env) and start with
    [engine/configs/run_serve.sh](engine/configs/run_serve.sh).

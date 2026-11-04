@@ -67,6 +67,16 @@ MEASURED 2026-11-03 after the PCIe-switch move, all 17 switches (prefill skip an
 move, ESTIMATED arithmetic: 32K 20.24 vs 20.68 s (−2.1 %), 150K 86.97 vs 88.51 s (−1.7 %), 300K 177.98 vs 181.59 s
 (−2.0 %). Without the prefill skip the same lengths took 22.6-22.8, 111.1-111.9 and 263.9-265.0 s (D35).
 
+**With the tiled index scorer** (`INDEX_TILED=1`, adopted 2026-11-04; depth ABBA, MEASURED):
+
+| context | ms per round OFF | ms per round ON | change | pairs (ON − OFF) | A/A (OFF2 − OFF) | output |
+|---|---:|---:|---:|---:|---:|---|
+| 150,000 tokens | 29.98 | **27.88** | **−7.0 %** | −2.10 / −1.73 | +0.08 | identical, 139 rounds every arm |
+| 300,000 tokens | 34.33 | **29.62** | **−13.7 %** | −4.71 / −4.57 | +0.10 | identical, 89 rounds every arm |
+| short (A/B harness T=0 and T=1) | – | – | +0.032 ms average | +0.067, +0.069, −0.006, −0.001 | – | texts identical; not detectable |
+
+The "ms per round" column of the table above was measured before it.
+
 Earlier, before the gate/up expert kernels and the attention fusions:
 
 | prompt length | ms per round |

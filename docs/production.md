@@ -30,7 +30,11 @@ The files we serve are byte-identical to those revisions. 1Cat #1277's README li
 2. [engine/production/0050-expert-diet.patch](../engine/production/0050-expert-diet.patch), then
    [engine/production/0051-prefill-skip.patch](../engine/production/0051-prefill-skip.patch) (our prefill skip; result
    tree `32d4a9d9b0c1`, MEASURED with `git apply --check` on tree `4447483248bb`; its new `prefill_skip.py` is
-   byte-identical to the deployed file). 0050 is our expert-kernel
+   byte-identical to the deployed file), then
+   [engine/production/0052-index-tiled.patch](../engine/production/0052-index-tiled.patch) (our tiled decode index
+   scorer and its `v41idx` library; result tree `4760febd4fe7`, MEASURED with `git apply --check` on `32d4a9d9b0c1`;
+   `index_tiled.py`, `attention_ops.py`, `v41idx.cu`, `v41idx_ref.cuh` and `build.py` byte-identical to the deployed
+   files). Build `v41idx.so` with `python build.py` in `benchmarks/deepseek_v41/v41idx/`. 0050 is our expert-kernel
    instruction diet. Result: tree `4447483248bb`. Its `v41k` files are byte-identical to the source of the deployed
    `v41k.so` (MEASURED 2026-11-03: `build.py`, `v41k.cu`, `v41k_diet.cuh`, `v41k_fast.cuh`, `v41k_fast_gu.cuh`). The
    patch also carries the L1 evict-first weight-load hints of the kernel-variant sweep, because the diet was built on
@@ -69,10 +73,12 @@ INDEX_REDUCE DMV_X COUPLED_DRAFTS (COUPLED_DRAFT_TEMP=1.0) MARKOV_SHARD COUPLED_
 PLAN_FUSE PP_KEEP_BATCH EXPERT_FAST FUSE_ATTN_PREP FUSE_ATTN_POST     each VLLM_V41_*=1
 VLLM_V41_EXPERT_DIET=3 VLLM_V41_ROUTE_FAST=1 VLLM_V41_ROUTE_WARPS=4
 VLLM_V41_PREFILL_SKIP_ROWS=3072 VLLM_V41_KV_HOT_POSITIONS=524288
+VLLM_V41_INDEX_TILED=1 (VLLM_V41_INDEX_TILED_LIB = the v41idx.so path)        adopted 2026-11-04
 HOT_REFILL on by default
 ```
 
-17 keys in all (the production boot's recorded set, 2026-11-03). MEASURED on that set after the PCIe-switch move: T=0
+The first 17 keys are the production boot's recorded set of 2026-11-03; `INDEX_TILED` joined on 2026-11-04 (long
+context only; short context unchanged). MEASURED on the 17-key set after the PCIe-switch move: T=0
 119.0 tok/s, T=1 120.8 tok/s, decode-only 25.30 / 25.20 ms per round.
 
 ## Start

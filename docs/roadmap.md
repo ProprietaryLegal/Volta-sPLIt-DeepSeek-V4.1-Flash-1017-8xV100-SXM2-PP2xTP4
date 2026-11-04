@@ -19,13 +19,15 @@ round) and the router floor (D34R, inconclusive, kept as upstream-backed). Then:
 | D41 | V1 async with a request-end guard | rejected: +1.678 ms per round slower, crash-free |
 | D42 | Two requests at once, `MULTI_SEQ` | boot failed; diagnostic D42R boot failed too, rolled back cleanly |
 | D43/D43R | chunk 4,096; dense tiling; CPU pinning | chunk 4,096 and tiling rejected by the near-tie gate; pinning not adopted (+0.079 ms) |
+| D48 | Tiled decode index scorer, `INDEX_TILED` (2026-11-04) | **ADOPTED**: decode round −7.0 % at 150K (29.98 → 27.88 ms), −13.7 % at 300K (34.33 → 29.62 ms), bitwise, texts identical; short context not detectable |
 | PB1103 | Production baseline after the PCIe-switch move | **T=0 119.0 tok/s, T=1 120.8 tok/s**; decode-only 25.30 / 25.20 ms per round; long-prompt first token about 2 % lower than before the move |
 
 Details: [levers.md](levers.md), [measurements.md](measurements.md).
 
 ## In the queue
 
-In order. Estimates are the lanes' figures before the test, labelled ESTIMATED; none is a result.
+In order. Estimates are the lanes' figures before the test, labelled ESTIMATED; none is a result. D44-D47 ran on
+2026-11-03/04 and none was adopted; their results will be added in the next update.
 
 | # | test | patch | what decides it | expectation |
 |---|---|---|---|---|
@@ -33,7 +35,6 @@ In order. Estimates are the lanes' figures before the test, labelled ESTIMATED; 
 | D45 | Expert "wave" down kernel, `EXPERT_WAVE` | [T06](../engine/in-testing/T06-expert-wave-v41k.patch) | GPU bitwise checks, sanitizers, v2 ABBAABBA | ESTIMATED −0.3..−0.8 ms |
 | D46 | Thinking-mode acceptance: probabilistic drafts, sharded; draft temperature 1.2 / 0.85 | [T04](../engine/in-testing/T04-psample-shard.patch) | T=1 acceptance and ms per round; report only | – |
 | D47 | Split-K tensor-core decode attention, `ATTN_HMMA=2` | – | near-tie gate, v2 ABBA | – |
-| D48 | Register-tiled decode index scorer for long context, `INDEX_TILED` | – | bitwise; short ABBA + depth ABBA at 150K / 300K | ESTIMATED −0.29 ms short; −2.5..−3 ms at 150K, −5.5..−6 at 300K |
 | D49 | FP16-packed shared-expert down kernel, `SHARED_DOWN` | – | near-tie gate, ABBAABBA | – |
 | D50 | Fused layer transition without the early path, `FUSE_TRANSITION_NO_EARLY` | – | bitwise, ABBAABBA | ESTIMATED ~0.12 ms, under the win bar |
 | D51 | Tensor-core prefill routed-expert GEMM, `PREFILL_IQ_GEMM` | – | near-tie gate; first token at 32K / 150K / 300K; report only | – |

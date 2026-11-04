@@ -71,6 +71,21 @@ accepted drafts per round).
   on the GPU. Depth ABBA (test D31, one prompt per length per arm): 300K 36.92 / 37.12 → 35.99 / 35.88 ms per round
   (−1.09), 150K 31.91 / 32.10 → 31.70 / 31.81 (−0.25), identical output. Adoption boot (D38): KV pool still 2,076,870
   tokens, prefix-cache test 3 of 3 PASS, no tracebacks.
+- **`INDEX_TILED=1`, ours** ([engine/production/0052-index-tiled.patch](../engine/production/0052-index-tiled.patch),
+  adopted 2026-11-04, test D48): the decode indexer's scoring kernel replaced by a register-tiled persistent kernel in
+  a separate library, `v41idx.so` (`VLLM_V41_INDEX_TILED_LIB`; `v41k.so` is untouched). It walks only the live 64-key
+  blocks and stages the query once per block, where the old kernel launched a block per 32 keys of capacity. Bitwise by
+  construction (the same fp32 multiply-add chain per dot product and the same epilogue). Checks before the A/B: GPU
+  matrix 51,090 cases, 0 mismatches; compute-sanitizer memcheck and racecheck 0 errors. MEASURED, depth ABBA (OFF ON
+  ON2 OFF2, T=0, 512 tokens):
+
+  | context | OFF | ON | change | pairs | A/A |
+  |---|---:|---:|---:|---:|---:|
+  | 150,000 tokens | 29.98 ms | 27.88 ms | −7.0 % | −2.10 / −1.73 | +0.08 |
+  | 300,000 tokens | 34.33 ms | 29.62 ms | −13.7 % | −4.71 / −4.57 | +0.10 |
+
+  Texts identical in every arm (139 and 89 rounds in each). Short context: ABBA means +0.067, +0.069, −0.006, −0.001 ms
+  per round (average +0.032): not detectable, so the short-context headline is unchanged. Adopted on the depth win.
 - With all 17 switches, two arms before the PCIe-switch move (D39): T=0 118.3 / 118.5 tok/s, T=1 119.9 / 120.5 tok/s;
   decode-only 25.45 / 25.34 and 25.35 / 25.27 ms per round. After the move, one production boot (2026-11-03): **T=0
   119.0 tok/s, T=1 120.8 tok/s**, decode-only 25.30 / 25.20 ms per round, greedy gate PASS. MEASURED.
