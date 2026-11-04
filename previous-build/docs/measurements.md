@@ -322,9 +322,3 @@ separate processes, bit-identical every run):
 About −10 % of the tiled pass, ~0.7 ms of 7.6 ms per layer per rank: ESTIMATED ~3-4 % of prefill compute, which the
 server arm then measured as −2.33 % on warm 75K first token. The author's design target (2.5-3 ms per layer) needs the
 later steps; see [roadmap](roadmap.md).
-
-## Reference, not this host
-
-The DGX sPLIce deployment measures its own numbers on two DGX Sparks
-([its measurements](https://github.com/ProprietaryLegal/DGX-sPLIce-DeepSeek-V4.1-Flash-2xDGX-Spark-2xRTX3090-drafter-x86-offload/blob/main/docs/measurements.md)).
-Different hardware; not comparable and not repeated here.

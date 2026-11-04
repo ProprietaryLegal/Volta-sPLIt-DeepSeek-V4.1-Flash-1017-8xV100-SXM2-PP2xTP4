@@ -45,7 +45,6 @@ or misdescribed anyone's contribution, please open an issue and we will correct 
   [#1243](https://github.com/1CatAI/1Cat-vLLM/pull/1243) (rivetphilbot) stacks on our #1031.
 - **Dennis Vertzyas** ([dnv2003/v100-skinny](https://github.com/dnv2003/v100-skinny)): Volta kernel and bandwidth
   findings (the ~879 GB/s read ceiling). Cited and linked; no code copied.
-- **Our Sparks research lane** (the work behind [DGX sPLIce](https://github.com/ProprietaryLegal/DGX-sPLIce-DeepSeek-V4.1-Flash-2xDGX-Spark-2xRTX3090-drafter-x86-offload)):
-  the code of the plan fusion, router floor and coupled-draft sharding levers (research code, not DGX sPLIce production
-  levers), and the long-context benchmark tools ([dsv41-longctx-bench-tools](https://github.com/ProprietaryLegal/dsv41-longctx-bench-tools)).
+- **Our Sparks research lane**: the code of the plan fusion, router floor and coupled-draft sharding levers (research
+  code), and the long-context benchmark tools ([dsv41-longctx-bench-tools](https://github.com/ProprietaryLegal/dsv41-longctx-bench-tools)).
 - **NVIDIA**: compute-sanitizer (memcheck, racecheck, synccheck), run on every kernel change before its A/B.

@@ -84,8 +84,7 @@ Several results are still being measured; their slots are marked **PENDING** in 
 will be filled as they finish. Issues, measurements on your own V100s and pull requests are welcome; see
 [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-**Sister project:** [DGX sPLIce](https://github.com/ProprietaryLegal/DGX-sPLIce-DeepSeek-V4.1-Flash-2xDGX-Spark-2xRTX3090-drafter-x86-offload),
-the same model on two DGX Sparks with an x86 offload host. **Earlier V100 reports:**
+**Earlier V100 reports:**
 [deepseek-v4-flash-v100](https://github.com/ProprietaryLegal/deepseek-v4-flash-v100) (its
 [2026-11-01 interim report](https://github.com/ProprietaryLegal/deepseek-v4-flash-v100/blob/main/docs/v4.1-flash-1cat-vllm-2026-11-01.md)
 is superseded by this page).
@@ -251,7 +250,6 @@ bash tools/check_data_boundary.sh --tree HEAD                    # the data-boun
 | [ProprietaryLegal/v100-skinny](https://github.com/ProprietaryLegal/v100-skinny) | our mirror of dnv2003's v100-skinny: hand-written NVFP4 / FP8 weight-only kernels for Volta |
 | [ProprietaryLegal/deepseek-v4-flash-v100](https://github.com/ProprietaryLegal/deepseek-v4-flash-v100) | our earlier V100 reports (DeepSeek V4 Flash, then the V4.1 interim report and its patches) |
 | [ProprietaryLegal/swift-1.5-v100](https://github.com/ProprietaryLegal/swift-1.5-v100) | another model on the same V100 host |
-| [DGX sPLIce](https://github.com/ProprietaryLegal/DGX-sPLIce-DeepSeek-V4.1-Flash-2xDGX-Spark-2xRTX3090-drafter-x86-offload) | the sister project: the same model on 2x DGX Spark with an x86 offload host |
 | [ProprietaryLegal/dsv41-offload](https://github.com/ProprietaryLegal/dsv41-offload) | DGX sPLIce's research archive, where several of our gates and ideas came from |
 
 ## Credits and licence

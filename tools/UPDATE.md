@@ -28,7 +28,8 @@ ESTIMATED with the arithmetic stated.
 5. `evidence/queue-log.txt`: re-copy the state log through our path and host-name scrubber (not published: it lists the
    names it removes).
 6. `CHANGELOG.md`: one entry per update.
-7. Mirror the headline numbers to the Hugging Face card, the DGX sPLIce sister section and the organization profile.
+7. Mirror the headline numbers to the Hugging Face card and the organization profile. Do not compare this build
+   with the DGX sPLIce build anywhere: different hardware, not comparable.
 
 ## Before every push
 
@@ -43,5 +44,4 @@ and a scan for host names, internal paths and personal addresses. Commit as `PLI
 
 - About five hours after first publication: the D35-D39 results (prefill skip, TP8 probe, prefill switches, hot ring,
   harness v2).
-- After the queue's last item: every remaining result, then the head-to-head benchmark against DGX sPLIce (same tools,
-  same day, per-text-type decode, and a legal benchmark if one can run on both).
+- After the queue's last item: every remaining result, then per-text-type decode and a legal benchmark.

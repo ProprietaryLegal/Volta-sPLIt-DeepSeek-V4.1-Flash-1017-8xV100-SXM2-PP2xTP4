@@ -43,13 +43,11 @@ In order. Estimates are the lanes' figures before the test, labelled ESTIMATED; 
 | D55 | Lookup-free IQ1_M expert repack in spare GPU memory | – | bitwise, ABBA | in build |
 | D40 | Four-card fork smoke on one board | [forks/](../forks/1cat-4xv100-tp4/) | greedy identity, activation lines | queued |
 
-Then: a concurrency on/off switch for production (two requests at once, when it boots), and the head-to-head benchmarks
-against DGX sPLIce.
+Then: a concurrency on/off switch for production (two requests at once, when it boots).
 
 ## After the queue
 
-- **Head-to-head benchmark against DGX sPLIce**: the same tools on both builds on the same day, including per-text-type
-  decode (code, structured, chat, prose) and a legal benchmark.
-- **Token-level fidelity**: KL divergence and top-1 agreement against the unquantized model, with DGX sPLIce's panels.
+- **Decode by text type** (code, structured, chat, prose) and a legal benchmark.
+- **Token-level fidelity**: KL divergence and top-1 agreement against the unquantized model.
 - **Asynchronous rounds on MRV2** (after D54's parity): a one-step lookahead design (not built) is where an ESTIMATED
   −1.2 to −1.8 ms per round would come from.

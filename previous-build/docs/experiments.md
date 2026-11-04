@@ -266,8 +266,8 @@ stages, so 19 / 21 or 21 / 19 shrinks the pool to ~110-190K tokens, ESTIMATED).
 
 ## MC1: persistent prefix tier
 
-**Question.** DGX sPLIce reads long prompts back from an NVMe tier after a restart (150K-token prompt: 2.58 s against
-58.6 s of prefill, MEASURED there). Can the same work under PP2 x TP4 here?
+**Question.** Can a prefix tier on NVMe that survives restarts (a design from our sister deployment) work under
+PP2 x TP4 here?
 
 **Status.** Port design done (2026-11-01; code reading and offline building blocks, no server). The design ports, but
 the stock vLLM file tier cannot be used as is: under PP2 it would store misaligned rows, and it would write ~71 GiB

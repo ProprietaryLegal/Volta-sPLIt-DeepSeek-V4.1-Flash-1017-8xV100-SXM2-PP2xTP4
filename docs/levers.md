@@ -20,7 +20,7 @@ accepted drafts per round).
 - **`COUPLED_DRAFTS=1`, `COUPLED_DRAFT_TEMP=1.0`.** Source: TensorFold's coupled sampled drafts
   ([Elevatormusic/TensorFold#25](https://github.com/Elevatormusic/TensorFold/pull/25), merged; the idea also appears in
   [0rand/deepseek-v41-tensorfold-spark](https://github.com/0rand/deepseek-v41-tensorfold-spark)). The code reached this
-  build through our Sparks research lane; on the Sparks the idea lost its A/B twice and is not used there. The drafter and the verifier share keyed Gumbel draws, so drafts agree with the target far more often at T>0.
+  build through our Sparks research lane. The drafter and the verifier share keyed Gumbel draws, so drafts agree with the target far more often at T>0.
   T=1 acceptance 1.85 → 2.25 per round, +14 % tok/s, about 0.3 ms of overhead, no T=0 cost. Exact.
 - **`MARKOV_SHARD=1`** (ours), **`COUPLED_SHARD=1`, `COUPLED_LOCAL=1`** (code from our Sparks research lane): the draft head and the
   coupled sampler work on vocabulary shards, inside a captured graph. −0.2 ms at T=0; −0.23 ms and −0.12..−0.24 ms at

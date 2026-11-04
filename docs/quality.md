@@ -20,8 +20,7 @@ These benchmarks are small (AIME25 is 30 problems), so they can hide small losse
 ## This build
 
 - **Not measured yet**: token-level fidelity (KL divergence and top-1 agreement against the unquantized 1017 model)
-  of this engine. Planned, with the same harness, reference logits and panels used for DGX sPLIce, so the two builds can
-  be read side by side.
+  of this engine. Planned, with fixed reference logits and prompt panels.
 - **Functional**: needle retrieval at ~450K and ~498K tokens found 6 of 6 needles in 4 of 4 runs; prefix-cache hits at
   36K-500K returned the same text as cold runs.
 - **Speed changes**: every adopted lever is bitwise-identical or passes the greedy identity gate ([method](method.md#gates)).

@@ -18,7 +18,7 @@ Built by **Nick Mermiges, Esq.**, founder of [PLI Labs](https://proprietarylegal
 <tr>
 <td align="center"><h1>119.0</h1>tok/s decode<br><sub>thinking off, T=0<br>MEASURED, full production stack</sub></td>
 <td align="center"><h1>120.8</h1>tok/s, thinking on<br><sub>T=1, our 12-prompt set<br>MEASURED, 2.25 accepted drafts per round</sub></td>
-<td align="center"><h1>84.6&#8209;87.3</h1>tok/s, thinking high<br><sub>DGX sPLIce's benchmark, MEASURED<br>(the two DGX Sparks: 49.7&#8209;53.1)</sub></td>
+<td align="center"><h1>84.6&#8209;87.3</h1>tok/s, thinking high<br><sub>legal prompt, long-context benchmark<br>MEASURED</sub></td>
 <td align="center"><h1>178&nbsp;s</h1>to the first token<br>of a 300,000-token prompt<br><sub>MEASURED (was 263.9 s without the prefill skip)</sub></td>
 <td align="center"><h1>61.7</h1>tok/s after a<br>500,000-token prompt<br><sub>MEASURED</sub></td>
 </tr>
@@ -56,10 +56,10 @@ time on long prompts about 1.7-2.1 % lower (table below). Small samples: one or 
 
 ### By text type
 
-Per-type decode (code, structured output, chat, prose) has **not been measured on this build yet**; it is part of the
-head-to-head benchmark against DGX sPLIce that runs after the current test queue. What we know today: tok/s follows the
-drafter's acceptance, which follows the text. Our greedy set accepts about 2.2 drafts per round; the legal prompt of DGX
-sPLIce's benchmark with high-effort thinking accepts 1.2-1.6. That is why the same engine shows ~119 tok/s on one set and
+Per-type decode (code, structured output, chat, prose) has **not been measured on this build yet**; it runs after the
+current test queue. What we know today: tok/s follows the drafter's acceptance, which follows the text. Our greedy set
+accepts about 2.2 drafts per round; the legal prompt of our long-context benchmark ([dsv41-longctx-bench-tools](https://github.com/ProprietaryLegal/dsv41-longctx-bench-tools)) with high-effort thinking
+accepts 1.2-1.6. That is why the same engine shows ~119 tok/s on one set and
 ~85 on the other.
 
 ### Long prompts
@@ -74,8 +74,8 @@ sPLIce's benchmark with high-effort thinking accepts 1.2-1.6. That is why the sa
 | 500,000 tokens (literal) | 536 s | ~930 tok/s | 61.7 tok/s | MEASURED 2026-11-03, 1 run |
 | repeat of a 500K prompt (prefix cache) | 2.2 s | 499,616 tokens reused | – | MEASURED 2026-11-03 |
 
-DGX sPLIce's benchmark conditions: temperature 1, thinking high, 1,500 generated tokens, cold prompts on an idle server.
-Those rows were measured before the prefill skip and the hot ring; they will be re-run in the head-to-head benchmark.
+Long-context benchmark ([dsv41-longctx-bench-tools](https://github.com/ProprietaryLegal/dsv41-longctx-bench-tools)): temperature 1, thinking high, 1,500 generated tokens, cold prompts on an idle server.
+Those rows were measured before the prefill skip and the hot ring; they will be re-run.
 
 **First token on the production stack today** (A/B harness depth run, T=0, 512 generated tokens, cold prompts, MEASURED
 2026-11-03 after the PCIe-switch move; prefill skip and the 524,288-position hot ring on):
@@ -140,10 +140,6 @@ are two prefill kernels. Details of that build: [previous-build/](previous-build
 
 **Everything is published:** the measurements, the 49-patch engine series, our two production patches (expert-kernel
 diet, prefill skip), the patches still in testing, the serving profile and environment, the A/B harness, and the log of the day's test queue.
-
-**Sister build:** [DGX sPLIce](https://github.com/ProprietaryLegal/DGX-sPLIce-DeepSeek-V4.1-Flash-2xDGX-Spark-2xRTX3090-drafter-x86-offload),
-the same model on two DGX Sparks with an x86 offload host and an RTX 3090 drafter. A head-to-head benchmark of the two
-builds is in progress.
 
 <!-- pli:blurb:start -->
 
@@ -244,7 +240,7 @@ Not results yet. Each is reported with its A/B when it finishes; queue order and
 | Lookup-free IQ1_M expert repack | spends spare GPU memory on a faster expert format | – | in build |
 | Four-card fork smoke | the 49-patch series on one board | – | – |
 
-After the queue: a concurrency on/off switch for production, then the head-to-head benchmarks against DGX sPLIce.
+After the queue: a concurrency on/off switch for production, then decode by text type and a legal benchmark.
 
 ## Quality
 
@@ -253,7 +249,7 @@ After the queue: a concurrency on/off switch for production, then the head-to-he
   CLAIM from their [model card](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF); we have not
   reproduced it, and those benchmarks are small (AIME is 30 problems).
 - **Token-level fidelity of this build: not measured yet.** A KL-divergence and top-1 agreement test against the
-  unquantized model is planned with the harness and panels used on DGX sPLIce, so the builds can be read side by side.
+  unquantized model is planned, with fixed reference logits and prompt panels.
 - **The speed work changed nothing measurable, by construction.** Every adopted lever is bitwise-identical or passes the
   greedy byte-identity gate; drafting changes speed, not the output distribution.
 - **Long context works.** Needle retrieval at ~450K and ~498K tokens: 6 of 6 needles in 4 of 4 runs. Prefix-cache hits

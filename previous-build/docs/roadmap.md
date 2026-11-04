@@ -59,7 +59,7 @@ measurement finishes; nothing marked PENDING is a result yet. Slots marked done 
 
 - **What:** first token and decode across context lengths, prefix refill, one to three concurrent streams, decode
   beside prefill and the speculative-decoding counters, plus [llama-benchy](https://pypi.org/project/llama-benchy/) on
-  production so the numbers can be set beside other published V100 and DGX Spark builds.
+  production so the numbers can be set beside other published V100 builds.
 - **Result:** prefill holds ~3,300 tok/s from 32K to 75K tokens and is ~10 % lower at 300K. An exact repeat, or a new
   tail on the same cached 75K prefix, answers in ~0.5 s instead of ~23 s. With three 32K requests at once the third
   waits ~30 s for its first token. llama-benchy on book text: 37-46 tok/s decode for one stream at depths 0-65K. The

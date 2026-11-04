@@ -7,9 +7,9 @@ MEASURED (observed here, with date), ESTIMATED (arithmetic on measurements), UPS
 
 - **The A/B harness** ([method](method.md)) decides levers: T=0 is 3 x 1,024 greedy tokens with thinking off; T=1 is a
   seeded set of 12 prompts at temperature 1 with thinking on. The drafter accepts about 2.2 drafts per round here.
-- **DGX sPLIce's benchmark** compares builds: its unmodified tools
-  ([dsv41-longctx-bench-tools](https://github.com/ProprietaryLegal/dsv41-longctx-bench-tools): `bench2.py`, `report.py`,
-  `needle.py`), temperature 1, top_p 1, thinking on at high effort, cold prompts on an idle server, 1,500 generated
+- **The long-context benchmark** measures long prompts with thinking on: our
+  [dsv41-longctx-bench-tools](https://github.com/ProprietaryLegal/dsv41-longctx-bench-tools) (`bench2.py`, `report.py`,
+  `needle.py`), unmodified, temperature 1, top_p 1, thinking on at high effort, cold prompts on an idle server, 1,500 generated
   tokens. Decode tok/s = (generated tokens − 1) / (last token time − first token time). On its legal prompt the drafter
   accepts 1.2-1.6 drafts per round.
 
@@ -41,7 +41,7 @@ the PCIe link status: four switch upstream links at x16, 8 GT/s, under four root
 first token on long prompts came about 2 % sooner (next section); one or two runs per length, so treat that as
 indicative. Host-to-device bandwidth has not been re-measured since the move.
 
-## DGX sPLIce's benchmark (2026-11-03, before the instruction diet)
+## Long-context benchmark, thinking high (2026-11-03, before the instruction diet)
 
 | prompt length | first token | prompt reading | decode tok/s | round p50 | accepted per round | runs |
 |---|---:|---:|---:|---:|---:|---:|
@@ -50,12 +50,6 @@ indicative. Host-to-device bandwidth has not been re-measured since the move.
 | 150,000 | 111.1-111.7 s | ~1,350 tok/s | 79.8-80.3 | 32.23-32.29 ms | 1.58 | 2 |
 | 256,000 | 215.5 s | ~1,190 tok/s | 65.5 | 35.17 ms | 1.31 | 1 |
 | 300,000 | 264.9 s | ~1,130 tok/s | 71.8 | 36.37 ms | 1.61 | 1 |
-
-The two DGX Sparks of [DGX sPLIce](https://github.com/ProprietaryLegal/DGX-sPLIce-DeepSeek-V4.1-Flash-2xDGX-Spark-2xRTX3090-drafter-x86-offload),
-same tools and conditions (MEASURED 2026-10-23, a different quantization of the same model): 49.7-53.1 tok/s and
-37.2-37.4 ms per round at 124 tokens; 58.7-66.2 tok/s and a 14.5 s first token at 32K; 53.0-54.9 tok/s and a 68.6 s
-first token at 150K. So this build decodes about 1.5x as fast per request (+31 % to +70 % across runs) and reads
-prompts about 35-40 % more slowly. A head-to-head rerun of both builds on the same day is in progress.
 
 ## Decode and first token by depth, production stack (A/B harness, T=0, 512 tokens)
 
@@ -82,8 +76,8 @@ Earlier, before the gate/up expert kernels and the attention fusions:
 | 65,536 | 30.05 |
 | 131,072 | 32.80 (114.6 tok/s) |
 
-Round time grows with context because the sparse-attention indexer scores the whole cached context each round. On DGX
-sPLIce's benchmark a round at 150K is 6.2 ms longer than at a short prompt, at 300K 10.4 ms. Profiling puts most of
+Round time grows with context because the sparse-attention indexer scores the whole cached context each round. On the
+long-context benchmark a round at 150K is 6.2 ms longer than at a short prompt, at 300K 10.4 ms. Profiling puts most of
 that growth in one scoring kernel (2.3-3.6 ms at 150K, 4.7-7.3 ms at 300K); host reads of rows past the GPU hot ring add
 0.6-1.5 ms.
 
@@ -93,7 +87,7 @@ Keep-batch (`PP_KEEP_BATCH`) by depth, OFF → ON: 32K 32.69 → 29.51 ms (−9.
 ## Long context
 
 - **Literal 500,000-token prompt** (one run): first token after 536 s (about 930 prompt tokens per second), then 61.7
-  tok/s. DGX sPLIce shows 322 s and 48.2 tok/s. The benchmark stops after 1,500 reasoning tokens, so this proves a 500K
+  tok/s. The benchmark stops after 1,500 reasoning tokens, so this proves a 500K
   prompt fits and decodes; it does not show a completed answer.
 - **Needles at ~450K and ~498K** (449,597-497,347 prompt tokens): 4 of 4 runs found all 6 needles, no foreign answers, no
   preemptions; about 460 s per request at 450K and 534 s at 498K, prompt reading included.
