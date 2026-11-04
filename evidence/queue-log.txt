@@ -497,3 +497,621 @@ determinism ON10 vs ON10b: T1 COMPARE 12 vs 12 prompts: DIFFER ['t1-05', 't1-06'
 2026-11-03T23:04:50Z QUEUE-D42R server up: REC (serve-v41pkg-pp2.yaml)
 2026-11-03T23:04:50Z QUEUE-D42R done
 2026-11-03T23:05:02Z QUEUE-D44 start SUM2P window (serve-v41pkg-pp2.yaml)
+2026-11-03T23:13:07Z QUEUE-D44 window rc=1: 2026-11-03T23:09:58Z stage 1 Board B = idx 0,4,1,5; stage 2 Board C = idx 6,2,3,7;2026-11-03T23:10:00Z P2P within each board: True;0, 150.00 W, 135 MHz, 0 MiB;1, 150.00 W, 135 MHz, 0 MiB;2, 150.00 W, 135 MHz, 0 MiB;3, 150.00 W, 135 MHz, 0 MiB;4, 150.00 W, 135 MHz, 0 MiB;5, 150.00 W, 135 MHz, 0 MiB;6, 150.00 W, 135 MHz, 0 MiB;7, 150.00 W, 135 MHz, 0 MiB;2026-11-03T23:10:00Z model ${ENGINE_HOME}/models/gguf/DeepSeek-V4.1-Flash-1017-GSQ-RCO-IQ2_XXS-00001-of-00004.gguf;2026-11-03T23:10:14Z Engram prewarmed in 14 s (MemAvailable 138 GiB);2026-11-03T23:10:14Z Engram lock already held (pid 22821);2026-11-03T23:10:17Z server serve-pp2 group 328247 starting; log ${ENGINE_HOME}/run-pp2/state/serve-pp2.log;2026-11-03T23:13:07Z server serve-pp2 up after about 170 s; MemAvailable 120 GiB;0, 18220 MiB;1, 18220 MiB;2, 22676 MiB;3, 22676 MiB;4, 18220 MiB;5, 18220 MiB;6, 22676 MiB;7, 22676 MiB;2026-11-03T23:13:07Z READY: serve-pp2 group 328247 on 127.0.0.1:18042;
+2026-11-03T23:15:45Z QUEUE-D44 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-03T23:15:45Z QUEUE-D44 done
+2026-11-03T23:15:58Z QUEUE-D45 start EXPERT_WAVE window (serve-v41pkg-pp2.yaml)
+2026-11-03T23:20:08Z QUEUE-D45 window rc=1: BASECHECK PASS: 31 live files, 39 compiled inputs; no Python files replaced;BASECHECK PASS: 31 live files, 39 compiled inputs; no Python files replaced;Traceback (most recent call last):;  File "/path/to/out", line 23, in <module>;    main();  File "/path/to/out", line 15, in main;    raise ValueError(f'INCONCLUSIVE: expected 18 resource records, got {len(matches)}');ValueError: INCONCLUSIVE: expected 18 resource records, got 0;ERROR: window failed (rc=1); restoring REC;REC restored and server boot completed;
+2026-11-03T23:22:41Z QUEUE-D45 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-03T23:22:41Z QUEUE-D45 done
+2026-11-03T23:22:58Z QUEUE-D46 start thinking-acceptance window (serve-v41pkg-pp2.yaml)
+2026-11-04T01:05:24Z QUEUE-OWNER D47 waiter HELD (pid 131127 stopped): model drive nvme1n1 reading ~15 MB/s, r_await ~500 ms, 126 media errors; RAM now 8x32 GB (251 GiB) so model no longer fits in page cache; D46 REC boot slow
+2026-11-04T01:07:12Z QUEUE-D46 window rc=0: T0 DELTA OT-PSH2 - OT-REC+OT-REC2: acc_round +0.012 ms_round +0.00 tok_s +0.5 (+0.3 % tok/s);T0 DELTA OT-PS2 - OT-REC+OT-REC2: acc_round -0.012 ms_round +0.02 tok_s -0.6 (-0.4 % tok/s);T0 DELTA OT-CDT120 - OT-REC+OT-REC2: acc_round -0.004 ms_round +0.02 tok_s -0.3 (-0.2 % tok/s);T0 DELTA OT-CDT085 - OT-REC+OT-REC2: acc_round +0.004 ms_round +0.18 tok_s -1.0 (-0.6 % tok/s);T0 DELTA OT-MAXV3 - OT-REC+OT-REC2: acc_round -0.877 ms_round -2.09 tok_s -23.3 (-14.5 % tok/s);T1 DELTA OT-PS - OT-REC+OT-REC2: acc_round +0.092 [+0.004, +0.193] ms_round +1.55 [+1.48, +1.62] tok_s -4.0 [-7.4, -0.3] (-3.1 % tok/s);T1 DELTA OT-PSH - OT-REC+OT-REC2: acc_round +0.100 [-0.046, +0.261] ms_round +0.64 [+0.59, +0.68] tok_s +0.7 [-4.9, +6.8] (+0.6 % tok/s);T1 DELTA OT-PSH2 - OT-REC+OT-REC2: acc_round +0.047 [-0.046, +0.149] ms_round +0.51 [+0.47, +0.55] tok_s -0.7 [-4.3, +3.2] (-0.6 % tok/s);T1 DELTA OT-PS2 - OT-REC+OT-REC2: acc_round +0.149 [+0.040, +0.265] ms_round +1.29 [+1.26, +1.32] tok_s -0.6 [-4.9, +3.8] (-0.5 % tok/s);T1 DELTA OT-CDT120 - OT-REC+OT-REC2: acc_round -0.094 [-0.117, -0.070] ms_round -0.01 [-0.06, +0.05] tok_s -3.7 [-4.6, -2.7] (-2.9 % tok/s);T1 DELTA OT-CDT085 - OT-REC+OT-REC2: acc_
+2026-11-04T01:42:16Z QUEUE-D46 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T01:42:16Z QUEUE-D46 done
+2026-11-04T02:45:57Z QUEUE-OWNER D47 waiter RELEASED: gguf file 2 rewritten from hdd copy (cmp-verified before and after); file re-scan 37 GB in 20 s, no slow region
+2026-11-04T02:45:57Z QUEUE-D47 start ATTN_HMMA window (serve-v41pkg-pp2.yaml)
+2026-11-04T02:45:57Z QUEUE-D47W start: VLLM_V41_ATTN_HMMA kit 5da7fa5ec; REC file /path/to/out; extras EXPERT_DIET=3,ROUTE_FAST=1,PREFILL_SKIP_ROWS=3072,KV_HOT_POSITIONS=524288; serve-v41pkg-pp2.yaml
+2026-11-04T02:47:11Z QUEUE-D47W BASECHECK OK mode=exact head=5da7fa5ec9bd kit=5da7fa5ec deployed attention_ops 2880639af924 staged e364a28acdd6 attn_hmma e57f541a6650
+2026-11-04T02:47:11Z QUEUE-D47W BUILD OK /path/to/out 1015440 B sha16 dc5a14e3c1ee
+2026-11-04T02:48:01Z QUEUE-D47W gpu_check rc=1: CHECK gpu0 full rc=1: ;SANITIZER memcheck rc=1: ========= ERROR SUMMARY: 0 errors ;SANITIZER racecheck rc=1: ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings) ;SANITIZER synccheck rc=1: ========= ERROR SUMMARY: 0 errors ;SANITIZER initcheck rc=1: ========= ERROR SUMMARY: 0 errors ;TP4 gpu0 rc=1: ;TP4 gpu1 rc=1: ;TP4 gpu4 rc=1: ;TP4 gpu5 rc=1: ;GPU CHECK FAIL in 0 min;
+2026-11-04T02:48:01Z QUEUE-D47W timing us/call: 
+2026-11-04T02:48:01Z QUEUE-D47W gpu_check FAILED: not deployed
+2026-11-04T02:50:15Z QUEUE-D47W server up: REC
+2026-11-04T02:50:15Z QUEUE-D47W done
+2026-11-04T02:50:15Z QUEUE-D47 window rc=1: QUEUE-D47W gpu_check FAILED: not deployed;QUEUE-D47W server up: REC;QUEUE-D47W done;
+2026-11-04T02:50:15Z QUEUE-D47 done
+2026-11-04T02:50:30Z QUEUE-D48 start INDEX_TILED window (serve-v41pkg-pp2.yaml)
+2026-11-04T02:50:30Z QUEUE-D48W start: VLLM_V41_INDEX_TILED kit 0b7dda259; REC file /path/to/out (933383a57e82): VLLM_V41_INDEX_REDUCE=1 VLLM_V41_DMV_X=1 VLLM_V41_COUPLED_DRAFTS=1 VLLM_V41_COUPLED_DRAFT_TEMP=1.0 VLLM_V41_MARKOV_SHARD=1 VLLM_V41_COUPLED_SHARD=1 VLLM_V41_COUPLED_LOCAL=1 VLLM_V41_PLAN_FUSE=1 VLLM_V41_PP_KEEP_BATCH=1 VLLM_V41_EXPERT_FAST=1 VLLM_V41_FUSE_ATTN_PREP=1 VLLM_V41_FUSE_ATTN_POST=1 VLLM_V41_EXPERT_DIET=3 VLLM_V41_ROUTE_FAST=1 VLLM_V41_ROUTE_WARPS=4 VLLM_V41_PREFILL_SKIP_ROWS=3072 VLLM_V41_KV_HOT_POSITIONS=524288; serve-v41pkg-pp2.yaml
+2026-11-04T02:52:22Z QUEUE-D48W BASECHECK OK mode=exact head=0b7dda259408 kit=0b7dda259 deployed attention_ops 2880639af924 staged 666ca6f470cf index_tiled d198d057b5b0 v41k.so 54c1a0e1cc6b; reference text verbatim in benchmarks/deepseek_v41/v41k-diet1103/v41k.cu
+2026-11-04T02:52:22Z QUEUE-D48W CPU TEST OK: 10 checks BUILD OK /path/to/out 196352 B sha16 6d129f34becb 
+2026-11-04T02:53:55Z QUEUE-D48W gpu_check rc=0: CHECK gpu0 full rc=0: MATRIX 51072 cases, 2451038830 values written by v41k (2275525290 finite), 0 mismatched cases GRAPHS done, 0 mismatched cases so far ALL OK (51090 cases, 38 s) ;SANITIZER memcheck rc=0: ALL OK (232 cases, 3 s) ========= ERROR SUMMARY: 0 errors ;SANITIZER racecheck rc=0: ALL OK (232 cases, 23 s) ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings) ;SANITIZER synccheck rc=0: ALL OK (232 cases, 1 s) ========= ERROR SUMMARY: 0 errors ;SANITIZER initcheck rc=9: ALL OK (232 cases, 9 s) ========= ERROR SUMMARY: 872 errors ========= ERROR SUMMARY: 772 errors were not printed. Use --print-limit option to adjust the number of printed errors ;TP4 gpu0 rc=0: ALL OK (5506 cases, 9 s);TP4 gpu1 rc=0: ALL OK (5506 cases, 9 s);TP4 gpu4 rc=0: ALL OK (5506 cases, 9 s);TP4 gpu5 rc=0: ALL OK (5506 cases, 8 s);GPU CHECK PASS in 1 min;
+2026-11-04T02:53:55Z QUEUE-D48W timing us/call: H8 T6 cap65536 keys1000: v41k 16.8 us tiled 27.7 us (0.61x);H8 T6 cap65536 keys10000: v41k 45.4 us tiled 36.2 us (1.25x);H8 T6 cap65536 keys37500: v41k 155.8 us tiled 97.1 us (1.60x);H8 T6 cap131072 keys1000: v41k 15.8 us tiled 25.2 us (0.63x);H8 T6 cap131072 keys10000: v41k 47.6 us tiled 36.3 us (1.31x);H8 T6 cap131072 keys37500: v41k 158.0 us tiled 97.3 us (1.62x);H8 T6 cap131072 keys75000: v41k 309.4 us tiled 177.1 us (1.75x);H8 T6 cap131072 keys131072: v41k 546.0 us tiled 290.7 us (1.88x);
+2026-11-04T02:53:55Z QUEUE-D48W DEPLOY OK mode exact attention_ops 666ca6f470cf index_tiled d198d057b5b0 so 6d129f34becb
+2026-11-04T02:56:50Z AB IXT-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=333337258301 harness=d666c0a867c8
+2026-11-04T02:57:54Z AB IXT-OFF GATE approved PASS rc=0
+2026-11-04T02:59:04Z AB IXT-OFF ACT n=0 pat=7ba282a6 expect=off
+2026-11-04T02:59:04Z QUEUE-D48W IXT-OFF rc=0: act-lines 0, v41idx-errors 0, tracebacks 0
+2026-11-04T03:01:45Z AB IXT-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=333337258301 harness=d666c0a867c8
+2026-11-04T03:02:49Z AB IXT-ON GATE approved PASS rc=0
+2026-11-04T03:03:59Z AB IXT-ON ACT n=8 pat=7ba282a6 expect=on
+2026-11-04T03:03:59Z QUEUE-D48W IXT-ON rc=0: act-lines 8, v41idx-errors 0, tracebacks 0
+2026-11-04T03:06:37Z AB IXT-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=333337258301 harness=d666c0a867c8
+2026-11-04T03:08:16Z AB IXT-ON2 ACT n=8 pat=7ba282a6 expect=on
+2026-11-04T03:08:16Z QUEUE-D48W IXT-ON2 rc=0: act-lines 8, v41idx-errors 0, tracebacks 0
+2026-11-04T03:10:52Z AB IXT-OFF2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=333337258301 harness=d666c0a867c8
+2026-11-04T03:12:30Z AB IXT-OFF2 ACT n=0 pat=7ba282a6 expect=off
+2026-11-04T03:12:30Z QUEUE-D48W IXT-OFF2 rc=0: act-lines 0, v41idx-errors 0, tracebacks 0
+2026-11-04T03:12:30Z QUEUE-D48W act: ACT IXT-OFF n=0 IXT-ON n=8 pat=7ba282a6 DISCRIMINATING
+2026-11-04T03:12:31Z QUEUE-D48W pairs: T0 IXT-ON - IXT-OFF: mean +0.067 ms/round-dec, negative 1/3;T1 IXT-ON - IXT-OFF: mean +0.069 ms/round-dec, negative 3/11 texts same 11/11;T0 IXT-ON2 - IXT-OFF2: mean -0.006 ms/round-dec, negative 2/3;T1 IXT-ON2 - IXT-OFF2: mean -0.001 ms/round-dec, negative 6/11 texts same 11/11;T0 IXT-OFF2 - IXT-OFF: mean +0.079 ms/round-dec, negative 1/3;T1 IXT-OFF2 - IXT-OFF: mean +0.051 ms/round-dec, negative 2/11 texts same 11/11;
+2026-11-04T03:12:31Z QUEUE-D48W short verdict (gate PASS): NEUTRAL-or-UNDETECTED UNDETECTED means [0.067, 0.069, -0.006, -0.001] avg +0.032 max +0.069 t1-texts-same True design abba metric dec;ACTION NOT-ADOPTED (undetected, not absent; re-run as ABBAABBA if expected <= 0.2 ms);
+2026-11-04T03:15:14Z AB IXD-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=333337258301 harness=d666c0a867c8
+2026-11-04T03:19:49Z AB IXD-OFF ACT n=0 pat=7ba282a6 expect=off
+2026-11-04T03:19:49Z QUEUE-D48W IXD-OFF rc=0: act-lines 0, v41idx-errors 0, tracebacks 0
+2026-11-04T03:22:32Z AB IXD-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=333337258301 harness=d666c0a867c8
+2026-11-04T03:27:03Z AB IXD-ON ACT n=8 pat=7ba282a6 expect=on
+2026-11-04T03:27:03Z QUEUE-D48W IXD-ON rc=0: act-lines 8, v41idx-errors 0, tracebacks 0
+2026-11-04T03:29:31Z AB IXD-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=333337258301 harness=d666c0a867c8
+2026-11-04T03:34:07Z AB IXD-ON2 ACT n=8 pat=7ba282a6 expect=on
+2026-11-04T03:34:07Z QUEUE-D48W IXD-ON2 rc=0: act-lines 8, v41idx-errors 0, tracebacks 0
+2026-11-04T03:36:40Z AB IXD-OFF2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=333337258301 harness=d666c0a867c8
+2026-11-04T03:41:17Z AB IXD-OFF2 ACT n=0 pat=7ba282a6 expect=off
+2026-11-04T03:41:17Z QUEUE-D48W IXD-OFF2 rc=0: act-lines 0, v41idx-errors 0, tracebacks 0
+2026-11-04T03:41:17Z QUEUE-D48W depth act: ACT IXD-OFF n=0 IXD-ON n=8 pat=7ba282a6 DISCRIMINATING
+2026-11-04T03:41:17Z QUEUE-D48W depth: DEPTH L=150000: IXD-ON-IXD-OFF -2.10 ms/round, IXD-ON2-IXD-OFF2 -1.73, A/A IXD-OFF2-IXD-OFF +0.08; OFF 29.98 ON 27.88 ms/round; rounds 139/139/139/139; texts same;DEPTH L=300000: IXD-ON-IXD-OFF -4.71 ms/round, IXD-ON2-IXD-OFF2 -4.57, A/A IXD-OFF2-IXD-OFF +0.10; OFF 34.33 ON 29.62 ms/round; rounds 89/89/89/89; texts same;DEPTH-WIN at L=300000: pairs -4.71 / -4.57 ms/round (mean -4.64);
+2026-11-04T03:43:50Z QUEUE-D48W server up: REC + VLLM_V41_INDEX_TILED=1 VLLM_V41_INDEX_TILED_LIB=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41idx/build/v41idx.so
+2026-11-04T03:43:50Z QUEUE-D48W adopt boot: 8 activation lines (8 workers expected)
+2026-11-04T03:43:50Z QUEUE-D48W done (ADOPT: short NEUTRAL-or-UNDETECTED, DEPTH-WIN; VLLM_V41_INDEX_TILED=1 VLLM_V41_INDEX_TILED_LIB=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41idx/build/v41idx.so on; owner: add both to the REC ledger)
+2026-11-04T03:43:50Z QUEUE-D48 window rc=0: QUEUE-D48W server up: REC + VLLM_V41_INDEX_TILED=1 VLLM_V41_INDEX_TILED_LIB=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41idx/build/v41idx.so;QUEUE-D48W adopt boot: 8 activation lines (8 workers expected);QUEUE-D48W done (ADOPT: short NEUTRAL-or-UNDETECTED, DEPTH-WIN; VLLM_V41_INDEX_TILED=1 VLLM_V41_INDEX_TILED_LIB=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41idx/build/v41idx.so on; owner: add both to the REC ledger);
+2026-11-04T03:43:50Z QUEUE-D48 server up: REC + VLLM_V41_INDEX_TILED=1 (adopted)
+2026-11-04T03:43:50Z QUEUE-D48 done
+2026-11-04T03:44:00Z QUEUE-D49 start SHARED_DOWN window (serve-v41pkg-pp2.yaml)
+2026-11-04T04:28:47Z QUEUE-D49 window rc=1: ERROR: window failed rc=1; restoring REC;RESTORE: no deployment was begun;REC restored and healthy;
+2026-11-04T04:28:47Z QUEUE-D49 done
+2026-11-04T04:29:01Z QUEUE-D50 start FTNE window (serve-v41pkg-pp2.yaml)
+2026-11-04T04:31:55Z QUEUE-D50 window rc=127: ERROR: FTNE window failed rc=127; restoring exact REC;RESTORE PASS exact pre-window bytes in both trees;REC restored: exact original files, owner env/profile, healthy;
+2026-11-04T04:31:55Z QUEUE-D50 done
+2026-11-04T04:32:01Z QUEUE-D51 start PREFILL_IQ_GEMM window (serve-v41pkg-pp2.yaml), report-only
+2026-11-04T04:40:01Z QUEUE-D51 window rc=1: BASECHECK PASS: equal trees, exact anchors, original AST, canonical header ABI;Existing v41k/_C bytes bind identical SASS; no existing kernels are rebuilt;Real-model descriptor capture: 149760 rows, 320 layer/rank/role cells;18 SM70 GEMMs, zero spills; runtime shared memory/occupancy remains a GPU measurement;
+2026-11-04T04:40:01Z QUEUE-D51 done
+2026-11-04T04:40:32Z QUEUE-D52 start INDEX_FUSE window (serve-v41pkg-pp2.yaml)
+2026-11-04T04:40:32Z QUEUE-D52W start: VLLM_V41_INDEX_FUSE kit a1ee2dfe3; REC file /path/to/out; extras PREFILL_SKIP_ROWS=3072,KV_HOT_POSITIONS=524288; serve-v41pkg-pp2.yaml
+2026-11-04T04:41:35Z QUEUE-D52W BASECHECK OK mode=patch head=a1ee2dfe3460 kit=a1ee2dfe3 deployed attention_ops 666ca6f470cf staged 9d1b974b808c index_fuse 3f814a976162 v41pidx.cu 6ce9ae7cac67
+2026-11-04T04:41:35Z QUEUE-D52W BUILD OK /path/to/out 234888 B sha16 7e27885f08ff
+2026-11-04T04:41:44Z QUEUE-D52W gpu_check rc=1: CHECK gpu0 rc=1: ;SANITIZER memcheck rc=255: ;SANITIZER racecheck rc=255: ;SANITIZER synccheck rc=255: ;SANITIZER initcheck rc=255: ;GPU CHECK FAIL in 0 min;
+2026-11-04T04:41:44Z QUEUE-D52W timing ms/row: 
+2026-11-04T04:41:44Z QUEUE-D52W gpu_check: FAILED: not deployed
+2026-11-04T04:44:13Z QUEUE-D52W server up: REC
+2026-11-04T04:44:13Z QUEUE-D52W done
+2026-11-04T04:44:13Z QUEUE-D52 window rc=1: QUEUE-D52W BUILD OK /path/to/out 234888 B sha16 7e27885f08ff;QUEUE-D52W gpu_check rc=1: CHECK gpu0 rc=1: ;SANITIZER memcheck rc=255: ;SANITIZER racecheck rc=255: ;SANITIZER synccheck rc=255: ;SANITIZER initcheck rc=255: ;GPU CHECK FAIL in 0 min;;QUEUE-D52W timing ms/row: ;QUEUE-D52W gpu_check: FAILED: not deployed;QUEUE-D52W server up: REC;QUEUE-D52W done;
+2026-11-04T04:44:13Z QUEUE-D52 done
+2026-11-04T04:44:23Z QUEUE-D53 start drafter1103 window (MP_SHARD + GEMV2; serve-v41pkg-pp2.yaml)
+2026-11-04T04:44:23Z QUEUE-D53 start: drafter1103 kit 92dad1a09 knobs both (VLLM_V41_DRAFT_MP_SHARD=1 VLLM_V41_DRAFT_GEMV2=1); tag DR11040444; REC 19 keys; serve-v41pkg-pp2.yaml
+2026-11-04T04:45:30Z QUEUE-D53 BASECHECK OK fp8_linear.py=exact dspark.py=exact head=92dad1a09efe kit=92dad1a09 staged fp8_linear 2a6c4c6f9fee dspark 9b35198ed639 draft_gemv 8b91fb6c976c
+2026-11-04T04:45:30Z QUEUE-D53 BUILD OK /path/to/out 451968 B sha16 c7e90cb5625c
+2026-11-04T04:46:27Z QUEUE-D53 gpu_check rc=1: CHECK gpu0 rc=1: 4 PASS, 0 FAIL; RuntimeError: V4.1 draft GEMV2: overlapping FP8 weight registrations;SANITIZER memcheck rc=0: SANITIZE runs 70 mismatches 0 ========= ERROR SUMMARY: 0 errors ;SANITIZER racecheck rc=0: SANITIZE runs 70 mismatches 0 ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings) ;SANITIZER synccheck rc=0: SANITIZE runs 70 mismatches 0 ========= ERROR SUMMARY: 0 errors ;TP4 rc=0: bitwise lines 32/32; ;GPU CHECK FAIL in 0 min (see /path/to/out);
+2026-11-04T04:46:27Z QUEUE-D53 timing: 
+2026-11-04T04:46:27Z QUEUE-D53 gpu_check FAILED -> rollback + REC
+2026-11-04T04:48:57Z QUEUE-D53 rollback rc=0: ROLLBACK files rc=0 REC up (serve-v41pkg-pp2.yaml) 
+2026-11-04T04:48:57Z QUEUE-D53 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T04:48:57Z QUEUE-D53 finished (rolled back): DR11040444
+2026-11-04T04:48:57Z QUEUE-D53 window rc=1: QUEUE-D53 gpu_check rc=1: CHECK gpu0 rc=1: 4 PASS, 0 FAIL; RuntimeError: V4.1 draft GEMV2: overlapping FP8 weight registrations;SANITIZER memcheck rc=0: SANITIZE runs 70 mismatches 0 ========= ERROR SUMMARY: 0 errors ;SANITIZER racecheck rc=0: SANITIZE runs 70 mismatches 0 ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings) ;SANITIZER synccheck rc=0: SANITIZE runs 70 mismatches 0 ========= ERROR SUMMARY: 0 errors ;TP4 rc=0: bitwise lines 32/32; ;GPU CHECK FAIL in 0 min (see /path/to/out);;QUEUE-D53 timing: ;QUEUE-D53 gpu_check FAILED -> rollback + REC;QUEUE-D53 rollback rc=0: ROLLBACK files rc=0 REC up (serve-v41pkg-pp2.yaml) ;QUEUE-D53 server up: REC (serve-v41pkg-pp2.yaml);QUEUE-D53 finished (rolled back): DR11040444;
+2026-11-04T04:48:57Z QUEUE-D53 done
+2026-11-04T04:49:24Z QUEUE-D54 REC for the window: 19 keys from REC-postboot-20261103.env + adoptions after 2026-11-03T22:36:51Z (serve-v41pkg-pp2.yaml)
+2026-11-04T04:49:24Z QUEUE-D54 start mrv2fix1103 window (MRV2 sync + async, report-only; serve-v41pkg-pp2.yaml)
+2026-11-04T04:49:24Z QUEUE-D54 start: mrv2fix1103 kit 025c3363ceb9 (MRV2 + D32 capture fix), REPORT-ONLY; tag MV11040449; REC 19 keys; serve-v41pkg-pp2.yaml / serve-v41pkg-pp2-async.yaml
+2026-11-04T04:49:43Z QUEUE-D54 BASECHECK OK: kit 025c3363ceb9, 14 files staged (exact=14); model.py 5c6bca5834e7 dspark.py e3c0570ebcc7
+2026-11-04T04:49:43Z QUEUE-D54 DEPLOY OK: kit 025c3363ceb9, 14 files x 2 roots; model_runner.py 757fff0f07f2 input_batch.py 9aaffd097768 (ledger /path/to/out)
+2026-11-04T04:52:28Z QUEUE-D54 MRV2-BOOT lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 0 coupled-shard 4 coupled-local 0 mrv2-fallback 4 prefill-skip-fallback 4 v1-fallback 0 unsupported 2 async disabled tracebacks 0
+2026-11-04T04:52:28Z QUEUE-D54 MRV2-BOOT WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T04:52:28Z QUEUE-D54 MRV2 boot OK (log kept ${BENCH_DIR}/serve-pp2-D54-MRV2-boot.log)
+2026-11-04T04:55:06Z AB MV11040449-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8c976b9e64c0 harness=d666c0a867c8
+2026-11-04T04:56:10Z AB MV11040449-OFF GATE approved PASS rc=0
+2026-11-04T04:57:20Z AB MV11040449-OFF ACT n=0 pat=a2627b15 expect=off
+2026-11-04T04:57:20Z QUEUE-D54 OFF lines: mrv2-state 0 dummy-chain 0 commit-hooks 0 dspark-mrv2 0 greedy-graph 0 coupled-shard 0 coupled-local 0 mrv2-fallback 0 prefill-skip-fallback 0 v1-fallback 0 unsupported 0 async disabled tracebacks 0
+2026-11-04T04:59:53Z AB MV11040449-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8c976b9e64c0 harness=d666c0a867c8
+2026-11-04T05:00:54Z AB MV11040449-ON GATE approved FAIL rc=1
+2026-11-04T05:01:57Z AB MV11040449-ON ACT n=8 pat=a2627b15 expect=on
+2026-11-04T05:01:58Z QUEUE-D54 ON lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-fallback 4 v1-fallback 0 unsupported 2 async disabled tracebacks 0
+2026-11-04T05:01:58Z QUEUE-D54 ON WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T05:01:58Z QUEUE-D54 sync parity FAILED: ON approved gate FAIL
+2026-11-04T05:04:39Z QUEUE-D54 rollback rc=0: ROLLBACK files rc=0 REC up (serve-v41pkg-pp2.yaml) 
+2026-11-04T05:04:39Z QUEUE-D54 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T05:04:39Z QUEUE-D54 finished (REPORT-ONLY: MRV2 sync gate FAIL): MV11040449
+2026-11-04T05:04:39Z QUEUE-D54 window rc=0: QUEUE-D54 ON lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-fallback 4 v1-fallback 0 unsupported 2 async disabled tracebacks 0;QUEUE-D54 ON WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;;QUEUE-D54 sync parity FAILED: ON approved gate FAIL;QUEUE-D54 rollback rc=0: ROLLBACK files rc=0 REC up (serve-v41pkg-pp2.yaml) ;QUEUE-D54 server up: REC (serve-v41pkg-pp2.yaml);QUEUE-D54 finished (REPORT-ONLY: MRV2 sync gate FAIL): MV11040449;
+2026-11-04T05:04:39Z QUEUE-D54 done
+2026-11-04T05:04:54Z QUEUE-D44R REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T05:04:58Z QUEUE-D44R start SUM2P window (serve-v41pkg-pp2.yaml)
+2026-11-04T05:04:58Z QUEUE-D44R window rc=1: Invalid REC assignment;
+2026-11-04T05:12:45Z QUEUE-D44R server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T05:12:45Z QUEUE-D44R done
+2026-11-04T05:13:04Z QUEUE-D45R REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T05:13:04Z QUEUE-D45R start EXPERT_WAVE window (serve-v41pkg-pp2.yaml)
+2026-11-04T05:19:40Z QUEUE-D45R window rc=1: BASECHECK PASS: 31 live files, 39 compiled inputs; no Python files replaced;BASECHECK PASS: 31 live files, 39 compiled inputs; no Python files replaced;Traceback (most recent call last):;  File "/path/to/out", line 23, in <module>;    main();  File "/path/to/out", line 15, in main;    raise ValueError(f'INCONCLUSIVE: expected 18 resource records, got {len(matches)}');ValueError: INCONCLUSIVE: expected 18 resource records, got 0;ERROR: window failed (rc=1); restoring REC;REC restored and server boot completed;
+2026-11-04T05:23:06Z QUEUE-D45R server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T05:23:06Z QUEUE-D45R done
+2026-11-04T05:23:32Z QUEUE-D47R REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T05:23:32Z QUEUE-D47R start ATTN_HMMA window (serve-v41pkg-pp2.yaml)
+2026-11-04T05:23:32Z QUEUE-D47RW start: VLLM_V41_ATTN_HMMA kit ac6be318c; REC file /path/to/out; extras EXPERT_DIET=3,KV_HOT_POSITIONS=524288,PREFILL_SKIP_ROWS=3072,ROUTE_FAST=1; serve-v41pkg-pp2.yaml
+2026-11-04T05:24:47Z QUEUE-D47RW BASECHECK OK mode=patch head=ac6be318c3c9 kit=ac6be318c deployed attention_ops 666ca6f470cf staged edb7cc3b4fc8 attn_hmma e57f541a6650
+2026-11-04T05:24:47Z QUEUE-D47RW BUILD OK /path/to/out 1015440 B sha16 e56cafe2a9f0
+2026-11-04T05:26:23Z QUEUE-D47RW gpu_check rc=1: CHECK gpu0 full rc=0: ALL OK ;SANITIZER memcheck rc=0: SANITIZE runs 48 mismatches 0 ========= ERROR SUMMARY: 0 errors ;SANITIZER racecheck rc=9: SANITIZE runs 48 mismatches 0 ========= RACECHECK SUMMARY: 100 hazards displayed (0 errors, 272 warnings) ;SANITIZER synccheck rc=0: SANITIZE runs 48 mismatches 0 ========= ERROR SUMMARY: 0 errors ;SANITIZER initcheck rc=0: SANITIZE runs 48 mismatches 0 ========= ERROR SUMMARY: 0 errors ;TP4 gpu0 rc=0: ALL OK;TP4 gpu1 rc=0: ALL OK;TP4 gpu4 rc=0: ALL OK;TP4 gpu5 rc=0: ALL OK;GPU CHECK FAIL in 1 min;
+2026-11-04T05:26:23Z QUEUE-D47RW timing us/call: packed-c4 T1 {"today": 20.19, "mode1_k64": 20.8, "mode2_k32": 23.6, "mode2_k64": 29.88, "mode2_k128": 47.19, "mode2_k64_psplit": 31.19};packed-c4 T4 {"today": 30.03, "mode1_k64": 24.84, "mode2_k32": 24.16, "mode2_k64": 29.72, "mode2_k128": 47.86, "mode2_k64_psplit": 30.85};packed-c4 T6 {"today": 36.88, "mode1_k64": 31.04, "mode2_k32": 28.07, "mode2_k64": 30.7, "mode2_k128": 48.28, "mode2_k64_psplit": 31.42};packed-c128 T1 {"today": 20.18, "mode1_k64": 20.86, "mode2_k32": 23.71, "mode2_k64": 29.91, "mode2_k128": 47.61, "mode2_k64_psplit": 31.21};packed-c128 T4 {"today": 29.93, "mode1_k64": 24.79, "mode2_k32": 24.19, "mode2_k64": 30.26, "mode2_k128": 47.34, "mode2_k64_psplit": 31.51};packed-c128 T6 {"today": 33.21, "mode1_k64": 31.14, "mode2_k32": 28.19, "mode2_k64": 30.99, "mode2_k128": 47.65, "mode2_k64_psplit": 31.39};ring-window T1 {"today": 13.88, "mode1_k64": 16.09, "mode2_k32": 11.6
+2026-11-04T05:26:23Z QUEUE-D47RW gpu_check FAILED: not deployed
+2026-11-04T05:29:48Z QUEUE-D47RW server up: REC
+2026-11-04T05:29:48Z QUEUE-D47RW done
+2026-11-04T05:29:48Z QUEUE-D47R window rc=1: QUEUE-D47RW gpu_check FAILED: not deployed;QUEUE-D47RW server up: REC;QUEUE-D47RW done;
+2026-11-04T05:29:48Z QUEUE-D47R done
+2026-11-04T05:30:08Z QUEUE-D49R REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T05:30:08Z QUEUE-D49R start SHARED_DOWN window (serve-v41pkg-pp2.yaml)
+2026-11-04T06:16:10Z AB SR1103-20261104T061239Z-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=ba02534b7c80 harness=b36f867f4a41
+2026-11-04T06:17:14Z AB SR1103-20261104T061239Z-OFF GATE approved PASS rc=0
+2026-11-04T06:18:24Z AB SR1103-20261104T061239Z-OFF ACT n=0 pat=80c86b85 expect=off
+2026-11-04T06:21:02Z AB SR1103-20261104T061239Z-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=ba02534b7c80 harness=b36f867f4a41
+2026-11-04T06:22:05Z AB SR1103-20261104T061239Z-ON GATE approved FAIL rc=1
+2026-11-04T06:23:08Z AB SR1103-20261104T061239Z-ON ACT n=8 pat=80c86b85 expect=on
+2026-11-04T06:25:41Z QUEUE-D49R window rc=1: ERROR: window failed rc=1; restoring REC;RESTORE complete: exact pre-window bytes restored;REC restored and healthy;
+2026-11-04T06:25:41Z QUEUE-D49R done
+2026-11-04T06:25:55Z QUEUE-D50R REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T06:25:56Z QUEUE-D50R start FTNE window (serve-v41pkg-pp2.yaml)
+2026-11-04T06:25:56Z QUEUE-D50R window rc=1: 
+2026-11-04T06:25:56Z QUEUE-D50R done
+2026-11-04T06:26:06Z QUEUE-D51R REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T06:26:06Z QUEUE-D51R start PREFILL_IQ_GEMM window (serve-v41pkg-pp2.yaml), report-only
+2026-11-04T06:35:18Z QUEUE-D51R window rc=1: BASECHECK PASS: equal trees, exact anchors, original AST, canonical header ABI;Existing v41k/_C bytes bind identical SASS; no existing kernels are rebuilt;Real-model descriptor capture: 149760 rows, 320 layer/rank/role cells;18 SM70 GEMMs, zero spills; runtime shared memory/occupancy remains a GPU measurement;
+2026-11-04T06:35:18Z QUEUE-D51R done
+2026-11-04T06:35:32Z QUEUE-D52R REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T06:35:33Z QUEUE-D52R start INDEX_FUSE window (serve-v41pkg-pp2.yaml)
+2026-11-04T06:35:33Z QUEUE-D52RW start: VLLM_V41_INDEX_FUSE kit 2c6bc886b; REC file /path/to/out; extras KV_HOT_POSITIONS=524288,PREFILL_SKIP_ROWS=3072; serve-v41pkg-pp2.yaml
+2026-11-04T06:36:37Z QUEUE-D52RW BASECHECK OK mode=patch head=2c6bc886b24b kit=2c6bc886b deployed attention_ops 666ca6f470cf staged 9d1b974b808c index_fuse 3f814a976162 v41pidx.cu 6ce9ae7cac67
+2026-11-04T06:36:37Z QUEUE-D52RW BUILD OK /path/to/out 234888 B sha16 863fd8f47633
+2026-11-04T06:39:12Z QUEUE-D52RW gpu_check rc=3: CHECK gpu0 rc=3: {"check": "verdict-single", "a_mma_chain_mismatch": 10, "b_epilogue_mismatch": {"seq": 0, "ilp2": 0, "ilp4": 0, "tree": 0}, "c_vs_torch_mismatch": {"seq": 2528, "ilp2": 2455, "ilp4": 1, "tree": 1984}, "e_unwritten": 0, "d_select_mismatch": {"seq": 0, "ilp2": 0, "ilp4": 0, "tree": 0}, "orders_bitwise": [], "timing": {"32768": {"tile_rows": 64, "mm_per_row": 0.003081199997, "today_scores_per_row": 0.006131965619, "today_topk_per_row": 0.002551715624, "fused_scores_per_row": 0.001692093750, "fused_topk_per_row": 0.001582423957, "fused_tflops": 39.660251669141}, "150000": {"tile_rows": 32, "mm_per_row": 0.014244612498, "today_scores_per_row": 0.027799956251;SANITIZER memcheck rc=3: ========= ERROR SUMMARY: 0 errors ;SANITIZER racecheck rc=3: ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings) ;SANITIZER synccheck rc=3: ========= ERROR SUMMARY: 0 errors ;SANITIZER initcheck rc=3: ========= ERROR SUMMARY: 0 errors ;GPU CHECK NEAR-TIE (kernel correct, no bitwise order) in 2 min;
+2026-11-04T06:39:12Z QUEUE-D52RW timing ms/row: {"check": "T", "width": 32768, "tile_rows": 64, "mm_per_row": 0.003081199997, "today_scores_per_row": 0.006131965619, "today_topk_per_row": 0.002551715624, "fused_scores_per_row": 0.001692093750, "fused_topk_per_row": 0.001582423957, "fused_tflops": 39.660251669141};{"check": "T", "width": 150000, "tile_rows": 32, "mm_per_row": 0.014244612498, "today_scores_per_row": 0.027799956251, "today_topk_per_row": 0.025824975000, "fused_scores_per_row": 0.007321813541, "fused_topk_per_row": 0.006904376042, "fused_tflops": 41.956818248613};{"check": "T", "width": 300000, "tile_rows": 32, "mm_per_row": 0.028251449998, "today_scores_per_row": 0.055204156251, "today_topk_per_row": 0.051689212500, "fused_scores_per_row": 0.014473768753, "fused_topk_per_row": 0.014212830209, "fused_tflops": 42.449206594693};
+2026-11-04T06:39:12Z QUEUE-D52RW gpu_check: kernel correct but NOT bitwise (no order matches today); arms need NEAR_TIE=1 FUSE_ORDER=..: not deployed
+2026-11-04T06:42:46Z QUEUE-D52RW server up: REC
+2026-11-04T06:42:46Z QUEUE-D52RW done
+2026-11-04T06:42:46Z QUEUE-D52R window rc=1: QUEUE-D52RW BUILD OK /path/to/out 234888 B sha16 863fd8f47633;QUEUE-D52RW gpu_check rc=3: CHECK gpu0 rc=3: {"check": "verdict-single", "a_mma_chain_mismatch": 10, "b_epilogue_mismatch": {"seq": 0, "ilp2": 0, "ilp4": 0, "tree": 0}, "c_vs_torch_mismatch": {"seq": 2528, "ilp2": 2455, "ilp4": 1, "tree": 1984}, "e_unwritten": 0, "d_select_mismatch": {"seq": 0, "ilp2": 0, "ilp4": 0, "tree": 0}, "orders_bitwise": [], "timing": {"32768": {"tile_rows": 64, "mm_per_row": 0.003081199997, "today_scores_per_row": 0.006131965619, "today_topk_per_row": 0.002551715624, "fused_scores_per_row": 0.001692093750, "fused_topk_per_row": 0.001582423957, "fused_tflops": 39.660251669141}, "150000": {"tile_rows": 32, "mm_per_row": 0.014244612498, "today_scores_per_row": 0.027799956251;SANITIZER memcheck rc=3: ====
+2026-11-04T06:42:46Z QUEUE-D52R done
+2026-11-04T06:43:02Z QUEUE-D53R REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T06:43:02Z QUEUE-D53R start drafter1103 window (MP_SHARD + GEMV2; serve-v41pkg-pp2.yaml)
+2026-11-04T06:43:02Z QUEUE-D53R start: drafter1103 kit 9df1b282f knobs both (VLLM_V41_DRAFT_MP_SHARD=1 VLLM_V41_DRAFT_GEMV2=1); tag DR11040643; REC 19 keys; serve-v41pkg-pp2.yaml
+2026-11-04T06:44:11Z QUEUE-D53R BASECHECK OK fp8_linear.py=exact dspark.py=exact head=9df1b282f0fb kit=9df1b282f staged fp8_linear 2a6c4c6f9fee dspark 9b35198ed639 draft_gemv 8b91fb6c976c
+2026-11-04T06:44:11Z QUEUE-D53R BUILD OK /path/to/out 451968 B sha16 1bacb56628d2
+2026-11-04T06:45:26Z QUEUE-D53R gpu_check rc=0: CHECK gpu0 rc=0: 10 PASS, 0 FAIL; ALL OK;SANITIZER memcheck rc=0: SANITIZE runs 70 mismatches 0 ========= ERROR SUMMARY: 0 errors ;SANITIZER racecheck rc=0: SANITIZE runs 70 mismatches 0 ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings) ;SANITIZER synccheck rc=0: SANITIZE runs 70 mismatches 0 ========= ERROR SUMMARY: 0 errors ;TP4 rc=0: bitwise lines 32/32; ;GPU CHECK PASS (bitwise vs deployed v41k fp8_gemv; 3 sanitizers clean; TP4 shard bitwise) in 1 min;
+2026-11-04T06:45:26Z QUEUE-D53R timing: TIME round {"round_old_us": 828.2, "round_gemv2_l0_us": 966.6, "round_gemv2_l1_us": 1001.9, "round_gemv2_best_us": 955.6, "round_mp_shard_only_us": 627.8, "round_both_best_us": 780.1, "note": "isolated graphed kernels; excludes the fp8_reduce launch gaps and the all-gather (~15 us)"}
+2026-11-04T06:45:26Z QUEUE-D53R DEPLOY OK: fp8_linear 2a6c4c6f9fee dspark 9b35198ed639 draft_gemv 8b91fb6c976c so 1bacb56628d2 (record /path/to/out)
+2026-11-04T06:49:06Z AB DR11040643-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=e5c622b0c9fb harness=b36f867f4a41
+2026-11-04T06:50:10Z AB DR11040643-OFF GATE approved PASS rc=0
+2026-11-04T06:51:20Z AB DR11040643-OFF ACT n=0 pat=32940d5e expect=off
+2026-11-04T06:51:20Z QUEUE-D53R OFF activation: main_proj_shard 0 gemv2 0 tracebacks 0
+2026-11-04T06:53:58Z AB DR11040643-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=e5c622b0c9fb harness=b36f867f4a41
+2026-11-04T06:55:02Z AB DR11040643-ON GATE approved PASS rc=0
+2026-11-04T06:56:12Z AB DR11040643-ON ACT n=8 pat=32940d5e expect=on
+2026-11-04T06:56:12Z QUEUE-D53R ON activation: main_proj_shard 4 gemv2 4 tracebacks 0
+2026-11-04T06:58:42Z AB DR11040643-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=e5c622b0c9fb harness=b36f867f4a41
+2026-11-04T06:59:45Z AB DR11040643-ON2 GATE approved PASS rc=0
+2026-11-04T07:00:55Z AB DR11040643-ON2 ACT n=8 pat=32940d5e expect=on
+2026-11-04T07:00:55Z QUEUE-D53R ON2 activation: main_proj_shard 4 gemv2 4 tracebacks 0
+2026-11-04T07:03:28Z AB DR11040643-OFF2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=e5c622b0c9fb harness=b36f867f4a41
+2026-11-04T07:04:31Z AB DR11040643-OFF2 GATE approved PASS rc=0
+2026-11-04T07:05:41Z AB DR11040643-OFF2 ACT n=0 pat=32940d5e expect=off
+2026-11-04T07:05:41Z QUEUE-D53R OFF2 activation: main_proj_shard 0 gemv2 0 tracebacks 0
+2026-11-04T07:08:19Z AB DR11040643-OFF3 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=e5c622b0c9fb harness=b36f867f4a41
+2026-11-04T07:09:23Z AB DR11040643-OFF3 GATE approved PASS rc=0
+2026-11-04T07:10:33Z AB DR11040643-OFF3 ACT n=0 pat=32940d5e expect=off
+2026-11-04T07:10:33Z QUEUE-D53R OFF3 activation: main_proj_shard 0 gemv2 0 tracebacks 0
+2026-11-04T07:13:16Z AB DR11040643-ON3 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=e5c622b0c9fb harness=b36f867f4a41
+2026-11-04T07:14:20Z AB DR11040643-ON3 GATE approved PASS rc=0
+2026-11-04T07:15:30Z AB DR11040643-ON3 ACT n=8 pat=32940d5e expect=on
+2026-11-04T07:15:30Z QUEUE-D53R ON3 activation: main_proj_shard 4 gemv2 4 tracebacks 0
+2026-11-04T07:17:58Z AB DR11040643-ON4 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=e5c622b0c9fb harness=b36f867f4a41
+2026-11-04T07:19:01Z AB DR11040643-ON4 GATE approved PASS rc=0
+2026-11-04T07:20:11Z AB DR11040643-ON4 ACT n=8 pat=32940d5e expect=on
+2026-11-04T07:20:11Z QUEUE-D53R ON4 activation: main_proj_shard 4 gemv2 4 tracebacks 0
+2026-11-04T07:22:52Z AB DR11040643-OFF4 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=e5c622b0c9fb harness=b36f867f4a41
+2026-11-04T07:23:56Z AB DR11040643-OFF4 GATE approved PASS rc=0
+2026-11-04T07:25:06Z AB DR11040643-OFF4 ACT n=0 pat=32940d5e expect=off
+2026-11-04T07:25:06Z QUEUE-D53R OFF4 activation: main_proj_shard 0 gemv2 0 tracebacks 0
+2026-11-04T07:25:06Z QUEUE-D53R BITWISE DR11040643-ON vs DR11040643-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T07:25:06Z QUEUE-D53R BITWISE DR11040643-ON2 vs DR11040643-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T07:25:06Z QUEUE-D53R BITWISE DR11040643-ON3 vs DR11040643-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T07:25:06Z QUEUE-D53R BITWISE DR11040643-ON4 vs DR11040643-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T07:25:06Z QUEUE-D53R A/A DR11040643-OFF2 vs DR11040643-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T07:25:06Z QUEUE-D53R A/A DR11040643-OFF3 vs DR11040643-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T07:25:06Z QUEUE-D53R A/A DR11040643-OFF4 vs DR11040643-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T07:25:06Z QUEUE-D53R BITWISE ALL IDENTICAL
+2026-11-04T07:25:06Z QUEUE-D53R act: ACT DR11040643-OFF n=0 DR11040643-ON n=8 pat=32940d5e DISCRIMINATING
+2026-11-04T07:25:06Z QUEUE-D53R pairs: T0 DR11040643-ON - DR11040643-OFF: mean -0.062 ms/round-dec, negative 3/3;T1 DR11040643-ON - DR11040643-OFF: mean -0.096 ms/round-dec, negative 10/11 texts same 11/11;T0 DR11040643-ON2 - DR11040643-OFF2: mean -0.050 ms/round-dec, negative 3/3;T1 DR11040643-ON2 - DR11040643-OFF2: mean +0.005 ms/round-dec, negative 7/11 texts same 11/11;T0 DR11040643-ON3 - DR11040643-OFF3: mean -0.115 ms/round-dec, negative 3/3;T1 DR11040643-ON3 - DR11040643-OFF3: mean -0.064 ms/round-dec, negative 10/11 texts same 11/11;T0 DR11040643-ON4 - DR11040643-OFF4: mean -0.033 ms/round-dec, negative 3/3;T1 DR11040643-ON4 - DR11040643-OFF4: mean -0.138 ms/round-dec, negative 11/11 texts same 11/11;T0 DR11040643-OFF2 - DR11040643-OFF: mean +0.012 ms/round-dec, negative 2/3;T1 DR11040643-OFF2 - DR11040643-OFF: mean -0.018 ms/round-dec, negative 7/11 texts same 11/11;
+2026-11-04T07:25:06Z QUEUE-D53R verdict (win3 abbaabba): NEUTRAL-or-UNDETECTED UNDETECTED means [-0.062, -0.096, -0.05, 0.005, -0.115, -0.064, -0.033, -0.138] avg -0.069 max +0.005 t1-texts-same True design abbaabba metric dec;ACTION NOT-ADOPTED (undetected, not absent);
+2026-11-04T07:25:06Z QUEUE-D53R summary: knobs both bitwise IDENTICAL decode NEUTRAL-or-UNDETECTED (tag DR11040643, results /path/to/out)
+2026-11-04T07:25:06Z QUEUE-D53R not adopted (bitwise IDENTICAL, decode NEUTRAL-or-UNDETECTED): rolling back
+2026-11-04T07:27:59Z QUEUE-D53R rollback rc=0: ROLLBACK files rc=0 REC up (serve-v41pkg-pp2.yaml) 
+2026-11-04T07:27:59Z QUEUE-D53R server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T07:27:59Z QUEUE-D53R finished (NOT-ADOPTED: bitwise IDENTICAL decode NEUTRAL-or-UNDETECTED): DR11040643
+2026-11-04T07:27:59Z QUEUE-D53R window rc=0: QUEUE-D53R verdict (win3 abbaabba): NEUTRAL-or-UNDETECTED UNDETECTED means [-0.062, -0.096, -0.05, 0.005, -0.115, -0.064, -0.033, -0.138] avg -0.069 max +0.005 t1-texts-same True design abbaabba metric dec;ACTION NOT-ADOPTED (undetected, not absent);;QUEUE-D53R summary: knobs both bitwise IDENTICAL decode NEUTRAL-or-UNDETECTED (tag DR11040643, results /path/to/out);QUEUE-D53R not adopted (bitwise IDENTICAL, decode NEUTRAL-or-UNDETECTED): rolling back;QUEUE-D53R rollback rc=0: ROLLBACK files rc=0 REC up (serve-v41pkg-pp2.yaml) ;QUEUE-D53R server up: REC (serve-v41pkg-pp2.yaml);QUEUE-D53R finished (NOT-ADOPTED: bitwise IDENTICAL decode NEUTRAL-or-UNDETECTED): DR11040643;
+2026-11-04T07:27:59Z QUEUE-D53R done
+2026-11-04T07:28:05Z QUEUE-D44R2 REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T07:28:09Z QUEUE-D44R2 start SUM2P window (serve-v41pkg-pp2.yaml)
+2026-11-04T07:37:25Z QUEUE-D44R2 window rc=1: 2026-11-04T07:34:09Z stage 1 Board B = idx 0,4,1,5; stage 2 Board C = idx 6,2,3,7;2026-11-04T07:34:13Z P2P within each board: True;0, 150.00 W, 135 MHz, 0 MiB;1, 150.00 W, 135 MHz, 0 MiB;2, 150.00 W, 135 MHz, 0 MiB;3, 150.00 W, 135 MHz, 0 MiB;4, 150.00 W, 135 MHz, 0 MiB;5, 150.00 W, 135 MHz, 0 MiB;6, 150.00 W, 135 MHz, 0 MiB;7, 150.00 W, 135 MHz, 0 MiB;2026-11-04T07:34:13Z model ${ENGINE_HOME}/models/gguf/DeepSeek-V4.1-Flash-1017-GSQ-RCO-IQ2_XXS-00001-of-00004.gguf;2026-11-04T07:34:27Z Engram prewarmed in 14 s (MemAvailable 142 GiB);2026-11-04T07:34:27Z Engram lock already held (pid 22821);2026-11-04T07:34:30Z server serve-pp2 group 831458 starting; log ${ENGINE_HOME}/run-pp2/state/serve-pp2.log;2026-11-04T07:37:25Z server serve-pp2 up after about 175 s; MemAvailable 124 GiB;0, 18220 MiB;1, 18220 MiB;2, 22676 MiB;3, 22676 MiB;4, 18220 MiB;5, 18220 MiB;6, 22676 MiB;7, 22676 MiB;2026-11-04T07:37:25Z READY: serve-pp2 group 831458 on 127.0.0.1:18042;
+2026-11-04T07:39:57Z QUEUE-D44R2 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T07:39:57Z QUEUE-D44R2 done
+2026-11-04T07:40:26Z QUEUE-D54R REC for the window: 19 keys from REC-postboot-20261103.env + adoptions after 2026-11-03T22:36:51Z (serve-v41pkg-pp2.yaml)
+2026-11-04T07:40:27Z QUEUE-D54R start mrv2fix1103 window (MRV2 sync + async, report-only; serve-v41pkg-pp2.yaml)
+2026-11-04T07:40:27Z QUEUE-D54R start: mrv2fix1103 kit 025c3363ceb9 (MRV2 + D32 capture fix), REPORT-ONLY; tag MV11040740; REC 19 keys; serve-v41pkg-pp2.yaml / serve-v41pkg-pp2-async.yaml
+2026-11-04T07:40:46Z QUEUE-D54R BASECHECK OK: kit 025c3363ceb9, 14 files staged (exact=14); model.py 5c6bca5834e7 dspark.py e3c0570ebcc7
+2026-11-04T07:40:46Z QUEUE-D54R DEPLOY OK: kit 025c3363ceb9, 14 files x 2 roots; model_runner.py 757fff0f07f2 input_batch.py 9aaffd097768 (ledger /path/to/out)
+2026-11-04T07:44:11Z QUEUE-D54R MRV2-BOOT lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 0 coupled-shard 4 coupled-local 0 mrv2-fallback 4 prefill-skip-fallback 4 v1-fallback 0 unsupported 2 async disabled tracebacks 0
+2026-11-04T07:44:11Z QUEUE-D54R MRV2-BOOT WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T07:44:11Z QUEUE-D54R MRV2 boot OK (log kept ${BENCH_DIR}/serve-pp2-D54-MRV2-boot.log)
+2026-11-04T07:46:49Z AB MV11040740-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8c976b9e64c0 harness=b36f867f4a41
+2026-11-04T07:47:53Z AB MV11040740-OFF GATE approved PASS rc=0
+2026-11-04T07:49:03Z AB MV11040740-OFF ACT n=0 pat=a2627b15 expect=off
+2026-11-04T07:49:03Z QUEUE-D54R OFF lines: mrv2-state 0 dummy-chain 0 commit-hooks 0 dspark-mrv2 0 greedy-graph 0 coupled-shard 0 coupled-local 0 mrv2-fallback 0 prefill-skip-fallback 0 v1-fallback 0 unsupported 0 async disabled tracebacks 0
+2026-11-04T07:51:31Z AB MV11040740-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8c976b9e64c0 harness=b36f867f4a41
+2026-11-04T07:52:32Z AB MV11040740-ON GATE approved PASS rc=0
+2026-11-04T07:53:34Z AB MV11040740-ON ACT n=8 pat=a2627b15 expect=on
+2026-11-04T07:53:34Z QUEUE-D54R ON lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-fallback 4 v1-fallback 0 unsupported 2 async disabled tracebacks 0
+2026-11-04T07:53:35Z QUEUE-D54R ON WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T07:53:35Z QUEUE-D54R first pair: BITWISE MV11040740-ON vs MV11040740-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T07:53:35Z QUEUE-D54R first pair: BITWISE ALL IDENTICAL
+2026-11-04T07:56:13Z AB MV11040740-ASYNC-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8c976b9e64c0 harness=b36f867f4a41
+2026-11-04T07:57:14Z AB MV11040740-ASYNC-ON GATE approved PASS rc=0
+2026-11-04T07:58:16Z AB MV11040740-ASYNC-ON ACT n=8 pat=a2627b15 expect=on
+2026-11-04T07:58:16Z QUEUE-D54R ASYNC-ON lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-fallback 4 v1-fallback 0 unsupported 2 async enabled tracebacks 0
+2026-11-04T07:58:16Z QUEUE-D54R ASYNC-ON WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T08:00:54Z AB MV11040740-ASYNC-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8c976b9e64c0 harness=b36f867f4a41
+2026-11-04T08:01:55Z AB MV11040740-ASYNC-ON2 GATE approved PASS rc=0
+2026-11-04T08:02:57Z AB MV11040740-ASYNC-ON2 ACT n=8 pat=a2627b15 expect=on
+2026-11-04T08:02:58Z QUEUE-D54R ASYNC-ON2 lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-fallback 4 v1-fallback 0 unsupported 2 async enabled tracebacks 0
+2026-11-04T08:02:58Z QUEUE-D54R ASYNC-ON2 WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T08:05:36Z AB MV11040740-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8c976b9e64c0 harness=b36f867f4a41
+2026-11-04T08:06:37Z AB MV11040740-ON2 GATE approved PASS rc=0
+2026-11-04T08:07:39Z AB MV11040740-ON2 ACT n=8 pat=a2627b15 expect=on
+2026-11-04T08:07:40Z QUEUE-D54R ON2 lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-fallback 4 v1-fallback 0 unsupported 2 async disabled tracebacks 0
+2026-11-04T08:07:40Z QUEUE-D54R ON2 WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T08:10:33Z AB MV11040740-OFF2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8c976b9e64c0 harness=b36f867f4a41
+2026-11-04T08:11:36Z AB MV11040740-OFF2 GATE approved PASS rc=0
+2026-11-04T08:12:46Z AB MV11040740-OFF2 ACT n=0 pat=a2627b15 expect=off
+2026-11-04T08:12:47Z QUEUE-D54R OFF2 lines: mrv2-state 0 dummy-chain 0 commit-hooks 0 dspark-mrv2 0 greedy-graph 0 coupled-shard 0 coupled-local 0 mrv2-fallback 0 prefill-skip-fallback 0 v1-fallback 0 unsupported 0 async disabled tracebacks 0
+2026-11-04T08:12:47Z QUEUE-D54R sync parity: BITWISE MV11040740-ON vs MV11040740-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T08:12:47Z QUEUE-D54R sync parity: BITWISE MV11040740-ON2 vs MV11040740-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T08:12:47Z QUEUE-D54R sync parity: A/A MV11040740-OFF2 vs MV11040740-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T08:12:47Z QUEUE-D54R sync parity: BITWISE ALL IDENTICAL
+2026-11-04T08:12:47Z QUEUE-D54R async parity (recorded): BITWISE MV11040740-ASYNC-ON vs MV11040740-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T08:12:47Z QUEUE-D54R async parity (recorded): BITWISE MV11040740-ASYNC-ON2 vs MV11040740-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T08:12:47Z QUEUE-D54R async parity (recorded): BITWISE ALL IDENTICAL
+2026-11-04T08:12:47Z QUEUE-D54R act: ACT MV11040740-OFF n=0 MV11040740-ON n=8 pat=a2627b15 DISCRIMINATING
+2026-11-04T08:12:47Z QUEUE-D54R sync pairs: T0 MV11040740-ON - MV11040740-OFF: mean -2.849 ms/round-dec, negative 3/3;T1 MV11040740-ON - MV11040740-OFF: mean -2.823 ms/round-dec, negative 11/11 texts same 11/11;T0 MV11040740-ON2 - MV11040740-OFF2: mean -2.884 ms/round-dec, negative 3/3;T1 MV11040740-ON2 - MV11040740-OFF2: mean -2.839 ms/round-dec, negative 11/11 texts same 11/11;T0 MV11040740-OFF2 - MV11040740-OFF: mean +0.036 ms/round-dec, negative 1/3;T1 MV11040740-OFF2 - MV11040740-OFF: mean +0.041 ms/round-dec, negative 3/11 texts same 11/11;
+2026-11-04T08:12:47Z QUEUE-D54R sync verdict (win3 abba): WIN means [-2.849, -2.823, -2.884, -2.839] avg -2.849 max -2.823 t1-texts-same True design abba metric dec;ACTION ADOPT;
+2026-11-04T08:12:47Z QUEUE-D54R async pairs: T0 MV11040740-ASYNC-ON - MV11040740-OFF: mean -2.900 ms/round-dec, negative 3/3;T1 MV11040740-ASYNC-ON - MV11040740-OFF: mean -2.889 ms/round-dec, negative 11/11 texts same 11/11;T0 MV11040740-ASYNC-ON2 - MV11040740-OFF2: mean -2.841 ms/round-dec, negative 3/3;T1 MV11040740-ASYNC-ON2 - MV11040740-OFF2: mean -2.858 ms/round-dec, negative 11/11 texts same 11/11;T0 MV11040740-OFF2 - MV11040740-OFF: mean +0.036 ms/round-dec, negative 1/3;T1 MV11040740-OFF2 - MV11040740-OFF: mean +0.041 ms/round-dec, negative 3/11 texts same 11/11;
+2026-11-04T08:12:47Z QUEUE-D54R async verdict (win3 abba): WIN means [-2.9, -2.889, -2.841, -2.858] avg -2.872 max -2.841 t1-texts-same True design abba metric dec;ACTION ADOPT;
+2026-11-04T08:12:47Z QUEUE-D54R async - MRV2 sync pairs: T0 MV11040740-ASYNC-ON - MV11040740-ON: mean -0.050 ms/round-dec, negative 3/3;T1 MV11040740-ASYNC-ON - MV11040740-ON: mean -0.066 ms/round-dec, negative 9/11 texts same 11/11;T0 MV11040740-ASYNC-ON2 - MV11040740-ON2: mean +0.044 ms/round-dec, negative 0/3;T1 MV11040740-ASYNC-ON2 - MV11040740-ON2: mean -0.018 ms/round-dec, negative 7/11 texts same 11/11;
+2026-11-04T08:16:02Z AB MV11040740-DEPTH-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8c976b9e64c0 harness=b36f867f4a41
+2026-11-04T08:18:20Z AB MV11040740-DEPTH-ON ACT n=8 pat=a2627b15 expect=on
+2026-11-04T08:18:20Z QUEUE-D54R DEPTH-ON lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-fallback 4 v1-fallback 0 unsupported 2 async disabled tracebacks 0
+2026-11-04T08:18:20Z QUEUE-D54R DEPTH-ON WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T08:18:20Z QUEUE-D54R depth MRV2 sync: DEPTH MV11040740-DEPTH-ON L=32768 rep 0: prompt 32718 TTFT 21.462 s decode 145.89 tok/s rounds 125 tok/round 4.10 ms/round 28.02 sha cdf3cf45c3cf;DEPTH MV11040740-DEPTH-ON L=150000 rep 0: prompt 150038 TTFT 105.53 s decode 137.3 tok/s rounds 140 tok/round 3.66 ms/round 26.58 sha 847272616b85;
+2026-11-04T08:18:20Z QUEUE-D54R depth V1 reference (PB1103-D): DEPTH PB1103-D L=32768 rep 0: prompt 32718 TTFT 20.11 s decode 151.62 tok/s rounds 125 tok/round 4.10 ms/round 26.96 sha cdf3cf45c3cf;DEPTH PB1103-D L=32768 rep 1: prompt 32716 TTFT 20.375 s decode 152.84 tok/s rounds 124 tok/round 4.13 ms/round 26.96 sha 0bb63e7748a8;DEPTH PB1103-D L=150000 rep 0: prompt 150038 TTFT 86.934 s decode 122.45 tok/s rounds 139 tok/round 3.68 ms/round 30.02 sha 847272616b85;DEPTH PB1103-D L=150000 rep 1: prompt 150045 TTFT 87.001 s decode 136.0 tok/s rounds 127 tok/round 4.03 ms/round 29.58 sha 33db0364f014;
+2026-11-04T08:18:20Z QUEUE-D54R summary: MRV2 sync parity IDENTICAL, decode WIN; MRV2 async parity IDENTICAL, decode WIN (tag MV11040740, results /path/to/out)
+2026-11-04T08:20:47Z QUEUE-D54R rollback rc=0: ROLLBACK files rc=0 REC up (serve-v41pkg-pp2.yaml) 
+2026-11-04T08:20:47Z QUEUE-D54R server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T08:20:47Z QUEUE-D54R finished (REPORT-ONLY: sync IDENTICAL/WIN, async IDENTICAL/WIN): MV11040740
+2026-11-04T08:20:47Z QUEUE-D54R window rc=0: QUEUE-D54R depth MRV2 sync: DEPTH MV11040740-DEPTH-ON L=32768 rep 0: prompt 32718 TTFT 21.462 s decode 145.89 tok/s rounds 125 tok/round 4.10 ms/round 28.02 sha cdf3cf45c3cf;DEPTH MV11040740-DEPTH-ON L=150000 rep 0: prompt 150038 TTFT 105.53 s decode 137.3 tok/s rounds 140 tok/round 3.66 ms/round 26.58 sha 847272616b85;;QUEUE-D54R depth V1 reference (PB1103-D): DEPTH PB1103-D L=32768 rep 0: prompt 32718 TTFT 20.11 s decode 151.62 tok/s rounds 125 tok/round 4.10 ms/round 26.96 sha cdf3cf45c3cf;DEPTH PB1103-D L=32768 rep 1: prompt 32716 TTFT 20.375 s decode 152.84 tok/s rounds 124 tok/round 4.13 ms/round 26.96 sha 0bb63e7748a8;DEPTH PB1103-D L=150000 rep 0: prompt 150038 TTFT 86.934 s decode 122.45 tok/s rounds 139 tok/round 3.68 ms/round 30.02 sha 847272616b85;DEPTH PB1103-D L=150000 rep 1: prompt 150045 TTFT 87.001 s decode 136.0 tok/s rounds 127 tok/round 4.03 ms/round 29.58 sha 33db036
+2026-11-04T08:20:47Z QUEUE-D54R done
+2026-11-04T08:20:49Z QUEUE-D45R2 REC for the window: 19 keys from REC-postboot-20261103.env + adoptions after 2026-11-03T22:36:51Z (serve-v41pkg-pp2.yaml)
+2026-11-04T08:20:49Z QUEUE-D45R2 start EXPERT_WAVE window (serve-v41pkg-pp2.yaml)
+2026-11-04T08:38:45Z QUEUE-D45R2 window rc=9: BASECHECK PASS: 31 live files, 39 compiled inputs; no Python files replaced;BASECHECK PASS: 31 live files, 39 compiled inputs; no Python files replaced;BUILD complete; GPU correctness and ABBA still required;ERROR: window failed (rc=9); restoring REC;REC restored and server boot completed;
+2026-11-04T08:41:53Z QUEUE-D45R2 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T08:41:53Z QUEUE-D45R2 done
+2026-11-04T08:42:07Z QUEUE-D47R2 REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T08:42:08Z QUEUE-D47R2 start ATTN_HMMA window (serve-v41pkg-pp2.yaml)
+2026-11-04T08:42:08Z QUEUE-D47R2W start: VLLM_V41_ATTN_HMMA kit 821a16168; REC file /path/to/out; extras EXPERT_DIET=3,KV_HOT_POSITIONS=524288,PREFILL_SKIP_ROWS=3072,ROUTE_FAST=1; serve-v41pkg-pp2.yaml
+2026-11-04T08:43:21Z QUEUE-D47R2W BASECHECK OK mode=patch head=821a161688c0 kit=821a16168 deployed attention_ops 666ca6f470cf staged edb7cc3b4fc8 attn_hmma e57f541a6650
+2026-11-04T08:43:21Z QUEUE-D47R2W BUILD OK /path/to/out 1019536 B sha16 f228ab201918
+2026-11-04T08:44:41Z QUEUE-D47R2W gpu_check rc=0: CHECK gpu0 full rc=0: ALL OK ;SANITIZER memcheck rc=0: SANITIZE runs 48 mismatches 0 ========= ERROR SUMMARY: 0 errors ;SANITIZER racecheck rc=0: SANITIZE runs 48 mismatches 0 ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings) ;SANITIZER synccheck rc=0: SANITIZE runs 48 mismatches 0 ========= ERROR SUMMARY: 0 errors ;SANITIZER initcheck rc=0: SANITIZE runs 48 mismatches 0 ========= ERROR SUMMARY: 0 errors ;TP4 gpu0 rc=0: ALL OK;TP4 gpu1 rc=0: ALL OK;TP4 gpu4 rc=0: ALL OK;TP4 gpu5 rc=0: ALL OK;GPU CHECK PASS in 1 min;
+2026-11-04T08:44:41Z QUEUE-D47R2W timing us/call: packed-c4 T1 {"today": 20.16, "mode1_k64": 20.95, "mode2_k32": 23.6, "mode2_k64": 29.84, "mode2_k128": 47.18, "mode2_k64_psplit": 31.16};packed-c4 T4 {"today": 29.92, "mode1_k64": 24.81, "mode2_k32": 24.16, "mode2_k64": 29.76, "mode2_k128": 47.78, "mode2_k64_psplit": 30.94};packed-c4 T6 {"today": 36.88, "mode1_k64": 31.07, "mode2_k32": 27.83, "mode2_k64": 30.64, "mode2_k128": 48.32, "mode2_k64_psplit": 31.46};packed-c128 T1 {"today": 20.22, "mode1_k64": 20.81, "mode2_k32": 23.71, "mode2_k64": 29.92, "mode2_k128": 47.72, "mode2_k64_psplit": 31.27};packed-c128 T4 {"today": 29.91, "mode1_k64": 24.77, "mode2_k32": 24.26, "mode2_k64": 30.27, "mode2_k128": 47.35, "mode2_k64_psplit": 31.58};packed-c128 T6 {"today": 33.41, "mode1_k64": 31.27, "mode2_k32": 28.14, "mode2_k64": 31.07, "mode2_k128": 47.59, "mode2_k64_psplit": 31.42};ring-window T1 {"today": 13.9, "mode1_k64": 16.04, "mode2_k32": 11.
+2026-11-04T08:44:41Z QUEUE-D47R2W DEPLOY OK mode patch attention_ops edb7cc3b4fc8 attn_hmma e57f541a6650 so f228ab201918
+2026-11-04T08:48:01Z AB AH1-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=529e4c2f8099 harness=b36f867f4a41
+2026-11-04T08:49:06Z AB AH1-OFF GATE approved PASS rc=0
+2026-11-04T08:50:16Z AB AH1-OFF ACT n=0 pat=280ada0c expect=off
+2026-11-04T08:50:16Z QUEUE-D47R2W AH1-OFF rc=0: direct-lines 0, hmma-errors 0, tracebacks 0
+2026-11-04T08:52:45Z AB AH1-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=529e4c2f8099 harness=b36f867f4a41
+2026-11-04T08:53:48Z AB AH1-ON GATE approved FAIL rc=1
+2026-11-04T08:54:53Z AB AH1-ON ACT n=12 pat=280ada0c expect=on
+2026-11-04T08:54:53Z QUEUE-D47R2W AH1-ON rc=0: direct-lines 12, hmma-errors 8, tracebacks 0
+2026-11-04T08:57:36Z AB AH1-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=529e4c2f8099 harness=b36f867f4a41
+2026-11-04T08:59:10Z AB AH1-ON2 ACT n=12 pat=280ada0c expect=on
+2026-11-04T08:59:10Z QUEUE-D47R2W AH1-ON2 rc=0: direct-lines 12, hmma-errors 8, tracebacks 0
+2026-11-04T09:01:48Z AB AH1-OFF2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=529e4c2f8099 harness=b36f867f4a41
+2026-11-04T09:03:27Z AB AH1-OFF2 ACT n=0 pat=280ada0c expect=off
+2026-11-04T09:03:27Z QUEUE-D47R2W AH1-OFF2 rc=0: direct-lines 0, hmma-errors 0, tracebacks 0
+2026-11-04T09:03:27Z QUEUE-D47R2W act: ACT AH1-OFF n=0 AH1-ON n=12 pat=280ada0c DISCRIMINATING
+2026-11-04T09:03:27Z QUEUE-D47R2W pairs: T0 AH1-ON - AH1-OFF: mean -0.156 ms/round-dec, negative 3/3;T1 AH1-ON - AH1-OFF: mean -0.164 ms/round-dec, negative 11/11 texts same 0/11;T0 AH1-ON2 - AH1-OFF2: mean -0.116 ms/round-dec, negative 3/3;T1 AH1-ON2 - AH1-OFF2: mean -0.137 ms/round-dec, negative 9/11 texts same 0/11;T0 AH1-OFF2 - AH1-OFF: mean +0.008 ms/round-dec, negative 1/3;T1 AH1-OFF2 - AH1-OFF: mean +0.008 ms/round-dec, negative 4/11 texts same 11/11;
+2026-11-04T09:03:27Z QUEUE-D47R2W verdict (gate FAIL): NEUTRAL-or-UNDETECTED UNDETECTED means [-0.156, -0.164, -0.116, -0.137] avg -0.143 max -0.116 t1-texts-same False design abba metric dec;ACTION REJECT (correctness gate FAIL; never relaxed);
+2026-11-04T09:03:27Z QUEUE-D47R2W verdict NEUTRAL-or-UNDETECTED gate FAIL -> rollback + REC
+2026-11-04T09:06:05Z QUEUE-D47R2W rollback: ROLLBACK files rc=0 REC up 
+2026-11-04T09:06:05Z QUEUE-D47R2W done (rolled back)
+2026-11-04T09:06:05Z QUEUE-D47R2 window rc=1: QUEUE-D47R2W verdict NEUTRAL-or-UNDETECTED gate FAIL -> rollback + REC;QUEUE-D47R2W rollback: ROLLBACK files rc=0 REC up ;QUEUE-D47R2W done (rolled back);
+2026-11-04T09:06:05Z QUEUE-D47R2 done
+2026-11-04T09:06:15Z QUEUE-D50R2 REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T09:06:16Z QUEUE-D50R2 start FTNE window (serve-v41pkg-pp2.yaml)
+2026-11-04T09:10:45Z AB FTNE1103-20261104T090720Z-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=c5bf83448f28 harness=b36f867f4a41
+2026-11-04T09:11:49Z AB FTNE1103-20261104T090720Z-OFF GATE approved PASS rc=0
+2026-11-04T09:12:59Z AB FTNE1103-20261104T090720Z-OFF ACT n=0 pat=e18eb958 expect=off
+2026-11-04T09:15:52Z AB FTNE1103-20261104T090720Z-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=c5bf83448f28 harness=b36f867f4a41
+2026-11-04T09:16:56Z AB FTNE1103-20261104T090720Z-ON GATE approved PASS rc=0
+2026-11-04T09:18:06Z AB FTNE1103-20261104T090720Z-ON ACT n=8 pat=e18eb958 expect=on
+2026-11-04T09:20:34Z AB FTNE1103-20261104T090720Z-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=c5bf83448f28 harness=b36f867f4a41
+2026-11-04T09:21:38Z AB FTNE1103-20261104T090720Z-ON2 GATE approved PASS rc=0
+2026-11-04T09:22:48Z AB FTNE1103-20261104T090720Z-ON2 ACT n=8 pat=e18eb958 expect=on
+2026-11-04T09:25:33Z AB FTNE1103-20261104T090720Z-OFF2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=c5bf83448f28 harness=b36f867f4a41
+2026-11-04T09:26:37Z AB FTNE1103-20261104T090720Z-OFF2 GATE approved PASS rc=0
+2026-11-04T09:27:47Z AB FTNE1103-20261104T090720Z-OFF2 ACT n=0 pat=e18eb958 expect=off
+2026-11-04T09:30:15Z AB FTNE1103-20261104T090720Z-OFF3 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=c5bf83448f28 harness=b36f867f4a41
+2026-11-04T09:31:19Z AB FTNE1103-20261104T090720Z-OFF3 GATE approved PASS rc=0
+2026-11-04T09:32:29Z AB FTNE1103-20261104T090720Z-OFF3 ACT n=0 pat=e18eb958 expect=off
+2026-11-04T09:35:00Z AB FTNE1103-20261104T090720Z-ON3 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=c5bf83448f28 harness=b36f867f4a41
+2026-11-04T09:36:03Z AB FTNE1103-20261104T090720Z-ON3 GATE approved PASS rc=0
+2026-11-04T09:37:14Z AB FTNE1103-20261104T090720Z-ON3 ACT n=8 pat=e18eb958 expect=on
+2026-11-04T09:40:02Z AB FTNE1103-20261104T090720Z-ON4 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=c5bf83448f28 harness=b36f867f4a41
+2026-11-04T09:41:05Z AB FTNE1103-20261104T090720Z-ON4 GATE approved PASS rc=0
+2026-11-04T09:42:15Z AB FTNE1103-20261104T090720Z-ON4 ACT n=8 pat=e18eb958 expect=on
+2026-11-04T09:44:53Z AB FTNE1103-20261104T090720Z-OFF4 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=c5bf83448f28 harness=b36f867f4a41
+2026-11-04T09:45:57Z AB FTNE1103-20261104T090720Z-OFF4 GATE approved PASS rc=0
+2026-11-04T09:47:07Z AB FTNE1103-20261104T090720Z-OFF4 ACT n=0 pat=e18eb958 expect=off
+2026-11-04T09:49:36Z QUEUE-D50R2 window rc=1: ERROR: FTNE window failed rc=1; restoring exact REC;RESTORE PASS exact pre-window bytes in both trees;REC restored: exact original files, owner env/profile, healthy;
+2026-11-04T09:49:36Z QUEUE-D50R2 done
+2026-11-04T09:49:40Z QUEUE-D51R2 REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T09:49:40Z QUEUE-D51R2 start PREFILL_IQ_GEMM window (serve-v41pkg-pp2.yaml), report-only
+2026-11-04T09:59:00Z QUEUE-D51R2 window rc=1: BASECHECK PASS: equal trees, exact anchors, original AST, canonical header ABI;Existing v41k/_C bytes bind identical SASS; no existing kernels are rebuilt;Real-model descriptor capture: 149760 rows, 320 layer/rank/role cells;18 SM70 GEMMs, zero spills; runtime shared memory/occupancy remains a GPU measurement;
+2026-11-04T09:59:00Z QUEUE-D51R2 first error:     raise ValueError('INCONCLUSIVE: CUDA profiler events missing')
+2026-11-04T09:59:00Z QUEUE-D51R2 done
+2026-11-04T09:59:26Z QUEUE-D52R2 REC for the window: 19 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T09:59:27Z QUEUE-D52R2 start INDEX_FUSE near-tie window ilp4 (serve-v41pkg-pp2.yaml)
+2026-11-04T09:59:27Z QUEUE-D52R2W start: VLLM_V41_INDEX_FUSE kit 2c6bc886b; REC file /path/to/out; extras KV_HOT_POSITIONS=524288,PREFILL_SKIP_ROWS=3072; serve-v41pkg-pp2.yaml
+2026-11-04T10:00:31Z QUEUE-D52R2W BASECHECK OK mode=patch head=2c6bc886b24b kit=2c6bc886b deployed attention_ops 666ca6f470cf staged 9d1b974b808c index_fuse 3f814a976162 v41pidx.cu 6ce9ae7cac67
+2026-11-04T10:00:31Z QUEUE-D52R2W BUILD OK /path/to/out 234888 B sha16 ca92b124b359
+2026-11-04T10:03:15Z QUEUE-D52R2W gpu_check rc=3: CHECK gpu0 rc=3: {"check": "verdict-single", "a_mma_chain_mismatch": 10, "b_epilogue_mismatch": {"seq": 0, "ilp2": 0, "ilp4": 0, "tree": 0}, "c_vs_torch_mismatch": {"seq": 2528, "ilp2": 2455, "ilp4": 1, "tree": 1984}, "e_unwritten": 0, "d_select_mismatch": {"seq": 0, "ilp2": 0, "ilp4": 0, "tree": 0}, "orders_bitwise": [], "timing": {"32768": {"tile_rows": 64, "mm_per_row": 0.003080049987, "today_scores_per_row": 0.006140371874, "today_topk_per_row": 0.002574203131, "fused_scores_per_row": 0.001721426042, "fused_topk_per_row": 0.001601382291, "fused_tflops": 38.984459596973}, "150000": {"tile_rows": 32, "mm_per_row": 0.014302512499, "today_scores_per_row": 0.02785614378;SANITIZER memcheck rc=3: ========= ERROR SUMMARY: 0 errors ;SANITIZER racecheck rc=3: ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings) ;SANITIZER synccheck rc=3: ========= ERROR SUMMARY: 0 errors ;SANITIZER initcheck rc=3: ========= ERROR SUMMARY: 0 errors ;TP4 near-tie order ilp4 rc=0 (not gating): {"check": "verdict-tp4", "orders": ["ilp4"], "mismatch_all_ranks": 0, "per_order_rank0": {"ilp4": 0}, "pass": true};GPU CHECK NEAR-TIE (kernel correct, no bit
+2026-11-04T10:03:15Z QUEUE-D52R2W timing ms/row: {"check": "T", "width": 32768, "tile_rows": 64, "mm_per_row": 0.003080049987, "today_scores_per_row": 0.006140371874, "today_topk_per_row": 0.002574203131, "fused_scores_per_row": 0.001721426042, "fused_topk_per_row": 0.001601382291, "fused_tflops": 38.984459596973};{"check": "T", "width": 150000, "tile_rows": 32, "mm_per_row": 0.014302512499, "today_scores_per_row": 0.027856143788, "today_topk_per_row": 0.026089937500, "fused_scores_per_row": 0.007408792710, "fused_topk_per_row": 0.006935676037, "fused_tflops": 41.464245524264};{"check": "T", "width": 300000, "tile_rows": 32, "mm_per_row": 0.028240762503, "today_scores_per_row": 0.054388431271, "today_topk_per_row": 0.050873237523, "fused_scores_per_row": 0.014134897916, "fused_topk_per_row": 0.013521895827, "fused_tflops": 43.466886257515};
+2026-11-04T10:03:15Z QUEUE-D52R2W order ilp4 (near-tie)
+2026-11-04T10:03:15Z QUEUE-D52R2W DEPLOY OK mode patch attention_ops 9d1b974b808c index_fuse 3f814a976162 so ca92b124b359 backup /path/to/out
+2026-11-04T10:06:50Z AB IX-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=9b0e6f6e60bd harness=b36f867f4a41
+2026-11-04T10:07:54Z AB IX-OFF GATE approved PASS rc=0
+2026-11-04T10:09:04Z AB IX-OFF ACT n=0 pat=a4a31f66 expect=off
+2026-11-04T10:13:51Z QUEUE-D52R2W IX-OFF depth: L=32768 rep 0: prompt 32718 TTFT 19.945 s sha 0f978a2a2be1 L=150000 rep 0: prompt 150038 TTFT 85.127 s sha 4abc59ca4487 L=300000 rep 0: prompt 299227 TTFT 174.113 s sha bc9678598a26
+2026-11-04T10:13:52Z QUEUE-D52R2W IX-OFF activation: import_lines 0 first_call_lines 0 tracebacks 0
+2026-11-04T10:16:32Z AB IX-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=9b0e6f6e60bd harness=b36f867f4a41
+2026-11-04T10:17:35Z AB IX-ON GATE approved PASS rc=0
+2026-11-04T10:18:45Z AB IX-ON ACT n=8 pat=a4a31f66 expect=on
+2026-11-04T10:23:14Z QUEUE-D52R2W IX-ON depth: L=32768 rep 0: prompt 32718 TTFT 20.148 s sha 0f978a2a2be1 L=150000 rep 0: prompt 150038 TTFT 81.323 s sha 4abc59ca4487 L=300000 rep 0: prompt 299227 TTFT 158.994 s sha bc9678598a26
+2026-11-04T10:23:14Z QUEUE-D52R2W IX-ON vs IX-OFF sha: IDENTICAL
+2026-11-04T10:23:14Z QUEUE-D52R2W IX-ON activation: import_lines 8 first_call_lines 8 tracebacks 0
+2026-11-04T10:25:47Z AB IX-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=9b0e6f6e60bd harness=b36f867f4a41
+2026-11-04T10:27:26Z AB IX-ON2 ACT n=8 pat=a4a31f66 expect=on
+2026-11-04T10:31:54Z QUEUE-D52R2W IX-ON2 depth: L=32768 rep 0: prompt 32718 TTFT 20.065 s sha 0f978a2a2be1 L=150000 rep 0: prompt 150038 TTFT 81.626 s sha 4abc59ca4487 L=300000 rep 0: prompt 299227 TTFT 158.416 s sha bc9678598a26
+2026-11-04T10:31:54Z QUEUE-D52R2W IX-ON2 activation: import_lines 8 first_call_lines 8 tracebacks 0
+2026-11-04T10:34:34Z AB IX-OFF2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=9b0e6f6e60bd harness=b36f867f4a41
+2026-11-04T10:36:13Z AB IX-OFF2 ACT n=0 pat=a4a31f66 expect=off
+2026-11-04T10:41:05Z QUEUE-D52R2W IX-OFF2 depth: L=32768 rep 0: prompt 32718 TTFT 20.166 s sha 0f978a2a2be1 L=150000 rep 0: prompt 150038 TTFT 86.161 s sha 4abc59ca4487 L=300000 rep 0: prompt 299227 TTFT 176.795 s sha bc9678598a26
+2026-11-04T10:41:05Z QUEUE-D52R2W IX-OFF2 activation: import_lines 0 first_call_lines 0 tracebacks 0
+2026-11-04T10:41:05Z QUEUE-D52R2W DEPTH-AB L=32768 ttft OFF 19.945/20.166 ON 20.148/20.065 s delta +0.3 % sha OFF 0f978a2a2be1/0f978a2a2be1 ON 0f978a2a2be1/0f978a2a2be1 off==off2 True on==on2 True on==off True
+2026-11-04T10:41:05Z QUEUE-D52R2W DEPTH-AB L=150000 ttft OFF 85.127/86.161 ON 81.323/81.626 s delta -4.9 % sha OFF 4abc59ca4487/4abc59ca4487 ON 4abc59ca4487/4abc59ca4487 off==off2 True on==on2 True on==off True
+2026-11-04T10:41:05Z QUEUE-D52R2W DEPTH-AB L=300000 ttft OFF 174.113/176.795 ON 158.994/158.416 s delta -9.5 % sha OFF bc9678598a26/bc9678598a26 ON bc9678598a26/bc9678598a26 off==off2 True on==on2 True on==off True
+2026-11-04T10:41:05Z QUEUE-D52R2W DEPTH-AB IDENTICAL
+2026-11-04T10:41:05Z QUEUE-D52R2W act: ACT IX-OFF n=0 IX-ON n=8 pat=a4a31f66 DISCRIMINATING
+2026-11-04T10:41:05Z QUEUE-D52R2W pairs: T0 IX-ON - IX-OFF: mean +0.013 ms/round-dec, negative 1/3;T1 IX-ON - IX-OFF: mean +0.011 ms/round-dec, negative 5/11 texts same 11/11;T0 IX-ON2 - IX-OFF2: mean +0.033 ms/round-dec, negative 1/3;T1 IX-ON2 - IX-OFF2: mean +0.003 ms/round-dec, negative 6/11 texts same 11/11;T0 IX-OFF2 - IX-OFF: mean +0.021 ms/round-dec, negative 1/3;T1 IX-OFF2 - IX-OFF: mean -0.038 ms/round-dec, negative 7/11 texts same 11/11;
+2026-11-04T10:41:05Z QUEUE-D52R2W decode verdict (gate PASS): NEUTRAL-or-UNDETECTED UNDETECTED means [0.013, 0.011, 0.033, 0.003] avg +0.015 max +0.033 t1-texts-same True design abba metric dec;ACTION NOT-ADOPTED (undetected, not absent; re-run as ABBAABBA if expected <= 0.2 ms);
+2026-11-04T10:41:05Z QUEUE-D52R2W summary: numerics near-tie order ilp4 sha IDENTICAL prefill FASTER decode NEUTRAL-or-UNDETECTED gate PASS
+2026-11-04T10:43:47Z QUEUE-D52R2W server up: REC + VLLM_V41_INDEX_FUSE=ilp4 VLLM_V41_INDEX_FUSE_LIB=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41pidx/build/v41pidx.so
+2026-11-04T10:43:47Z QUEUE-D52R2W done (ADOPT: VLLM_V41_INDEX_FUSE=ilp4 on; files + .so deployed)
+2026-11-04T10:43:47Z QUEUE-D52R2 window rc=0: QUEUE-D52R2W act: ACT IX-OFF n=0 IX-ON n=8 pat=a4a31f66 DISCRIMINATING;QUEUE-D52R2W pairs: T0 IX-ON - IX-OFF: mean +0.013 ms/round-dec, negative 1/3;T1 IX-ON - IX-OFF: mean +0.011 ms/round-dec, negative 5/11 texts same 11/11;T0 IX-ON2 - IX-OFF2: mean +0.033 ms/round-dec, negative 1/3;T1 IX-ON2 - IX-OFF2: mean +0.003 ms/round-dec, negative 6/11 texts same 11/11;T0 IX-OFF2 - IX-OFF: mean +0.021 ms/round-dec, negative 1/3;T1 IX-OFF2 - IX-OFF: mean -0.038 ms/round-dec, negative 7/11 texts same 11/11;;QUEUE-D52R2W decode verdict (gate PASS): NEUTRAL-or-UNDETECTED UNDETECTED means [0.013, 0.011, 0.033, 0.003] avg +0.015 max +0.033 t1-texts-same True design abba metric dec;ACTION NOT-ADOPTED (undetected, not absent; re-run as ABBAABBA if expected <= 0.2 ms);;QUEUE-D52R2W summary: numerics near-tie order ilp4 sha IDENTICAL prefill FASTER decode NEUTRAL-or-UNDETECTED gate PASS;QUEUE-D52R2W server
+2026-11-04T10:43:47Z QUEUE-D52R2 server up: REC + VLLM_V41_INDEX_FUSE=ilp4 VLLM_V41_INDEX_FUSE_LIB=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41pidx/build/v41pidx.so (adopted)
+2026-11-04T10:43:47Z QUEUE-D52R2 done
+2026-11-04T10:44:16Z QUEUE-D53R2 REC for the window: 21 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T10:44:16Z QUEUE-D53R2 start drafter1103 window (MP_SHARD only; serve-v41pkg-pp2.yaml)
+2026-11-04T10:44:16Z QUEUE-D53R2 start: drafter1103 kit 9df1b282f knobs mp (VLLM_V41_DRAFT_MP_SHARD=1); tag DR11041044; REC 21 keys; serve-v41pkg-pp2.yaml
+2026-11-04T10:45:25Z QUEUE-D53R2 BASECHECK OK fp8_linear.py=exact dspark.py=exact head=9df1b282f0fb kit=9df1b282f staged fp8_linear 2a6c4c6f9fee dspark 9b35198ed639 draft_gemv 8b91fb6c976c
+2026-11-04T10:45:25Z QUEUE-D53R2 BUILD OK /path/to/out 451968 B sha16 4be04b8a0b2f
+2026-11-04T10:46:37Z QUEUE-D53R2 gpu_check rc=0: CHECK gpu0 rc=0: 10 PASS, 0 FAIL; ALL OK;SANITIZER memcheck rc=0: SANITIZE runs 70 mismatches 0 ========= ERROR SUMMARY: 0 errors ;SANITIZER racecheck rc=0: SANITIZE runs 70 mismatches 0 ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings) ;SANITIZER synccheck rc=0: SANITIZE runs 70 mismatches 0 ========= ERROR SUMMARY: 0 errors ;TP4 rc=0: bitwise lines 32/32; ;GPU CHECK PASS (bitwise vs deployed v41k fp8_gemv; 3 sanitizers clean; TP4 shard bitwise) in 1 min;
+2026-11-04T10:46:37Z QUEUE-D53R2 timing: TIME round {"round_old_us": 841.7, "round_gemv2_l0_us": 970.0, "round_gemv2_l1_us": 996.7, "round_gemv2_best_us": 959.1, "round_mp_shard_only_us": 640.7, "round_both_best_us": 785.0, "note": "isolated graphed kernels; excludes the fp8_reduce launch gaps and the all-gather (~15 us)"}
+2026-11-04T10:46:37Z QUEUE-D53R2 DEPLOY OK: fp8_linear 2a6c4c6f9fee dspark 9b35198ed639 draft_gemv 8b91fb6c976c so 4be04b8a0b2f (record /path/to/out)
+2026-11-04T10:49:12Z AB DR11041044-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T10:50:15Z AB DR11041044-OFF GATE approved PASS rc=0
+2026-11-04T10:51:25Z AB DR11041044-OFF ACT n=0 pat=305bcd58 expect=off
+2026-11-04T10:51:26Z QUEUE-D53R2 OFF activation: main_proj_shard 0 gemv2 0 tracebacks 0
+2026-11-04T10:54:03Z AB DR11041044-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T10:55:07Z AB DR11041044-ON GATE approved PASS rc=0
+2026-11-04T10:56:16Z AB DR11041044-ON ACT n=4 pat=305bcd58 expect=on
+2026-11-04T10:56:16Z QUEUE-D53R2 ON activation: main_proj_shard 4 gemv2 0 tracebacks 0
+2026-11-04T10:58:49Z AB DR11041044-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T10:59:52Z AB DR11041044-ON2 GATE approved PASS rc=0
+2026-11-04T11:01:02Z AB DR11041044-ON2 ACT n=4 pat=305bcd58 expect=on
+2026-11-04T11:01:02Z QUEUE-D53R2 ON2 activation: main_proj_shard 4 gemv2 0 tracebacks 0
+2026-11-04T11:03:53Z AB DR11041044-OFF2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T11:04:56Z AB DR11041044-OFF2 GATE approved PASS rc=0
+2026-11-04T11:06:06Z AB DR11041044-OFF2 ACT n=0 pat=305bcd58 expect=off
+2026-11-04T11:06:06Z QUEUE-D53R2 OFF2 activation: main_proj_shard 0 gemv2 0 tracebacks 0
+2026-11-04T11:08:37Z AB DR11041044-OFF3 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T11:09:41Z AB DR11041044-OFF3 GATE approved PASS rc=0
+2026-11-04T11:10:51Z AB DR11041044-OFF3 ACT n=0 pat=305bcd58 expect=off
+2026-11-04T11:10:51Z QUEUE-D53R2 OFF3 activation: main_proj_shard 0 gemv2 0 tracebacks 0
+2026-11-04T11:13:39Z AB DR11041044-ON3 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T11:14:42Z AB DR11041044-ON3 GATE approved PASS rc=0
+2026-11-04T11:15:52Z AB DR11041044-ON3 ACT n=4 pat=305bcd58 expect=on
+2026-11-04T11:15:52Z QUEUE-D53R2 ON3 activation: main_proj_shard 4 gemv2 0 tracebacks 0
+2026-11-04T11:18:30Z AB DR11041044-ON4 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T11:19:33Z AB DR11041044-ON4 GATE approved PASS rc=0
+2026-11-04T11:20:43Z AB DR11041044-ON4 ACT n=4 pat=305bcd58 expect=on
+2026-11-04T11:20:43Z QUEUE-D53R2 ON4 activation: main_proj_shard 4 gemv2 0 tracebacks 0
+2026-11-04T11:23:21Z AB DR11041044-OFF4 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T11:24:24Z AB DR11041044-OFF4 GATE approved PASS rc=0
+2026-11-04T11:25:34Z AB DR11041044-OFF4 ACT n=0 pat=305bcd58 expect=off
+2026-11-04T11:25:34Z QUEUE-D53R2 OFF4 activation: main_proj_shard 0 gemv2 0 tracebacks 0
+2026-11-04T11:25:34Z QUEUE-D53R2 BITWISE DR11041044-ON vs DR11041044-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T11:25:34Z QUEUE-D53R2 BITWISE DR11041044-ON2 vs DR11041044-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T11:25:34Z QUEUE-D53R2 BITWISE DR11041044-ON3 vs DR11041044-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T11:25:34Z QUEUE-D53R2 BITWISE DR11041044-ON4 vs DR11041044-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T11:25:34Z QUEUE-D53R2 A/A DR11041044-OFF2 vs DR11041044-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T11:25:34Z QUEUE-D53R2 A/A DR11041044-OFF3 vs DR11041044-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T11:25:34Z QUEUE-D53R2 A/A DR11041044-OFF4 vs DR11041044-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T11:25:34Z QUEUE-D53R2 BITWISE ALL IDENTICAL
+2026-11-04T11:25:34Z QUEUE-D53R2 act: ACT DR11041044-OFF n=0 DR11041044-ON n=4 pat=305bcd58 DISCRIMINATING
+2026-11-04T11:25:34Z QUEUE-D53R2 pairs: T0 DR11041044-ON - DR11041044-OFF: mean -0.081 ms/round-dec, negative 3/3;T1 DR11041044-ON - DR11041044-OFF: mean -0.176 ms/round-dec, negative 11/11 texts same 11/11;T0 DR11041044-ON2 - DR11041044-OFF2: mean -0.108 ms/round-dec, negative 3/3;T1 DR11041044-ON2 - DR11041044-OFF2: mean -0.091 ms/round-dec, negative 9/11 texts same 11/11;T0 DR11041044-ON3 - DR11041044-OFF3: mean -0.128 ms/round-dec, negative 3/3;T1 DR11041044-ON3 - DR11041044-OFF3: mean -0.261 ms/round-dec, negative 11/11 texts same 11/11;T0 DR11041044-ON4 - DR11041044-OFF4: mean -0.068 ms/round-dec, negative 2/3;T1 DR11041044-ON4 - DR11041044-OFF4: mean -0.128 ms/round-dec, negative 11/11 texts same 11/11;T0 DR11041044-OFF2 - DR11041044-OFF: mean -0.002 ms/round-dec, negative 1/3;T1 DR11041044-OFF2 - DR11041044-OFF: mean -0.038 ms/round-dec, negative 9/11 texts same 11/11;
+2026-11-04T11:25:34Z QUEUE-D53R2 verdict (win3 abbaabba): NEUTRAL-or-UNDETECTED UNDETECTED means [-0.081, -0.176, -0.108, -0.091, -0.128, -0.261, -0.068, -0.128] avg -0.130 max -0.068 t1-texts-same True design abbaabba metric dec;ACTION NOT-ADOPTED (undetected, not absent);
+2026-11-04T11:25:34Z QUEUE-D53R2 summary: knobs mp bitwise IDENTICAL decode NEUTRAL-or-UNDETECTED (tag DR11041044, results /path/to/out)
+2026-11-04T11:25:34Z QUEUE-D53R2 not adopted (bitwise IDENTICAL, decode NEUTRAL-or-UNDETECTED): rolling back
+2026-11-04T11:28:42Z QUEUE-D53R2 rollback rc=0: ROLLBACK files rc=0 REC up (serve-v41pkg-pp2.yaml) 
+2026-11-04T11:28:42Z QUEUE-D53R2 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T11:28:42Z QUEUE-D53R2 finished (NOT-ADOPTED: bitwise IDENTICAL decode NEUTRAL-or-UNDETECTED): DR11041044
+2026-11-04T11:28:42Z QUEUE-D53R2 window rc=0: QUEUE-D53R2 verdict (win3 abbaabba): NEUTRAL-or-UNDETECTED UNDETECTED means [-0.081, -0.176, -0.108, -0.091, -0.128, -0.261, -0.068, -0.128] avg -0.130 max -0.068 t1-texts-same True design abbaabba metric dec;ACTION NOT-ADOPTED (undetected, not absent);;QUEUE-D53R2 summary: knobs mp bitwise IDENTICAL decode NEUTRAL-or-UNDETECTED (tag DR11041044, results /path/to/out);QUEUE-D53R2 not adopted (bitwise IDENTICAL, decode NEUTRAL-or-UNDETECTED): rolling back;QUEUE-D53R2 rollback rc=0: ROLLBACK files rc=0 REC up (serve-v41pkg-pp2.yaml) ;QUEUE-D53R2 server up: REC (serve-v41pkg-pp2.yaml);QUEUE-D53R2 finished (NOT-ADOPTED: bitwise IDENTICAL decode NEUTRAL-or-UNDETECTED): DR11041044;
+2026-11-04T11:28:42Z QUEUE-D53R2 done
+2026-11-04T11:28:48Z QUEUE-D53A start: hand adoption VLLM_V41_DRAFT_MP_SHARD=1 on REC 21 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T11:29:01Z QUEUE-D53A deploy OK
+2026-11-04T11:33:11Z QUEUE-D53A activation lines missing (0)
+2026-11-04T11:36:24Z QUEUE-D53A server up: REC (serve-v41pkg-pp2.yaml) after rollback
+2026-11-04T11:36:24Z QUEUE-D53A done
+2026-11-04T11:36:25Z QUEUE-D53A2 start: hand adoption VLLM_V41_DRAFT_MP_SHARD=1 on REC 21 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T11:36:39Z QUEUE-D53A2 deploy OK
+2026-11-04T11:40:01Z QUEUE-D53R2 server up: REC + VLLM_V41_DRAFT_MP_SHARD=1 (adopted)
+2026-11-04T11:40:01Z QUEUE-D53A2 ADOPTED: VLLM_V41_DRAFT_MP_SHARD=1, activation lines 4; rollback: cd /path/to/out && OWNER_GPU_WINDOW=drafter1103 REC_ENV_FILE=/path/to/out REC_PROFILE=serve-v41pkg-pp2.yaml bash rollback.sh --window --boot
+2026-11-04T11:40:01Z QUEUE-D53A2 done
+2026-11-04T11:40:26Z QUEUE-D44R3 REC for the window: 22 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T11:40:29Z QUEUE-D44R3 start SUM2P window (serve-v41pkg-pp2.yaml)
+2026-11-04T11:54:54Z QUEUE-D44R3 window rc=1: 2026-11-04T11:52:35Z stage 1 Board B = idx 0,4,1,5; stage 2 Board C = idx 6,2,3,7;2026-11-04T11:52:37Z P2P within each board: True;0, 150.00 W, 255 MHz, 0 MiB;1, 150.00 W, 255 MHz, 0 MiB;2, 150.00 W, 135 MHz, 0 MiB;3, 150.00 W, 135 MHz, 0 MiB;4, 150.00 W, 285 MHz, 0 MiB;5, 150.00 W, 135 MHz, 0 MiB;6, 150.00 W, 135 MHz, 0 MiB;7, 150.00 W, 135 MHz, 0 MiB;2026-11-04T11:52:37Z model ${ENGINE_HOME}/models/gguf/DeepSeek-V4.1-Flash-1017-GSQ-RCO-IQ2_XXS-00001-of-00004.gguf;2026-11-04T11:52:51Z Engram prewarmed in 14 s (MemAvailable 142 GiB);2026-11-04T11:52:51Z Engram lock already held (pid 22821);2026-11-04T11:52:54Z server serve-pp2 group 4089030 starting; log ${ENGINE_HOME}/run-pp2/state/serve-pp2.log;2026-11-04T11:54:54Z server serve-pp2 up after about 120 s; MemAvailable 124 GiB;0, 18220 MiB;1, 18220 MiB;2, 22676 MiB;3, 22676 MiB;4, 18220 MiB;5, 18220 MiB;6, 22676 MiB;7, 22676 MiB;2026-11-04T11:54:54Z READY: serve-pp2 group 4089030 on 127.0.0.1:18042;
+2026-11-04T11:57:47Z QUEUE-D44R3 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T11:57:47Z QUEUE-D44R3 done
+2026-11-04T11:58:15Z QUEUE-D45R3 REC for the window: 22 keys from REC-postboot-20261103.env + adoptions after 2026-11-03T22:36:51Z (serve-v41pkg-pp2.yaml)
+2026-11-04T11:58:15Z QUEUE-D45R3 start EXPERT_WAVE window (serve-v41pkg-pp2.yaml)
+2026-11-04T12:11:31Z QUEUE-D45R3 window rc=9: BASECHECK PASS: 31 live files, 39 compiled inputs; no Python files replaced;BASECHECK PASS: 31 live files, 39 compiled inputs; no Python files replaced;BUILD complete; GPU correctness and ABBA still required;ERROR: window failed (rc=9); restoring REC;REC restored and server boot completed;
+2026-11-04T12:14:14Z QUEUE-D45R3 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T12:14:14Z QUEUE-D45R3 done
+2026-11-04T12:14:25Z QUEUE-D54A REC for the window: 22 keys from REC-postboot-20261103.env + adoptions after 2026-11-03T22:36:51Z (serve-v41pkg-pp2.yaml)
+2026-11-04T12:14:25Z QUEUE-D54A start mrv2skip1104 window (MRV2 sync + async, report-only; serve-v41pkg-pp2.yaml)
+2026-11-04T12:14:25Z QUEUE-D54A start: mrv2skip1104 kit 5b32a7675583 (MRV2 + D32 capture fix + prefill skip), REPORT-ONLY; tag MV11041214; REC 22 keys; serve-v41pkg-pp2.yaml / serve-v41pkg-pp2-async.yaml
+2026-11-04T12:14:44Z QUEUE-D54A BASECHECK OK: kit 5b32a7675583, 14 files staged (exact=14); model.py 5c6bca5834e7 dspark.py 9b35198ed639
+2026-11-04T12:14:44Z QUEUE-D54A DEPLOY OK: kit 5b32a7675583, 14 files x 2 roots; model_runner.py 4a67a1534018 input_batch.py 9aaffd097768 (ledger /path/to/out)
+2026-11-04T12:17:54Z QUEUE-D54A MRV2-BOOT lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 0 coupled-shard 4 coupled-local 0 mrv2-fallback 4 prefill-skip-active 4 prefill-skip-fallback 0 v1-fallback 0 unsupported 2 async disabled tracebacks 0
+2026-11-04T12:17:54Z QUEUE-D54A MRV2-BOOT WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T12:17:54Z QUEUE-D54A MRV2 boot OK (log kept ${BENCH_DIR}/serve-pp2-MRV2SKIP1104-boot.log)
+2026-11-04T12:20:34Z AB MV11041214-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T12:21:37Z AB MV11041214-OFF GATE approved PASS rc=0
+2026-11-04T12:22:46Z AB MV11041214-OFF ACT n=0 pat=a2627b15 expect=off
+2026-11-04T12:22:46Z QUEUE-D54A OFF lines: mrv2-state 0 dummy-chain 0 commit-hooks 0 dspark-mrv2 0 greedy-graph 0 coupled-shard 0 coupled-local 0 mrv2-fallback 0 prefill-skip-active 0 prefill-skip-fallback 0 v1-fallback 0 unsupported 0 async disabled tracebacks 0
+2026-11-04T12:25:25Z AB MV11041214-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T12:26:23Z AB MV11041214-ON GATE approved PASS rc=0
+2026-11-04T12:27:25Z AB MV11041214-ON ACT n=8 pat=a2627b15 expect=on
+2026-11-04T12:27:25Z QUEUE-D54A ON lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-active 4 prefill-skip-fallback 0 v1-fallback 0 unsupported 2 async disabled tracebacks 0
+2026-11-04T12:27:25Z QUEUE-D54A ON WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T12:27:25Z QUEUE-D54A first pair: BITWISE MV11041214-ON vs MV11041214-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T12:27:25Z QUEUE-D54A first pair: BITWISE ALL IDENTICAL
+2026-11-04T12:29:53Z AB MV11041214-ASYNC-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T12:30:51Z AB MV11041214-ASYNC-ON GATE approved PASS rc=0
+2026-11-04T12:31:53Z AB MV11041214-ASYNC-ON ACT n=8 pat=a2627b15 expect=on
+2026-11-04T12:31:53Z QUEUE-D54A ASYNC-ON lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-active 4 prefill-skip-fallback 0 v1-fallback 0 unsupported 2 async enabled tracebacks 0
+2026-11-04T12:31:53Z QUEUE-D54A ASYNC-ON WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T12:34:26Z AB MV11041214-ASYNC-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T12:35:24Z AB MV11041214-ASYNC-ON2 GATE approved PASS rc=0
+2026-11-04T12:36:26Z AB MV11041214-ASYNC-ON2 ACT n=8 pat=a2627b15 expect=on
+2026-11-04T12:36:26Z QUEUE-D54A ASYNC-ON2 lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-active 4 prefill-skip-fallback 0 v1-fallback 0 unsupported 2 async enabled tracebacks 0
+2026-11-04T12:36:26Z QUEUE-D54A ASYNC-ON2 WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T12:39:14Z AB MV11041214-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T12:40:13Z AB MV11041214-ON2 GATE approved PASS rc=0
+2026-11-04T12:41:15Z AB MV11041214-ON2 ACT n=8 pat=a2627b15 expect=on
+2026-11-04T12:41:15Z QUEUE-D54A ON2 lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-active 4 prefill-skip-fallback 0 v1-fallback 0 unsupported 2 async disabled tracebacks 0
+2026-11-04T12:41:15Z QUEUE-D54A ON2 WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T12:43:47Z AB MV11041214-OFF2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T12:44:50Z AB MV11041214-OFF2 GATE approved PASS rc=0
+2026-11-04T12:46:00Z AB MV11041214-OFF2 ACT n=0 pat=a2627b15 expect=off
+2026-11-04T12:46:00Z QUEUE-D54A OFF2 lines: mrv2-state 0 dummy-chain 0 commit-hooks 0 dspark-mrv2 0 greedy-graph 0 coupled-shard 0 coupled-local 0 mrv2-fallback 0 prefill-skip-active 0 prefill-skip-fallback 0 v1-fallback 0 unsupported 0 async disabled tracebacks 0
+2026-11-04T12:46:00Z QUEUE-D54A sync parity: BITWISE MV11041214-ON vs MV11041214-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T12:46:00Z QUEUE-D54A sync parity: BITWISE MV11041214-ON2 vs MV11041214-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T12:46:00Z QUEUE-D54A sync parity: A/A MV11041214-OFF2 vs MV11041214-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T12:46:00Z QUEUE-D54A sync parity: BITWISE ALL IDENTICAL
+2026-11-04T12:46:00Z QUEUE-D54A async parity (recorded): BITWISE MV11041214-ASYNC-ON vs MV11041214-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T12:46:00Z QUEUE-D54A async parity (recorded): BITWISE MV11041214-ASYNC-ON2 vs MV11041214-OFF: IDENTICAL T0 3/3 T1 12/12 greedy 8/8 gate PASS
+2026-11-04T12:46:00Z QUEUE-D54A async parity (recorded): BITWISE ALL IDENTICAL
+2026-11-04T12:46:00Z QUEUE-D54A act: ACT MV11041214-OFF n=0 MV11041214-ON n=8 pat=a2627b15 DISCRIMINATING
+2026-11-04T12:46:00Z QUEUE-D54A sync pairs: T0 MV11041214-ON - MV11041214-OFF: mean -2.735 ms/round-dec, negative 3/3;T1 MV11041214-ON - MV11041214-OFF: mean -2.809 ms/round-dec, negative 11/11 texts same 11/11;T0 MV11041214-ON2 - MV11041214-OFF2: mean -2.756 ms/round-dec, negative 3/3;T1 MV11041214-ON2 - MV11041214-OFF2: mean -2.736 ms/round-dec, negative 11/11 texts same 11/11;T0 MV11041214-OFF2 - MV11041214-OFF: mean -0.007 ms/round-dec, negative 2/3;T1 MV11041214-OFF2 - MV11041214-OFF: mean -0.053 ms/round-dec, negative 7/11 texts same 11/11;
+2026-11-04T12:46:00Z QUEUE-D54A sync verdict (win3 abba): WIN means [-2.735, -2.809, -2.756, -2.736] avg -2.759 max -2.735 t1-texts-same True design abba metric dec;ACTION ADOPT;
+2026-11-04T12:46:00Z QUEUE-D54A async pairs: T0 MV11041214-ASYNC-ON - MV11041214-OFF: mean -2.820 ms/round-dec, negative 3/3;T1 MV11041214-ASYNC-ON - MV11041214-OFF: mean -2.914 ms/round-dec, negative 11/11 texts same 11/11;T0 MV11041214-ASYNC-ON2 - MV11041214-OFF2: mean -2.851 ms/round-dec, negative 3/3;T1 MV11041214-ASYNC-ON2 - MV11041214-OFF2: mean -2.853 ms/round-dec, negative 11/11 texts same 11/11;T0 MV11041214-OFF2 - MV11041214-OFF: mean -0.007 ms/round-dec, negative 2/3;T1 MV11041214-OFF2 - MV11041214-OFF: mean -0.053 ms/round-dec, negative 7/11 texts same 11/11;
+2026-11-04T12:46:00Z QUEUE-D54A async verdict (win3 abba): WIN means [-2.82, -2.914, -2.851, -2.853] avg -2.860 max -2.820 t1-texts-same True design abba metric dec;ACTION ADOPT;
+2026-11-04T12:46:00Z QUEUE-D54A async - MRV2 sync pairs: T0 MV11041214-ASYNC-ON - MV11041214-ON: mean -0.085 ms/round-dec, negative 3/3;T1 MV11041214-ASYNC-ON - MV11041214-ON: mean -0.105 ms/round-dec, negative 9/11 texts same 11/11;T0 MV11041214-ASYNC-ON2 - MV11041214-ON2: mean -0.095 ms/round-dec, negative 3/3;T1 MV11041214-ASYNC-ON2 - MV11041214-ON2: mean -0.117 ms/round-dec, negative 8/11 texts same 11/11;
+2026-11-04T12:48:33Z AB MV11041214-DEPTH150K-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T12:50:03Z AB MV11041214-DEPTH150K-ON ACT n=8 pat=a2627b15 expect=on
+2026-11-04T12:50:03Z QUEUE-D54A DEPTH150K-ON lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-active 4 prefill-skip-fallback 0 v1-fallback 0 unsupported 2 async disabled tracebacks 0
+2026-11-04T12:50:03Z QUEUE-D54A DEPTH150K-ON WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T12:50:03Z QUEUE-D54A TTFT SKIP EVIDENCE VERIFIED: isolated 150K arm, active hook and first skipped step
+2026-11-04T12:50:03Z QUEUE-D54A depth DEPTH150K-ON: DEPTH MV11041214-DEPTH150K-ON L=150000 rep 0: prompt 150038 TTFT 82.77 s decode 137.96 tok/s rounds 139 tok/round 3.68 ms/round 26.65 sha 847272616b85;
+2026-11-04T12:52:40Z AB MV11041214-DEPTH32K-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T12:53:05Z AB MV11041214-DEPTH32K-ON ACT n=8 pat=a2627b15 expect=on
+2026-11-04T12:53:06Z QUEUE-D54A DEPTH32K-ON lines: mrv2-state 8 dummy-chain 1 commit-hooks 4 dspark-mrv2 4 greedy-graph 4 coupled-shard 4 coupled-local 4 mrv2-fallback 4 prefill-skip-active 4 prefill-skip-fallback 0 v1-fallback 0 unsupported 2 async disabled tracebacks 0
+2026-11-04T12:53:06Z QUEUE-D54A DEPTH32K-ON WARNING: 4 MRV2 fallback line(s): MRV2 fallback: keyed verification off for steps with logprobs; they take the MRV2 rejection sampler, so their sampled outputs follow MRV2's sampler, not the V1 runner's keyed streams.;
+2026-11-04T12:53:06Z QUEUE-D54A depth DEPTH32K-ON: DEPTH MV11041214-DEPTH32K-ON L=32768 rep 0: prompt 32718 TTFT 19.37 s decode 145.92 tok/s rounds 125 tok/round 4.10 ms/round 28.02 sha cdf3cf45c3cf;
+2026-11-04T12:53:06Z QUEUE-D54A depth V1 reference (PB1103-D): DEPTH PB1103-D L=32768 rep 0: prompt 32718 TTFT 20.11 s decode 151.62 tok/s rounds 125 tok/round 4.10 ms/round 26.96 sha cdf3cf45c3cf;DEPTH PB1103-D L=32768 rep 1: prompt 32716 TTFT 20.375 s decode 152.84 tok/s rounds 124 tok/round 4.13 ms/round 26.96 sha 0bb63e7748a8;DEPTH PB1103-D L=150000 rep 0: prompt 150038 TTFT 86.934 s decode 122.45 tok/s rounds 139 tok/round 3.68 ms/round 30.02 sha 847272616b85;DEPTH PB1103-D L=150000 rep 1: prompt 150045 TTFT 87.001 s decode 136.0 tok/s rounds 127 tok/round 4.03 ms/round 29.58 sha 33db0364f014;
+2026-11-04T12:53:06Z QUEUE-D54A summary: MRV2 sync parity IDENTICAL, decode WIN; MRV2 async parity IDENTICAL, decode WIN; 150K TTFT VERIFIED_SKIP (tag MV11041214, results /path/to/out)
+2026-11-04T12:55:59Z QUEUE-D54A rollback rc=0: ROLLBACK files rc=0 REC up (serve-v41pkg-pp2.yaml) 
+2026-11-04T12:55:59Z QUEUE-D54A server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T12:55:59Z QUEUE-D54A finished (REPORT-ONLY: sync IDENTICAL/WIN, async IDENTICAL/WIN, 150K TTFT VERIFIED_SKIP): MV11041214
+2026-11-04T12:55:59Z QUEUE-D54A window rc=0: QUEUE-D54A depth DEPTH32K-ON: DEPTH MV11041214-DEPTH32K-ON L=32768 rep 0: prompt 32718 TTFT 19.37 s decode 145.92 tok/s rounds 125 tok/round 4.10 ms/round 28.02 sha cdf3cf45c3cf;;QUEUE-D54A depth V1 reference (PB1103-D): DEPTH PB1103-D L=32768 rep 0: prompt 32718 TTFT 20.11 s decode 151.62 tok/s rounds 125 tok/round 4.10 ms/round 26.96 sha cdf3cf45c3cf;DEPTH PB1103-D L=32768 rep 1: prompt 32716 TTFT 20.375 s decode 152.84 tok/s rounds 124 tok/round 4.13 ms/round 26.96 sha 0bb63e7748a8;DEPTH PB1103-D L=150000 rep 0: prompt 150038 TTFT 86.934 s decode 122.45 tok/s rounds 139 tok/round 3.68 ms/round 30.02 sha 847272616b85;DEPTH PB1103-D L=150000 rep 1: prompt 150045 TTFT 87.001 s decode 136.0 tok/s rounds 127 tok/round 4.03 ms/round 29.58 sha 33db0364f014;;QUEUE-D54A summary: MRV2 sync parity IDENTICAL, decode WIN; MRV2 async parity IDENTICAL, decode WIN; 150K TTFT VERIFIED_SKIP (tag MV1104
+2026-11-04T12:55:59Z QUEUE-D54A done
+2026-11-04T12:56:06Z QUEUE-D51R3 REC for the window: 22 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T12:56:07Z QUEUE-D51R3 start PREFILL_IQ_GEMM window (serve-v41pkg-pp2.yaml), report-only
+2026-11-04T13:13:36Z QUEUE-D51R3 window rc=1: Existing v41k/_C bytes bind identical SASS; no existing kernels are rebuilt;Real-model descriptor capture: 149760 rows, 320 layer/rank/role cells;18 SM70 GEMMs, zero spills; runtime shared memory/occupancy remains a GPU measurement;INSTRUMENTATION UNAVAILABLE: dispatch: no_cuda_events: INCONCLUSIVE: CUDA profiler events missing;INSTRUMENTATION UNAVAILABLE: counters: ncu_permission: ==ERROR== ERR_NVGPUCTRPERM - The user does not have permission to access NVIDIA GPU Performance Counters on the target device 0. For instructions on enabling permissions and to get more information see https://developer.nvidia.com/ERR_NVGPUCTRPERM;Candidate beats both original and warm-tuned cold aggregate; serving A/B remains required;
+2026-11-04T13:13:36Z QUEUE-D51R3 first error: INSTRUMENTATION UNAVAILABLE: dispatch: no_cuda_events: INCONCLUSIVE: CUDA profiler events missing
+2026-11-04T13:13:36Z QUEUE-D51R3 done
+2026-11-04T13:14:02Z QUEUE-D44R4 REC for the window: 22 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T13:14:04Z QUEUE-D44R4 start SUM2P window (serve-v41pkg-pp2.yaml)
+2026-11-04T13:22:27Z QUEUE-D44R4 window rc=1: 2026-11-04T13:19:53Z stage 1 Board B = idx 0,4,1,5; stage 2 Board C = idx 6,2,3,7;2026-11-04T13:19:55Z P2P within each board: True;0, 150.00 W, 1522 MHz, 0 MiB;1, 150.00 W, 1522 MHz, 0 MiB;2, 150.00 W, 1522 MHz, 0 MiB;3, 150.00 W, 1522 MHz, 0 MiB;4, 150.00 W, 1522 MHz, 0 MiB;5, 150.00 W, 1522 MHz, 0 MiB;6, 150.00 W, 1522 MHz, 0 MiB;7, 150.00 W, 1522 MHz, 0 MiB;2026-11-04T13:19:55Z model ${ENGINE_HOME}/models/gguf/DeepSeek-V4.1-Flash-1017-GSQ-RCO-IQ2_XXS-00001-of-00004.gguf;2026-11-04T13:20:09Z Engram prewarmed in 14 s (MemAvailable 142 GiB);2026-11-04T13:20:09Z Engram lock already held (pid 22821);2026-11-04T13:20:12Z server serve-pp2 group 1047317 starting; log ${ENGINE_HOME}/run-pp2/state/serve-pp2.log;2026-11-04T13:22:27Z server serve-pp2 up after about 135 s; MemAvailable 124 GiB;0, 18220 MiB;1, 18220 MiB;2, 22676 MiB;3, 22676 MiB;4, 18220 MiB;5, 18220 MiB;6, 22676 MiB;7, 22676 MiB;2026-11-04T13:22:27Z READY: serve-pp2 group 1047317 on 127.0.0.1:18042;
+2026-11-04T13:24:55Z QUEUE-D44R4 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T13:24:55Z QUEUE-D44R4 done
+2026-11-04T13:25:02Z QUEUE-D45R4 REC for the window: 22 keys from REC-postboot-20261103.env + adoptions after 2026-11-03T22:36:51Z (serve-v41pkg-pp2.yaml)
+2026-11-04T13:25:02Z QUEUE-D45R4 start EXPERT_WAVE window (serve-v41pkg-pp2.yaml)
+2026-11-04T14:25:31Z OWNER rechained queue-bench.sh + queue-d40.sh (BENCHPREP1104: final-rec.sh REC, MRV2 + LBFIX preconditions, boot proof; D40 standard REC incl. D44R5 reader)
+2026-11-04T15:41:11Z AB AE1103-20261104T132502Z-OFF PROV so=65ff1666d98b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T15:42:14Z AB AE1103-20261104T132502Z-OFF GATE approved PASS rc=0
+2026-11-04T15:43:23Z AB AE1103-20261104T132502Z-OFF ACT n=0 pat=af935556 expect=off
+2026-11-04T15:46:49Z AB AE1103-20261104T132502Z-ON PROV so=65ff1666d98b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T15:47:53Z AB AE1103-20261104T132502Z-ON GATE approved PASS rc=0
+2026-11-04T15:49:04Z AB AE1103-20261104T132502Z-ON ACT n=8 pat=af935556 expect=on
+2026-11-04T15:52:17Z AB AE1103-20261104T132502Z-ON2 PROV so=65ff1666d98b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T15:53:21Z AB AE1103-20261104T132502Z-ON2 GATE approved PASS rc=0
+2026-11-04T15:54:31Z AB AE1103-20261104T132502Z-ON2 ACT n=8 pat=af935556 expect=on
+2026-11-04T15:57:09Z AB AE1103-20261104T132502Z-OFF2 PROV so=65ff1666d98b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T15:58:13Z AB AE1103-20261104T132502Z-OFF2 GATE approved PASS rc=0
+2026-11-04T15:59:23Z AB AE1103-20261104T132502Z-OFF2 ACT n=0 pat=af935556 expect=off
+2026-11-04T16:03:13Z AB AE1103-20261104T132502Z-OFF3 PROV so=65ff1666d98b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T16:04:16Z AB AE1103-20261104T132502Z-OFF3 GATE approved PASS rc=0
+2026-11-04T16:05:26Z AB AE1103-20261104T132502Z-OFF3 ACT n=0 pat=af935556 expect=off
+2026-11-04T16:08:59Z AB AE1103-20261104T132502Z-ON3 PROV so=65ff1666d98b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T16:10:02Z AB AE1103-20261104T132502Z-ON3 GATE approved PASS rc=0
+2026-11-04T16:11:12Z AB AE1103-20261104T132502Z-ON3 ACT n=8 pat=af935556 expect=on
+2026-11-04T16:14:15Z AB AE1103-20261104T132502Z-ON4 PROV so=65ff1666d98b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T16:15:19Z AB AE1103-20261104T132502Z-ON4 GATE approved PASS rc=0
+2026-11-04T16:16:29Z AB AE1103-20261104T132502Z-ON4 ACT n=8 pat=af935556 expect=on
+2026-11-04T16:21:12Z AB AE1103-20261104T132502Z-OFF4 PROV so=65ff1666d98b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=bf549ca5f1a9 harness=b36f867f4a41
+2026-11-04T16:22:15Z AB AE1103-20261104T132502Z-OFF4 GATE approved PASS rc=0
+2026-11-04T16:23:25Z AB AE1103-20261104T132502Z-OFF4 ACT n=0 pat=af935556 expect=off
+2026-11-04T16:27:59Z QUEUE-D45R4 window rc=0: T1 t1-08 tokens 1024 8.75 s 117.1 tok/s rounds 334 acc/round 2.06 ms/round 26.2 sha 163032ab7c14 ttft 0.377 dec_s 8.368 dec-ms/round 25.05 toksha f8a7b2f6a529 ids ok;T1 t1-09 tokens 410 2.89 s 141.6 tok/s rounds 102 acc/round 3.01 ms/round 28.4 sha 27ba0d7602a5 ttft 0.348 dec_s 2.546 dec-ms/round 24.96 toksha 189674915573 ids ok;T1 t1-10 tokens 481 3.47 s 138.6 tok/s rounds 124 acc/round 2.87 ms/round 28.0 sha 2390c5c9d7ac ttft 0.352 dec_s 3.119 dec-ms/round 25.16 toksha 4a7143237d32 ids ok;T1 t1-11 tokens 1024 10.34 s 99.0 tok/s rounds 399 acc/round 1.56 ms/round 25.9 sha 568d0e1bcd14 ttft 0.376 dec_s 9.969 dec-ms/round 24.98 toksha 790b5497dfdb ids ok;T1 TOTAL 8445 tokens 69.35 s 121.8 tok/s acc/round 2.25 tok/round 3.25 ms/round 26.7 dec-ms/round 25.02 ttft-mean 0.363 ids-complete 12/12;2026-11-04T16:23:25Z AB AE1103-20261104T132502Z-OFF4 ACT n=0 pat=af935556 expect=off;2026-11-04T16:23:25Z AB AE1103-20261104T132502Z-OFF4 done;restore so=54c1a0e1cc6b
+2026-11-04T16:32:41Z QUEUE-D45R4 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T16:32:41Z QUEUE-D45R4 done
+2026-11-04T16:33:11Z QUEUE-MRV2PROD start: production deploy of mrv2skip1104 kit 5b32a7675583 + VLLM_USE_V2_MODEL_RUNNER=1 on REC 22 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T16:33:25Z QUEUE-MRV2PROD DEPLOY OK: ledger 63 lines
+2026-11-04T16:38:05Z QUEUE-MRV2PROD server up: REC + VLLM_USE_V2_MODEL_RUNNER=1 (adopted) [mrv2-state 8 dummy-chain 1 v1-fallback 0 traceback 0 warm OK; log ${BENCH_DIR}/serve-pp2-MRV2PROD-boot.log]
+2026-11-04T16:38:05Z QUEUE-MRV2PROD done
+2026-11-04T16:38:15Z QUEUE-D55 start depth sweep DS55-11041638: V1 vs MRV2, LENS 2048,8192,16384,32768,65536 x1, (serve-v41pkg-pp2.yaml), report-only
+2026-11-04T16:43:47Z AB DS55-11041638-OFF PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T16:45:27Z AB DS55-11041638-OFF ACT n=0 pat=a2627b15 expect=off
+2026-11-04T16:45:27Z QUEUE-D55 arm OFF rc=0: L2048 155.88tok/s tpr3.97 25.41ms L8192 138.64tok/s tpr3.58 25.77ms L16384 169.91tok/s tpr4.41 25.93ms L32768 155.24tok/s tpr4.10 26.33ms L65536 173.62tok/s tpr4.57 26.28ms 
+2026-11-04T16:50:30Z AB DS55-11041638-ON PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T16:52:06Z AB DS55-11041638-ON ACT n=8 pat=a2627b15 expect=on
+2026-11-04T16:52:06Z QUEUE-D55 arm ON rc=0: L2048 173.58tok/s tpr3.97 22.82ms L8192 154.34tok/s tpr3.56 22.99ms L16384 189.4tok/s tpr4.41 23.26ms L32768 147.34tok/s tpr4.10 27.74ms L65536 193.45tok/s tpr4.57 23.58ms 
+2026-11-04T16:56:44Z AB DS55-11041638-ON2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T16:58:19Z AB DS55-11041638-ON2 ACT n=8 pat=a2627b15 expect=on
+2026-11-04T16:58:19Z QUEUE-D55 arm ON2 rc=0: L2048 173.72tok/s tpr3.97 22.8ms L8192 154.48tok/s tpr3.56 22.97ms L16384 188.71tok/s tpr4.41 23.34ms L32768 147.1tok/s tpr4.10 27.79ms L65536 192.14tok/s tpr4.57 23.75ms 
+2026-11-04T17:03:22Z AB DS55-11041638-OFF2 PROV so=54c1a0e1cc6b sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=08f087f4cb42 harness=b36f867f4a41
+2026-11-04T17:05:00Z AB DS55-11041638-OFF2 ACT n=0 pat=a2627b15 expect=off
+2026-11-04T17:05:00Z QUEUE-D55 arm OFF2 rc=0: L2048 154.33tok/s tpr3.97 25.67ms L8192 137.41tok/s tpr3.56 25.82ms L16384 169.36tok/s tpr4.41 26.01ms L32768 155.13tok/s tpr4.10 26.35ms L65536 170.92tok/s tpr4.57 26.69ms 
+2026-11-04T17:05:00Z QUEUE-D55 D55 SUMMARY L2048: MRV2-V1 -2.59/-2.87 ms/round (V1 25.41/25.67, tpr 3.97/3.97); L8192: MRV2-V1 -2.78/-2.85 ms/round (V1 25.77/25.82, tpr 3.58/3.56); L16384: MRV2-V1 -2.67/-2.67 ms/round (V1 25.93/26.01, tpr 4.41/4.41); L32768: MRV2-V1 +1.41/+1.44 ms/round (V1 26.33/26.35, tpr 4.10/4.10); L65536: MRV2-V1 -2.70/-2.94 ms/round (V1 26.28/26.69, tpr 4.57/4.57)
+2026-11-04T17:05:00Z QUEUE-D55 summary rc=0
+2026-11-04T17:09:37Z QUEUE-D55 server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-04T17:09:37Z QUEUE-D55 done

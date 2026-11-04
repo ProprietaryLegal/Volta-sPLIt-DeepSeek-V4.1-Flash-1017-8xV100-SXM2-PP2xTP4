@@ -16,7 +16,7 @@ MEASURED (observed here, with date), ESTIMATED (arithmetic on measurements), UPS
 Per-request throughput is (1 + accepted drafts per round) / round time, so the same engine shows different tok/s on the
 two sets.
 
-## Decode, tok/s and ms per round (A/B harness, 2026-11-03)
+## Decode, tok/s and ms per round (A/B harness, 2026-11-03/04)
 
 | stage | T=0 tok/s | T=0 ms/round | T=1 tok/s | T=1 ms/round | label |
 |---|---:|---:|---:|---:|---|
@@ -25,12 +25,21 @@ two sets.
 | + plan fusion, keep-batch, fast expert kernels, attention fusions | ~114 | ~27.1 | ~117 | ~27.7 | MEASURED |
 | + expert-kernel instruction diet | ~118 | ~26.2 | ~121 | ~26.8 | ESTIMATED then (−0.871 ms ABBA) |
 | + prefill skip, larger hot ring (all 17 switches; D39, 2 arms) | 118.3-118.5 | 26.4-26.5 | 119.9-120.5 | 27.0-27.1 | MEASURED |
-| **production after the PCIe-switch move (PB1103)** | **119.0** | **26.3** | **120.8** | **26.9** | MEASURED, one boot |
+| production after the PCIe-switch move (PB1103) | 119.0 | 26.3 | 120.8 | 26.9 | MEASURED, one boot |
+| + tiled and fused index scorers, drafter projection sharding: 22 keys, V1 runner (D54A OFF / OFF2, 2026-11-04) | 120.5 / 120.2 | 26.0 / 26.0 | 121.8 / 122.0 | 26.7 / 26.6 | MEASURED, 2 arms |
+| **+ Model Runner V2: the production set (D54A ON / ON2, 2026-11-04)** | **134.2 / 135.0** | **23.4 / 23.2** | **136.6 / 136.4** | **23.8 / 23.8** | MEASURED, 2 arms |
 
 ms per round above includes the first token. Decode-only (harness v2): all 17 switches before the move 25.34-25.54 (T=0,
 four arms) and 25.27-25.35 (T=1); after the move 25.30 (T=0) and 25.20 (T=1), 2.25 accepted drafts per round at T=1.
 Per prompt after the move, T=0: 82.9 / 139.8 / 166.8 tok/s at 1.14 / 2.72 / 3.49 accepted drafts per round; T=1: 98.3-146.0
 tok/s across the 12 prompts. Greedy gate PASS (8 of 8 identical, KL 0 over 1,215 positions).
+
+D54A (2026-11-04, one window, arms OFF ON ASYNC-ON ASYNC-ON2 ON2 OFF2): decode-only ms per round V1 24.98 / 24.98 (T=0)
+and 24.98 / 24.92 (T=1); Model Runner V2 22.26 / 22.22 and 22.17 / 22.19. Per prompt with MRV2, T=0: 93.0 / 159.5 /
+187.4 tok/s at 1.14 / 2.74 / 3.49 accepted drafts per round; T=1: 110.8-164.3 tok/s across the 12 prompts. Output
+bitwise-identical to the V1 arms (T=0 3 of 3, T=1 12 of 12, greedy 8 of 8). The ON arms booted the 22-key set plus
+`VLLM_USE_V2_MODEL_RUNNER=1` with the same code that production now runs; the production boot itself has not been
+benchmarked yet.
 
 ## The PCIe-switch move (2026-11-03)
 
@@ -76,6 +85,45 @@ move, ESTIMATED arithmetic: 32K 20.24 vs 20.68 s (−2.1 %), 150K 86.97 vs 88.51
 | short (A/B harness T=0 and T=1) | – | – | +0.032 ms average | +0.067, +0.069, −0.006, −0.001 | – | texts identical; not detectable |
 
 The "ms per round" column of the table above was measured before it.
+
+**With the fused prefill index scorer** (`INDEX_FUSE=ilp4`, adopted 2026-11-04; test D52R2, V1 runner, arms OFF ON ON2
+OFF2, one prompt per length per arm, MEASURED):
+
+| prompt | first token OFF / OFF2 | first token ON / ON2 | change | output |
+|---|---:|---:|---:|---|
+| 32,718 tokens | 19.945 / 20.166 s | 20.148 / 20.065 s | +0.3 %, noise | identical (sha), all arms |
+| 150,038 tokens | 85.127 / 86.161 s | **81.323 / 81.626 s** | **−4.9 %** | identical |
+| 299,227 tokens | 174.113 / 176.795 s | **158.994 / 158.416 s** | **−9.5 %** | identical |
+
+Change = ON mean against OFF mean (ESTIMATED arithmetic). Decode not detectable (ABBA average +0.015 ms per round).
+Prompt reading at 300K is now about 1,885 tok/s (299,227 / 158.7 s, ESTIMATED).
+
+**With Model Runner V2** (D54A, the 22-key set plus MRV2, single runs; MEASURED):
+
+| prompt | first token | ms per round | sha vs V1 | V1 runner reference (other windows) |
+|---|---:|---:|---|---|
+| 32,718 tokens | 19.37 s | 28.02 | identical | 20.11 / 20.375 s, 26.96 / 26.96 ms per round (PB1103, 17 switches) |
+| 150,038 tokens | 82.77 s | 26.65 | identical | 81.323 / 81.626 s first token (D52R2); 27.88 ms per round (D48 ON) |
+
+Without the prefill-skip hook (D54R, an earlier MRV2 kit) the same 150K prompt took 105.53 s to the first token, and
+the 32K round was also 28.02 ms. The 32K round is about 1.1 ms slower than the V1 reference and the 150K round about
+1.2 ms faster (ESTIMATED: different windows, one run each).
+
+**Same-window depth sweep** (D55, 2026-11-04, report-only; the production set with the V1 runner (OFF arms) and with
+MRV2 (ON arms), arms OFF ON ON2 OFF2, each its own boot, one prompt per length, 512 decode tokens; ms per round,
+MEASURED):
+
+| prompt length | V1 runner, OFF / OFF2 | MRV2, ON / ON2 | MRV2 − V1 | tokens per round (both) |
+|---|---:|---:|---:|---:|
+| 2,048 | 25.41 / 25.67 | 22.82 / 22.80 | −2.59 / −2.87 | 3.97 |
+| 8,192 | 25.77 / 25.82 | 22.99 / 22.97 | −2.78 / −2.85 | 3.56-3.58 |
+| 16,384 | 25.93 / 26.01 | 23.26 / 23.34 | −2.67 / −2.67 | 4.41 |
+| 32,768 | 26.33 / 26.35 | **27.74 / 27.79** | **+1.41 / +1.44** | 4.10 |
+| 65,536 | 26.28 / 26.69 | 23.58 / 23.75 | −2.70 / −2.94 | 4.57 |
+
+MRV2 is 2.6-2.9 ms per round faster at every length except the 32K prompt, where it is about 1.4 ms slower, in both MRV2
+arms. Tokens per round are the same on both runners, so the output path matches and only the round time differs. The
+cause is not known yet (INCONCLUSIVE); the block-table gather and padding are the first suspects and need a device trace.
 
 Earlier, before the gate/up expert kernels and the attention fusions:
 
@@ -128,8 +176,10 @@ passed (36K, 64K and 150K hits identical to cold).
 |---|---:|---:|---:|
 | production, 0.25 GiB KV per GPU | 2,076,870 tokens | 524,288 | 3.96 |
 
-One request at a time today. ESTIMATED: about 215 tok/s combined at two requests (about 1.85x) once the two-request
-build works; the second request fills the bubble between the two pipeline stages.
+One request at a time today. ESTIMATED before any test: about 1.85x combined at two requests, because the second
+request fills the bubble between the two pipeline stages. The V1 two-request build was withdrawn; its successor on
+Model Runner V2 (`single`, `conc2`, `conc3`) is built and waits for its window. Nothing about concurrency on this build
+is measured yet.
 
 ## Upstream claims (not reproduced here)
 

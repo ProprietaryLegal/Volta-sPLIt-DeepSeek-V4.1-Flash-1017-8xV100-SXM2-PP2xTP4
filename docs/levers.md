@@ -2,8 +2,8 @@
 
 Every speed change we tried on this build, with its source and its measured result. A lever is a `VLLM_V41_*` switch
 that defaults off; with the switch off, the code path is unchanged (proved by a CPU test and an AST comparison). Numbers
-are ms per verify round, ABBA averages on the A/B harness ([method](method.md)), 2026-11-03, unless labelled. Negative
-is faster.
+are ms per verify round, ABBA averages on the A/B harness ([method](method.md)), 2026-11-03 or 2026-11-04, unless
+labelled. Negative is faster.
 
 Baseline, the PP2 x TP4 port with no levers: T=0 31.1 ms per round (99.2 tok/s); T=1 31.7 ms (88.0 tok/s, 1.78
 accepted drafts per round).
@@ -86,9 +86,73 @@ accepted drafts per round).
 
   Texts identical in every arm (139 and 89 rounds in each). Short context: ABBA means +0.067, +0.069, −0.006, −0.001 ms
   per round (average +0.032): not detectable, so the short-context headline is unchanged. Adopted on the depth win.
+- **`INDEX_FUSE=ilp4`, ours** ([engine/production/0053-index-fuse.patch](../engine/production/0053-index-fuse.patch),
+  adopted 2026-11-04, test D52R2): the prefill indexer scored each all-reduce tile as `torch.mm`, `relu_`, `mul_` and
+  `sum(1)`, writing an fp16 score tile once and reading it three times. Our kernel (`v41pidx.so`,
+  `VLLM_V41_INDEX_FUSE_LIB`) computes the per-rank head sums of a block of tiles in one launch with `mma.m8n8k4`
+  scores kept in registers; every tile then goes through the same all-reduce, and one top-k launch covers the block.
+  Ideas: 1Cat [#1280](https://github.com/1CatAI/1Cat-vLLM/pull/1280) (Peuqui) and
+  [#1282](https://github.com/1CatAI/1Cat-vLLM/pull/1282), and philbert440's fused SM70 indexer; none of them reaches
+  V4.1's path, so this is new code. The knob value names the FP32 order of the 8-head sum. The GPU check found no order
+  that is bitwise-identical to today's `torch.mm` + `sum` path (`ilp4`: 1 mismatch; the others 1,984-2,528), so the
+  test ran `ilp4` under the near-tie gate (first attempt D52R: correct, not bitwise). MEASURED, depth A/B (OFF ON ON2
+  OFF2, one prompt per length per arm, V1 runner):
+
+  | prompt | first token OFF / OFF2 | first token ON / ON2 | change | output |
+  |---|---:|---:|---:|---|
+  | 32,718 tokens | 19.945 / 20.166 s | 20.148 / 20.065 s | +0.3 %, noise | identical (sha) |
+  | 150,038 tokens | 85.127 / 86.161 s | 81.323 / 81.626 s | −4.9 % | identical |
+  | 299,227 tokens | 174.113 / 176.795 s | 158.994 / 158.416 s | −9.5 % | identical |
+
+  Decode ABBA: +0.013, +0.011, +0.033, +0.003 ms per round (average +0.015), not detectable; T=1 texts 11 of 11 the
+  same; greedy gate 8 of 8 identical. Activation lines on all 8 workers in the ON arms, none in the OFF arms. Adopted
+  on the prefill win.
+
+### Drafter and model runner (adopted 2026-11-04)
+
+- **`DRAFT_MP_SHARD=1`, ours** ([engine/production/0054-draft-mp-shard.patch](../engine/production/0054-draft-mp-shard.patch),
+  test D53R2, adoption D53A2): the drafter's `main_proj` was a replicated linear layer, so every rank of the drafter's
+  board read the full 5,120 x 15,360 FP8 weight (78.6 MB) every round. Now each rank computes its quarter of the output
+  columns with the same split-K as the full call and the results are all-gathered. An output element depends only on
+  its input row, its weight row and the split, so the result is bitwise the replicated one. Prefill (more than 8 rows)
+  keeps the replicated call. MEASURED, ABBAABBA, decode-only ms per round, 8 pairs: −0.081, −0.176, −0.108, −0.091,
+  −0.128, −0.261, −0.068, −0.128 (average **−0.130**; 8 of 8 faster, one-sided sign test p = 0.5^8 ≈ 0.004). Every arm
+  bitwise-identical (T=0 3 of 3, T=1 12 of 12, greedy 8 of 8; A/A identical). The queue's automatic rule called it
+  "not detectable" (its win bar wants a larger effect) and rolled it back. **We adopted it by hand**: it is
+  bitwise-identical, so it carries no quality risk, every pair was faster, and the isolated drafter step agreed (841.7
+  → 640.7 µs, MEASURED in the kit's GPU check). The adoption boot logged the sharded path on all 4 drafter workers
+  after one warm-up request. The same patch carries a second switch, `DRAFT_GEMV2` (a bitwise FP8 mat-vec); it stays
+  off (see Did not work).
+- **Model Runner V2, `VLLM_USE_V2_MODEL_RUNNER=1`** ([engine/production/0055-mrv2.patch](../engine/production/0055-mrv2.patch),
+  tests D54, D54R and D54A; production since 2026-11-04 16:38Z). vLLM's newer model runner, as carried in 1Cat-vLLM,
+  with 1Cat [#1221](https://github.com/1CatAI/1Cat-vLLM/pull/1221)'s DSpark path. Our port adds a DeepSeek-V4.1 model
+  state, the DSpark speculator for V4.1, the pipeline commit hooks, a fix for dummy and capture batches (they must
+  carry positions 0..n-1 for V4.1's Engram hash, which crashed the first port's boot) and the prefill-skip hook (without
+  it the 150K first token was 105.5 s instead of about 83 s). Scheduling stays synchronous. MEASURED:
+
+  | test | kit | decode-only ms per round, ON − OFF (ABBA means) | output |
+  |---|---|---|---|
+  | D54R, 19 keys (17 + the tiled scorer) | capture fix, no skip hook | −2.849, −2.823, −2.884, −2.839 (average −2.849) | bitwise, all arms |
+  | D54A, the 22-key production set | capture fix + skip hook (production) | −2.735, −2.809, −2.756, −2.736 (average **−2.759**; 95 % interval −2.898..−2.620) | bitwise, all arms; A/A identical |
+
+  D54A tok/s, same window: V1 arms T=0 120.5 / 120.2, T=1 121.8 / 122.0; MRV2 arms T=0 **134.2 / 135.0**, T=1
+  **136.6 / 136.4**. The first D54 run passed every text check but its gate failed on a rounding artifact in the
+  checker (top-20 probability mass summing to 1.0000001); the checker was fixed and the saved run passed when re-judged.
+  Depth (D54A, single runs, compared with V1 runs from other windows, so ESTIMATED): 150K first token 82.77 s, 26.65 ms
+  per round; 32K first token 19.37 s, **28.02 ms per round against 26.96 on the V1 runner**. The same-window depth sweep
+  D55 (MEASURED, production set, V1 against MRV2, one prompt per length, two arms each) confirmed both: MRV2 − V1 was
+  −2.59 / −2.87 ms per round at 2K, −2.78 / −2.85 at 8K, −2.67 / −2.67 at 16K, **+1.41 / +1.44 at 32K** and
+  −2.70 / −2.94 at 64K. Only the 32K prompt is slower; its cause is open. Adopted on the decode win and the 150K result,
+  which match the long prompts this build is for. One behaviour differs: a T>0 request that asks for logprobs uses MRV2's rejection sampler
+  instead of our keyed draws, so its text follows the same distribution but is not the same sample as on V1. Every MRV2
+  boot logs it.
 - With all 17 switches, two arms before the PCIe-switch move (D39): T=0 118.3 / 118.5 tok/s, T=1 119.9 / 120.5 tok/s;
   decode-only 25.45 / 25.34 and 25.35 / 25.27 ms per round. After the move, one production boot (2026-11-03): **T=0
   119.0 tok/s, T=1 120.8 tok/s**, decode-only 25.30 / 25.20 ms per round, greedy gate PASS. MEASURED.
+- With the 22-key set on the V1 runner (D54A OFF arms, 2026-11-04): T=0 120.5 / 120.2 tok/s, T=1 121.8 / 122.0;
+  decode-only 24.98 / 24.98 and 24.98 / 24.92 ms per round. With Model Runner V2 on top, today's production set (D54A ON
+  arms): **T=0 134.2 / 135.0 tok/s, T=1 136.6 / 136.4**, decode-only 22.26 / 22.22 and 22.17 / 22.19 ms per round.
+  MEASURED. A full benchmark of the production boot follows the test queue.
 - **Harness v2** (D39): greedy references re-recorded on the deterministic stack (three identical runs), a decode-only
   round metric, and a measured A/A spread under 0.1 ms per round (T=0 −0.096, T=1 −0.077 ms per round decode-only).
 
@@ -119,6 +183,16 @@ accepted drafts per round).
 | 3 or 4 drafts per round | refused at boot | the DSpark checkpoint's block size is 5 |
 | Suggested tiling config for the dense kernel | no gain; greedy 2 of 8 plus near-ties | re-run on the v2 gate above |
 | FP8 tuning set | neutral | — |
+| Expert "wave" down kernel (`EXPERT_WAVE`, test D45R4; [T06](../engine/in-testing/T06-expert-wave-v41k.patch)) | ABBAABBA decode-only, 8 pairs: +0.273, +0.268, +0.161, +0.189, +0.172, +0.089, +0.371, +0.205 ms per round, average **+0.216** (95 % interval +0.118..+0.314); gate PASS, T=1 texts the same; A/A +0.044 / +0.011 | rejected: detectably slower. Its earlier runs (D45, D45R-D45R3) stopped in their own checks: a ptxas parser, a stale build cache, sanitizer memory; each was fixed |
+| Split-K tensor-core decode attention (`ATTN_HMMA=2`, 64 keys, D47R2) | ABBA means −0.156, −0.164, −0.116, −0.137 (average −0.143), not detectable; near-tie gate FAIL: a confident token moved in 6 of 8 rows, logprob drift at 318 of 326 positions, KL mean 0.0058 (max 0.25) | rejected on quality. GPU checks were clean after a racecheck fix (one `__syncwarp`); 32 keys not tried, same numerics |
+| FP16-packed shared-expert down kernel (`SHARED_DOWN`, D49R) | near-tie gate FAIL: a confident token moved, KL max 0.17; decode 25.30 → 25.15 ms per round | rejected on quality |
+| Fused layer transition without the early path (`FTNE`, D50R2) | ABBAABBA, 8 pairs, average +0.020 ms per round (95 % interval −0.078..+0.118); identical 8 of 8, texts 11 of 11 | neutral; not adopted |
+| Probabilistic sharded drafts for thinking mode (D46; [T04](../engine/in-testing/T04-psample-shard.patch), as in 1Cat #183) | four variants at T=1: +0.05..+0.15 accepted drafts per round, but +0.5..+1.55 ms per round, so −3.1 to +0.6 % tok/s (three of the four 95 % intervals span 0; the fourth is below 0) | the extra drafter work eats the acceptance gain |
+| Draft temperature 1.2 / 0.85 (D46) | T=1 −2.9 % tok/s / about 0 | – |
+| At most 3 verified drafts per round (`dspark_max_verification_tokens: 3`, D46) | T=0 −2.09 ms per round but −0.877 accepted drafts per round: −14.5 % tok/s | shorter rounds do not pay for the lost drafts |
+| Bitwise FP8 drafter mat-vec (`DRAFT_GEMV2`, D53R) | both drafter switches together: identical, average −0.069 ms per round, 7 of 8 pairs faster, not detectable; isolated drafter step 780.1 µs both, 627.8 µs sharding only, 828.2 µs before | slower than the sharding alone; off |
+| Lookup-free IQ1_M expert repack | no-go before a build: 360 → 344 instructions per 256 weights (−4.4 % against a 20 % gate), +35.7 % bytes | not worth the memory; dropped |
+| Asynchronous scheduling on Model Runner V2 (D54R, D54A) | against V1: −2.872 / −2.860 ms per round; against synchronous MRV2: −0.085..−0.117 (D54A), no verdict run; bitwise | about 0.4 %; it needs its own serving profile; off for now |
 
 Prefill chunk: 8,192 kept. 4,096 saved 5.6 % of first-token time at 32K, 1.8 % at 64K and nothing at 128K (greedy 6 of 8
 plus 2 near-ties), then failed the approved near-tie gate on its re-test (above); 2,048 and 16,384 were slower; above
@@ -130,4 +204,4 @@ different base; re-tested and kept, above) and the all-reduce push path (a port 
 
 ## In testing
 
-The rest of the queue, D42R and D44-D55: [roadmap.md](roadmap.md).
+The rest of the queue (D51R4, D44R5, the concurrency window, the final benchmark and D40): [roadmap.md](roadmap.md).

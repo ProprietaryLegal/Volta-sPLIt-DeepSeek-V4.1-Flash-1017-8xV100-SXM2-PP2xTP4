@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-11-04 (afternoon): Model Runner V2, fused prefill index scorer and drafter sharding adopted
+
+- **New headline, MEASURED** (test D54A, the production set, two arms): T=0 **134.2 / 135.0 tok/s**, T=1 **136.6 / 136.4
+  tok/s**, decode-only 22.26 / 22.22 and 22.17 / 22.19 ms per round. It replaces 119.0 / 120.8. The production boot itself
+  is benchmarked after the queue.
+- Adopted Model Runner V2 (`VLLM_USE_V2_MODEL_RUNNER=1`, our DeepSeek-V4.1 port, `engine/production/0055-mrv2.patch`):
+  −2.759 ms per round (95 % −2.898..−2.620), bitwise in every arm. In production since 16:38Z.
+- Adopted the fused prefill index scorer (`VLLM_V41_INDEX_FUSE=ilp4`, `0053-index-fuse.patch`, `v41pidx.so`; D52R2):
+  first token −4.9 % at 150K and −9.5 % at 300K (300K now about 159 s), near-tie gate PASS, output identical.
+- Adopted drafter projection sharding (`VLLM_V41_DRAFT_MP_SHARD=1`, `0054-draft-mp-shard.patch`; D53R2, by hand in
+  D53A2): −0.130 ms per round, 8 of 8 pairs faster, bitwise.
+- `rec.env` now has 23 keys.
+- Did not work: expert wave kernel (D45R4, +0.216 ms), split-K tensor-core attention (D47R2) and the shared-expert down
+  kernel (D49R) on the near-tie gate, fused transition (D50R2, neutral), sharded probabilistic drafts and draft
+  temperatures (D46), the bitwise FP8 drafter mat-vec (stays off), the IQ1_M repack (no-go before a build).
+- Depth sweep D55 (MEASURED, same window): Model Runner V2 is 2.6-2.9 ms per round faster than V1 at 2K, 8K, 16K and
+  64K, and about 1.4 ms slower at the 32K prompt. The 32K cause is open.
+- Withdrawn: the V1 two-request build (D42). Concurrency is being rebuilt on Model Runner V2 and waits for its window.
+- In the queue: D51R4, D44R5, the concurrency window, the final benchmark, D40.
+- `evidence/queue-log.txt` extended through D55.
+
 ## 2026-11-04: tiled decode index scorer adopted; no cross-hardware comparisons
 
 - Adopted `VLLM_V41_INDEX_TILED=1` (D48), our register-tiled decode index scorer (`engine/production/0052-index-tiled.patch`,

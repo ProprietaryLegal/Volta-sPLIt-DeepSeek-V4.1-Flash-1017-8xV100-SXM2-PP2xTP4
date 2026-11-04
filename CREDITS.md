@@ -43,6 +43,7 @@ or misdescribed anyone's contribution, please open an issue and we will correct 
   ([philbert440/DeepSeek-V4.1-Flash-1017-EXL3-franken-v100](https://huggingface.co/philbert440/DeepSeek-V4.1-Flash-1017-EXL3-franken-v100))
   our previous build ran on ([previous-build/](previous-build/)). Its 1Cat pull request
   [#1243](https://github.com/1CatAI/1Cat-vLLM/pull/1243) (rivetphilbot) stacks on our #1031.
+- **Peuqui** ([#1280](https://github.com/1CatAI/1Cat-vLLM/pull/1280), the SM75 fused scorer for DeepSeek-V4) and **Phil Tompkins** (the fused SM70 indexer in philbert440/deepseek-v4.1-v100): the fused-scorer idea behind our fused prefill index scorer (adopted 2026-11-04), together with series patch #1282; our kernel is new code for V4.1's path.
 - **Dennis Vertzyas** ([dnv2003/v100-skinny](https://github.com/dnv2003/v100-skinny)): Volta kernel and bandwidth
   findings (the ~879 GB/s read ceiling). Cited and linked; no code copied.
 - **Our Sparks research lane**: the code of the plan fusion, router floor and coupled-draft sharding levers (research

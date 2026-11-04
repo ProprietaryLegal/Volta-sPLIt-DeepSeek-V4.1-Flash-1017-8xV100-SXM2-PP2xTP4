@@ -1,6 +1,6 @@
 # Production
 
-What serves on our host as of 2026-11-03, and how to reproduce it.
+What serves on our host as of 2026-11-04 (afternoon), and how to reproduce it.
 
 ## Hardware
 
@@ -39,7 +39,18 @@ The files we serve are byte-identical to those revisions. 1Cat #1277's README li
    `v41k.so` (MEASURED 2026-11-03: `build.py`, `v41k.cu`, `v41k_diet.cuh`, `v41k_fast.cuh`, `v41k_fast_gu.cuh`). The
    patch also carries the L1 evict-first weight-load hints of the kernel-variant sweep, because the diet was built on
    that branch; those hints alone measured neutral (−0.04 ms).
-3. Build vLLM into a venv (torch 2.10.0+cu128; pins in
+3. Then, in order (each MEASURED with `git apply --check` on the tree before it):
+   [engine/production/0053-index-fuse.patch](../engine/production/0053-index-fuse.patch) (our fused prefill index
+   scorer and its `v41pidx` library; result tree `421c427444a4`),
+   [engine/production/0054-draft-mp-shard.patch](../engine/production/0054-draft-mp-shard.patch) (drafter projection
+   sharding, plus the `DRAFT_GEMV2` switch that stays off and its `v41draft` library; result tree `09cf8cc28b7b`), and
+   [engine/production/0055-mrv2.patch](../engine/production/0055-mrv2.patch) (our DeepSeek-V4.1 port of Model Runner V2;
+   result tree `e85291152ae9`). After all three, 25 of the 26 files they touch are byte-identical to the deployed files
+   (MEASURED 2026-11-04). The 26th, `v41pidx/build.py`, differs only in one docstring line, where we replaced our host's
+   name. Build `v41pidx.so` with `python build.py` in `benchmarks/deepseek_v41/v41pidx/` (`V41PIDX_BUILD_DIR`
+   overrides the output directory). `v41draft.so` (`benchmarks/deepseek_v41/v41draft/`) is only needed for
+   `DRAFT_GEMV2`; production does not build it.
+4. Build vLLM into a venv (torch 2.10.0+cu128; pins in
    [forks/1cat-4xv100-tp4/configs/requirements-venv.txt](../forks/1cat-4xv100-tp4/configs/requirements-venv.txt)) and
    `v41k` with `TORCH_CUDA_ARCH_LIST=7.0` on the serving machine ([engine/README.md](../engine/README.md)).
 
@@ -53,6 +64,7 @@ placeholders (substitute them, e.g. with `envsubst`, before use):
   gate);
 - `kv-cache-memory-bytes: 268435456` (0.25 GiB per GPU) gives a KV pool of 2,076,870 tokens (MEASURED, engine log):
   3.96 full-length requests; the target is 2M tokens in total, so spare memory goes to speed, not more KV;
+- Model Runner V2 (`VLLM_USE_V2_MODEL_RUNNER=1`, in `rec.env`) since 2026-11-04;
 - FULL CUDA graphs for 1-6 tokens per step, synchronous scheduling, chunked prefill, prefix caching;
 - every expert resident (`expert_cache_offload_fraction: 0`); packed-KV GPU hot ring of 524,288 positions
   (`VLLM_V41_KV_HOT_POSITIONS`, in `rec.env`);
@@ -74,12 +86,18 @@ PLAN_FUSE PP_KEEP_BATCH EXPERT_FAST FUSE_ATTN_PREP FUSE_ATTN_POST     each VLLM_
 VLLM_V41_EXPERT_DIET=3 VLLM_V41_ROUTE_FAST=1 VLLM_V41_ROUTE_WARPS=4
 VLLM_V41_PREFILL_SKIP_ROWS=3072 VLLM_V41_KV_HOT_POSITIONS=524288
 VLLM_V41_INDEX_TILED=1 (VLLM_V41_INDEX_TILED_LIB = the v41idx.so path)        adopted 2026-11-04
+VLLM_V41_INDEX_FUSE=ilp4 (VLLM_V41_INDEX_FUSE_LIB = the v41pidx.so path)      adopted 2026-11-04
+VLLM_V41_DRAFT_MP_SHARD=1                                                     adopted 2026-11-04
+VLLM_USE_V2_MODEL_RUNNER=1                                                    adopted 2026-11-04
 HOT_REFILL on by default
 ```
 
-The first 17 keys are the production boot's recorded set of 2026-11-03; `INDEX_TILED` joined on 2026-11-04 (long
-context only; short context unchanged). MEASURED on the 17-key set after the PCIe-switch move: T=0
-119.0 tok/s, T=1 120.8 tok/s, decode-only 25.30 / 25.20 ms per round.
+23 keys. The first 17 are the production boot's recorded set of 2026-11-03. `INDEX_TILED` and `INDEX_FUSE` joined on
+2026-11-04 (long context only; short context unchanged), then `DRAFT_MP_SHARD` and Model Runner V2. MEASURED on the
+17-key set after the PCIe-switch move: T=0 119.0 tok/s, T=1 120.8 tok/s, decode-only 25.30 / 25.20 ms per round. On the
+22-key set with Model Runner V2, which is the production set (test D54A ON arms, 2026-11-04): T=0 134.2 / 135.0 tok/s,
+T=1 136.6 / 136.4, decode-only 22.26 / 22.22 and 22.17 / 22.19 ms per round. The production boot itself (up
+2026-11-04 16:38Z, adoption activation lines present) has not been benchmarked yet.
 
 ## Start
 

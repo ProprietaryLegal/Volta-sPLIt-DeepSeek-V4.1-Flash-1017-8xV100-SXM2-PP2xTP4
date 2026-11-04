@@ -38,8 +38,9 @@ other people that this build uses is in [CREDITS.md](../CREDITS.md), not here.
 
 Our own engine work for this build is published here rather than upstream so far: the PP2 x TP4 port of #1277 and the
 lever stack ([forks/1cat-4xv100-tp4/](../forks/1cat-4xv100-tp4/), patches 0001 and 0028-0049; a few are our ports of
-other people's designs, credited per lever in [levers.md](levers.md)), the expert-kernel diet
-([engine/production/](../engine/production/)) and the changes in testing ([engine/in-testing/](../engine/in-testing/)).
+other people's designs, credited per lever in [levers.md](levers.md)), the six production patches in
+[engine/production/](../engine/production/) (expert-kernel diet, prefill skip, tiled decode index scorer, fused prefill
+index scorer, drafter projection sharding, and our DeepSeek-V4.1 port of Model Runner V2) and the changes in testing ([engine/in-testing/](../engine/in-testing/)).
 Patches 0002-0027 of the series are other people's upstream work (1Cat main and open PRs), carried so the tree rebuilds
 exactly; they are credited in [CREDITS.md](../CREDITS.md).
 

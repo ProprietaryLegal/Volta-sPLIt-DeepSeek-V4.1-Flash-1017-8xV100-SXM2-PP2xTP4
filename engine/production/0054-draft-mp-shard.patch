@@ -1,0 +1,1682 @@
+diff --git a/benchmarks/deepseek_v41/v41draft/build.py b/benchmarks/deepseek_v41/v41draft/build.py
+new file mode 100644
+index 000000000..8fdbb2d94
+--- /dev/null
++++ b/benchmarks/deepseek_v41/v41draft/build.py
+@@ -0,0 +1,36 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Build the V4.1 v41draft CUDA extension (SM70) into ./build/v41draft.so.
++
++VLLM_V41_DRAFT_GEMV2 loads it from VLLM_V41_DRAFT_GEMV_LIB, defaulting to
++benchmarks/deepseek_v41/v41draft/build/v41draft.so beside VLLM_V41K_LIB's v41k
++directory. V41DRAFT_BUILD_DIR overrides the build directory.
++"""
++
++import os
++
++from torch.utils import cpp_extension as ce
++
++here = os.path.dirname(os.path.abspath(__file__))
++build = os.environ.get("V41DRAFT_BUILD_DIR") or os.path.join(here, "build")
++os.makedirs(build, exist_ok=True)
++ce.load(
++    name="v41draft",
++    sources=[os.path.join(here, "v41draft.cu")],
++    extra_cuda_cflags=[
++        "-O3",
++        "-gencode",
++        "arch=compute_70,code=sm_70",
++        "--expt-relaxed-constexpr",
++        "-std=c++20",
++        "-U__CUDA_NO_HALF_OPERATORS__",
++        "-U__CUDA_NO_HALF_CONVERSIONS__",
++        "-U__CUDA_NO_HALF2_OPERATORS__",
++        "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
++    ],
++    extra_cflags=["-O3", "-std=c++20"],
++    is_python_module=False,
++    build_directory=build,
++    verbose=False,
++)
++print("built", os.path.join(build, "v41draft.so"))
+diff --git a/benchmarks/deepseek_v41/v41draft/check_v41draft.py b/benchmarks/deepseek_v41/v41draft/check_v41draft.py
+new file mode 100644
+index 000000000..e8064d55c
+--- /dev/null
++++ b/benchmarks/deepseek_v41/v41draft/check_v41draft.py
+@@ -0,0 +1,440 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""GPU check for lane drafter1103 (VLLM_V41_DRAFT_GEMV2, VLLM_V41_DRAFT_MP_SHARD). Owner window only, server down.
++
++  python -I check_v41draft.py --lib NEW.so --v41k DEPLOYED_v41k.so --src STAGE [--quick] [--no-time] [--json out]
++  python -I check_v41draft.py --lib NEW.so --v41k ... --src STAGE --sanitize        (small grid for compute-sanitizer)
++  python -I check_v41draft.py --lib NEW.so --v41k ... --src STAGE --tp4             (4 visible GPUs, real vLLM TP group)
++
++The reference is the DEPLOYED v41k fp8_gemv (+ fp8_reduce), i.e. today's draft numerics. Every comparison is bitwise
++(int16 view of the fp16 outputs). Steps:
++  ops       v41draft.fp8_gemv2 == v41k.fp8_gemv for every production draft shape and edge shapes, M 1..8, both layouts,
++            the production split and forced splits 1/2/3/odd, with and without bias; outputs and partials poisoned
++            with NaN first; split-K counters back to zero after every call
++  oracle    v41k.fp8_gemv == the numpy CPU oracle (fp8_ref.py) on small shapes (the contract the kernel is held to)
++  mutant    a wrong split (production + 1) must change some output bits, so the comparison is sensitive
++  linear    the staged fp8_linear.py with VLLM_V41_DRAFT_GEMV2=1 (registered counters, row-slice weights) == the
++            installed fp8_block32_linear (knob off), through the module the engine calls
++  shard     4 row shards with the full call's split, concatenated == the replicated call (v41k and v41draft)
++  graph     CUDA-graph capture + 50 replays of fp8_gemv2 (split-K path) == eager; counters zero after
++  trap      a stale counter traps (subprocess; illegal state is loud, never a wrong answer)
++  time      graph-replayed us/call, old vs new (layout 0/1), weights rotated through > 64 MB so nothing sits in L2;
++            per-round sums over the 33 draft GEMV call sites (sizing/drafter_sites.txt)
++  --tp4     one process per GPU, vLLM init_distributed_environment + TP group of 4, the staged dspark
++            _draft_mp_shard (real tensor_model_parallel_all_gather) == the replicated fp8_block32_linear on every rank
++"""
++
++import argparse
++import importlib.util
++import json
++import os
++import statistics
++import subprocess
++import sys
++import time
++import types
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++
++ap = argparse.ArgumentParser()
++ap.add_argument("--lib", required=True, help="the v41draft.so under test")
++ap.add_argument("--v41k", default=os.environ.get("VLLM_V41K_LIB"), help="deployed v41k.so (reference)")
++ap.add_argument("--src", default=os.path.abspath(os.path.join(HERE, "..", "..", "..")), help="staged tree root")
++ap.add_argument("--quick", action="store_true")
++ap.add_argument("--sanitize", action="store_true")
++ap.add_argument("--no-time", action="store_true")
++ap.add_argument("--tp4", action="store_true")
++ap.add_argument("--trap-child", action="store_true", help=argparse.SUPPRESS)
++ap.add_argument("--tp4-child", type=int, default=-1, help=argparse.SUPPRESS)
++ap.add_argument("--tp4-port", type=int, default=0, help=argparse.SUPPRESS)
++ap.add_argument("--json")
++args = ap.parse_args()
++if not args.v41k or not os.path.exists(args.v41k):
++    raise SystemExit(f"check_v41draft: reference v41k.so not found ({args.v41k!r}); pass --v41k or VLLM_V41K_LIB")
++os.environ["VLLM_V41K_LIB"] = args.v41k
++
++import numpy as np  # noqa: E402
++import torch  # noqa: E402
++
++torch.ops.load_library(args.v41k)
++torch.ops.load_library(args.lib)
++K41, KD = torch.ops.v41k, torch.ops.v41draft
++if KD.version() != 1:
++    raise SystemExit(f"v41draft version {KD.version()} != 1")
++dev = "cuda"
++results = {"device": torch.cuda.get_device_name(), "capability": list(torch.cuda.get_device_capability()),
++           "lib": args.lib, "v41k": args.v41k, "checks": []}
++fails = []
++
++
++def record(name, ok, **info):
++    results["checks"].append(dict(name=name, ok=bool(ok), **info))
++    if not ok:
++        fails.append(name)
++    print(("PASS " if ok else "FAIL ") + name + (" " + json.dumps(info) if info else ""), flush=True)
++
++
++def gemv_split(n, k):
++    ctas = (n + 31) // 32
++    return max(1, min(k // 512 if k >= 512 else 1, (240 + ctas - 1) // ctas))
++
++
++def make(m, n, k, seed, bias=False):
++    g = torch.Generator(device="cpu").manual_seed(seed)
++    x = (torch.randn(m, k, generator=g) * 0.5).half()
++    w = torch.randint(0, 256, (n, k), generator=g, dtype=torch.uint8)
++    w[(w & 0x7F) == 0x7F] ^= 1  # E4M3 NaN codes do not occur in checkpoints
++    s = torch.randint(112, 124, ((n + 31) // 32, k // 32), generator=g, dtype=torch.uint8)
++    b = (torch.randn(n, generator=g) * 0.1).half() if bias else None
++    return x.to(dev), w.to(dev), s.to(dev), (b.to(dev) if b is not None else None)
++
++
++def old(x, w, s, split, bias=None):
++    m, n = x.shape[0], w.shape[0]
++    out = torch.full((m, n), float("nan"), dtype=torch.half, device=dev)
++    part = torch.full((split * m * n if (split > 1 or bias is not None) else 1,), float("nan"), device=dev)
++    K41.fp8_gemv(out, x, w, s, part, split, bias)
++    return out
++
++
++def new(x, w, s, split, bias=None, layout=0, counters=None):
++    m, n = x.shape[0], w.shape[0]
++    out = torch.full((m, n), float("nan"), dtype=torch.half, device=dev)
++    part = torch.full((split * m * n if (split > 1 or bias is not None) else 1,), float("nan"), device=dev)
++    c = torch.zeros((n + 15) // 16, dtype=torch.int32, device=dev) if counters is None else counters
++    KD.fp8_gemv2(out, x, w, s, part, split, bias, c, layout)
++    return out, c
++
++
++def beq(a, b):
++    return torch.equal(a.view(torch.int16), b.view(torch.int16))
++
++
++# production draft GEMV sites (sizing/drafter_sites.txt, 50 traced rounds): name, N, K, M, calls per round
++SITES = [("main_proj", 5120, 15360, 6, 1), ("ctx_wkv", 512, 5120, 6, 3), ("wq_a", 1280, 5120, 5, 3),
++         ("wq_b", 8192, 1280, 5, 3), ("wkv", 512, 5120, 5, 3), ("wo_a", 1024, 4096, 5, 6),
++         ("wo_b", 5120, 2048, 5, 3), ("shared_gate_up", 576, 5120, 5, 6), ("shared_down", 5120, 576, 5, 3)]
++EDGE = [(32, 32), (40, 64), (100, 544), (16, 512), (48, 1056), (1280, 15360), (33, 4096)]
++
++# ----------------------------------------------------------------------------------------------- trap child
++if args.trap_child:
++    x, w, s, _ = make(4, 512, 5120, 3)
++    split = gemv_split(512, 5120)
++    c = torch.full((32,), split, dtype=torch.int32, device=dev)  # stale: already at gridDim.y
++    out, _ = new(x, w, s, split, counters=c)
++    torch.cuda.synchronize()
++    print("TRAP-CHILD: no trap", flush=True)
++    sys.exit(0)
++
++# ----------------------------------------------------------------------------------------------- sanitize grid
++if args.sanitize:
++    n_runs, bad = 0, 0
++    for (n, k) in [(100, 544), (512, 5120), (40, 64)]:
++        for m in (1, 5, 8):
++            for split in sorted({1, 3, gemv_split(n, k)}):
++                if split > max(1, k // 16):
++                    continue
++                for bias in (False, True):
++                    x, w, s, b = make(m, n, k, 11 + m, bias)
++                    ref = old(x, w, s, split, b)
++                    for layout in ((0, 1) if m <= 6 else (0,)):
++                        got, c = new(x, w, s, split, b, layout)
++                        n_runs += 1
++                        bad += int(not beq(got, ref)) + int(bool(c.any()))
++    torch.cuda.synchronize()
++    print(f"SANITIZE runs {n_runs} mismatches {bad}")
++    sys.exit(1 if bad else 0)
++
++
++# ----------------------------------------------------------------------------------------------- module loading
++def load_file(name, path):
++    spec = importlib.util.spec_from_file_location(name, path)
++    mod = importlib.util.module_from_spec(spec)
++    sys.modules[name] = mod
++    spec.loader.exec_module(mod)
++    return mod
++
++
++def staged_modules(gemv2):
++    """Installed (deployed, knob off) fp8_linear + the staged draft_gemv / fp8_linear / dspark with the knobs set."""
++    for key in ("VLLM_V41_DRAFT_GEMV2", "VLLM_V41_DRAFT_MP_SHARD"):
++        os.environ.pop(key, None)
++    import vllm.models.deepseek_v41.fp8_linear as ref_lin
++
++    if getattr(ref_lin, "_DRAFT_GEMV2", False):
++        raise SystemExit("installed fp8_linear has the GEMV2 knob on; the reference must be knob-off")
++    os.environ["VLLM_V41_DRAFT_GEMV2"] = "1" if gemv2 else "0"
++    os.environ["VLLM_V41_DRAFT_MP_SHARD"] = "1"
++    os.environ["VLLM_V41_DRAFT_GEMV_LIB"] = args.lib
++    pkg = os.path.join(args.src, "vllm", "models", "deepseek_v41")
++    dg = load_file("vllm.models.deepseek_v41.draft_gemv", os.path.join(pkg, "draft_gemv.py"))
++    setattr(sys.modules["vllm.models.deepseek_v41"], "draft_gemv", dg)
++    new_lin = load_file("vllm.models.deepseek_v41.v41draft_check_fp8_linear", os.path.join(pkg, "fp8_linear.py"))
++    assert new_lin._DRAFT_GEMV2 == gemv2 and dg.GEMV2 == gemv2 and dg.MP_SHARD
++    return ref_lin, dg, new_lin, pkg
++
++
++def fp8(w, s):
++    return w.view(torch.float8_e4m3fn), s.view(torch.float8_e8m0fnu)
++
++
++# ----------------------------------------------------------------------------------------------- TP4 child / parent
++if args.tp4_child >= 0:
++    rank = args.tp4_child
++    torch.cuda.set_device(rank)
++    from vllm.config import VllmConfig, set_current_vllm_config
++    from vllm.distributed import ensure_model_parallel_initialized, init_distributed_environment
++    from vllm.distributed.parallel_state import get_tensor_model_parallel_rank
++
++    with set_current_vllm_config(VllmConfig()):
++        init_distributed_environment(world_size=4, rank=rank, local_rank=rank,
++                                     distributed_init_method=f"tcp://127.0.0.1:{args.tp4_port}")
++        ensure_model_parallel_initialized(4, 1)
++        assert get_tensor_model_parallel_rank() == rank
++        ok_all = True
++        for gemv2 in (False, True):
++            if gemv2:
++                for key in list(sys.modules):
++                    if key.endswith("draft_gemv") or key.endswith("v41draft_check_fp8_linear") or "dspark_stage" in key:
++                        del sys.modules[key]
++            ref_lin, dg, new_lin, pkg = staged_modules(gemv2)
++            dsp = load_file("vllm.models.deepseek_v41.dspark_stage", os.path.join(pkg, "dspark.py"))
++            assert dsp._DRAFT_MP_SHARD
++            for m in (1, 5, 6, 8):
++                x, w, s, _ = make(m, 5120, 15360, 1000 + m)  # same seed on every rank: replicated weight
++                wf, sf = fp8(w, s)
++                if gemv2:
++                    dg.register_counters(wf)
++                main_proj = types.SimpleNamespace(weight=wf, weight_scale_inv=sf, bias=None)
++                assert dsp._draft_mp_scope(x)
++                got = dsp._draft_mp_shard(main_proj, x)
++                want = ref_lin.fp8_block32_linear(x, wf, sf)
++                torch.cuda.synchronize()
++                ok = beq(got, want) and got.is_contiguous() and got.shape == want.shape
++                ok_all &= ok
++                print(f"TP4 rank {rank} gemv2 {int(gemv2)} M{m}: {'bitwise' if ok else 'DIFFERS'}", flush=True)
++                if gemv2:
++                    dg._STATE.update({"starts": [], "ranges": []})
++    sys.exit(0 if ok_all else 1)
++
++if args.tp4:
++    import socket
++
++    with socket.socket() as so:
++        so.bind(("127.0.0.1", 0))
++        port = so.getsockname()[1]
++    if torch.cuda.device_count() != 4:
++        raise SystemExit(f"--tp4 needs exactly 4 visible GPUs, found {torch.cuda.device_count()}")
++    base = [sys.executable, "-I", os.path.abspath(__file__), "--lib", args.lib, "--v41k", args.v41k, "--src", args.src,
++            "--tp4-port", str(port)]
++    procs = [subprocess.Popen(base + ["--tp4-child", str(r)]) for r in range(4)]
++    rcs = [p.wait(timeout=1200) for p in procs]
++    record("tp4: dspark _draft_mp_shard (vLLM TP group, real all-gather) == replicated, every rank", rcs == [0] * 4,
++           rcs=rcs)
++    print("ALL OK" if not fails else "FAILED: " + ", ".join(fails))
++    sys.exit(0 if not fails else 1)
++
++# ----------------------------------------------------------------------------------------------- ops
++t0 = time.time()
++shapes = [(n, k) for _, n, k, _, _ in SITES] + EDGE
++ms = (1, 5, 6, 8) if args.quick else tuple(range(1, 9))
++n_cmp, bad, bad_counters, worst = 0, [], 0, None
++for (n, k) in shapes:
++    prod = gemv_split(n, k)
++    splits = sorted({prod, 1, 2, 3, 7} if not args.quick else {prod, 1, 3})
++    splits = [sp for sp in splits if sp <= max(1, k // 16)]
++    for m in ms:
++        for bias in (False, True):
++            x, w, s, b = make(m, n, k, n * 7 + k + m, bias)
++            for sp in splits:
++                ref = old(x, w, s, sp, b)
++                for layout in ((0, 1) if m <= 6 else (0,)):
++                    got, c = new(x, w, s, sp, b, layout)
++                    n_cmp += 1
++                    if not beq(got, ref):
++                        bad.append(f"N{n} K{k} M{m} split{sp} bias{int(bias)} layout{layout}")
++                    bad_counters += int(bool(c.any()))
++                    if bool(torch.isnan(got).any()):
++                        bad.append(f"NaN N{n} K{k} M{m} split{sp}")
++torch.cuda.synchronize()
++record("ops: fp8_gemv2 == v41k fp8_gemv bitwise (production + edge shapes, M, splits, bias, layouts)", not bad,
++       comparisons=n_cmp, mismatches=len(bad), first=bad[:5], seconds=round(time.time() - t0, 1))
++record("ops: split-K counters are zero after every call", bad_counters == 0, nonzero=bad_counters)
++
++# oracle
++sys.path.insert(0, HERE)
++import fp8_ref  # noqa: E402
++
++o_bad = []
++for (m, n, k, sp, bias) in [(1, 32, 512, 1, False), (5, 64, 1024, 2, True), (6, 40, 544, 3, False),
++                            (8, 96, 1536, 1, True), (3, 33, 2048, 4, False)]:
++    x, w, s, b = make(m, n, k, 77 + m, bias)
++    want = fp8_ref.ref_gemv(x.cpu().numpy(), w.cpu().numpy(), s.cpu().numpy(), sp,
++                            None if b is None else b.cpu().numpy())
++    got = old(x, w, s, sp, b).cpu().numpy()
++    if not np.array_equal(got.view(np.uint16), want.view(np.uint16)):
++        o_bad.append(f"M{m} N{n} K{k} split{sp}")
++record("oracle: v41k fp8_gemv == numpy oracle (fp8_ref.py) bitwise", not o_bad, mismatches=o_bad)
++
++# mutant
++x, w, s, _ = make(6, 5120, 15360, 5)
++sp = gemv_split(5120, 15360)
++record("mutant: split+1 changes output bits (comparison is sensitive)",
++       not beq(new(x, w, s, sp + 1)[0], old(x, w, s, sp)), split=sp)
++
++# linear (the module the engine calls)
++ref_lin, dg, new_lin, pkg = staged_modules(True)
++l_bad, l_n = [], 0
++for name, n, k, m0, _ in SITES:
++    # One site at a time: the previous site's weight is freed and the caching allocator may hand its
++    # address to this one, so clear the registry first (the TP4 child does the same per case).
++    dg._STATE.update({"starts": [], "ranges": []})
++    x, w, s, _ = make(6, n, k, 31 + n)
++    wf, sf = fp8(w, s)
++    dg.register_counters(wf)
++    for m in ms:
++        xm = x[:m].contiguous()
++        for bias in (None, (torch.randn(n, device=dev) * 0.1).half()):
++            l_n += 1
++            if not beq(new_lin.fp8_block32_linear(xm, wf, sf, bias), ref_lin.fp8_block32_linear(xm, wf, sf, bias)):
++                l_bad.append(f"{name} M{m} bias{int(bias is not None)}")
++    if n % 64 == 0:  # a 32-row aligned slice (grouped wo_a / shard style) finds its parent's counters
++        half_rows = n // 2
++        ws, ss = wf[half_rows:], sf[half_rows // 32:]
++        l_n += 1
++        if not beq(new_lin.fp8_block32_linear(x, ws, ss), ref_lin.fp8_block32_linear(x, ws, ss)):
++            l_bad.append(f"{name} slice")
++torch.cuda.synchronize()
++record("linear: staged fp8_block32_linear (GEMV2=1) == installed (knob off), bitwise", not l_bad, calls=l_n,
++       mismatches=l_bad)
++try:
++    new_lin.fp8_block32_linear(*(lambda t: (t[0], *fp8(t[1], t[2])))(make(5, 64, 512, 9)))
++    record("linear: an unregistered weight raises (no silent path)", False)
++except RuntimeError as e:
++    record("linear: an unregistered weight raises (no silent path)", "no counters registered" in str(e))
++
++# shard (single GPU simulation of MP_SHARD)
++sh_bad = []
++for m in (1, 5, 6, 8):
++    x, w, s, _ = make(m, 5120, 15360, 500 + m)
++    sp = gemv_split(5120, 15360)
++    full = old(x, w, s, sp)
++    rows = 5120 // 4
++    for impl in ("v41k", "v41draft"):
++        parts = []
++        for r in range(4):
++            wr, sr = w[r * rows:(r + 1) * rows], s[r * rows // 32:(r + 1) * rows // 32]
++            parts.append(old(x, wr, sr, sp) if impl == "v41k" else new(x, wr, sr, sp)[0])
++        if not beq(torch.cat(parts, dim=1), full):
++            sh_bad.append(f"{impl} M{m}")
++record("shard: 4 row shards (full split) concatenated == replicated main_proj, bitwise", not sh_bad,
++       mismatches=sh_bad)
++
++# graph replay
++x, w, s, b = make(5, 1280, 5120, 41, True)
++sp = gemv_split(1280, 5120)
++c = torch.zeros(80, dtype=torch.int32, device=dev)
++gout = torch.empty(5, 1280, dtype=torch.half, device=dev)
++part = torch.empty(sp * 5 * 1280, device=dev)
++st = torch.cuda.Stream()
++st.wait_stream(torch.cuda.current_stream())
++with torch.cuda.stream(st):
++    KD.fp8_gemv2(gout, x, w, s, part, sp, b, c, 0)
++torch.cuda.current_stream().wait_stream(st)
++g = torch.cuda.CUDAGraph()
++with torch.cuda.graph(g):
++    KD.fp8_gemv2(gout, x, w, s, part, sp, b, c, 0)
++g_ok = True
++for i in range(50):
++    gout.fill_(float("nan"))
++    if i == 25:
++        x.copy_((torch.randn_like(x.float()) * 0.5).half())
++    g.replay()
++    torch.cuda.synchronize()
++    g_ok &= beq(gout, old(x, w, s, sp, b))
++record("graph: 50 replays (input changed mid-way) == eager v41k, counters zero", g_ok and not bool(c.any()))
++
++# trap
++tp = subprocess.run([sys.executable, "-I", os.path.abspath(__file__), "--lib", args.lib, "--v41k", args.v41k,
++                     "--trap-child"], capture_output=True, text=True, timeout=300)
++record("trap: a stale split-K counter traps (process fails loudly)",
++       tp.returncode != 0 and "no trap" not in tp.stdout, rc=tp.returncode,
++       tail=(tp.stderr.strip().splitlines() or [""])[-1][:160])
++
++
++# ----------------------------------------------------------------------------------------------- timing
++def graphed_us(fns, reps=20, rounds=5, iters=20):
++    """fns: list of callables, cycled (weights rotate so the measured traffic comes from HBM)."""
++    s2 = torch.cuda.Stream()
++    s2.wait_stream(torch.cuda.current_stream())
++    with torch.cuda.stream(s2):
++        for f in fns:
++            f()
++    torch.cuda.current_stream().wait_stream(s2)
++    gr = torch.cuda.CUDAGraph()
++    with torch.cuda.graph(gr):
++        for i in range(reps):
++            fns[i % len(fns)]()
++    for _ in range(3):
++        gr.replay()
++    out = []
++    for _ in range(rounds):
++        a, e = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
++        a.record()
++        for _ in range(iters):
++            gr.replay()
++        e.record()
++        e.synchronize()
++        out.append(a.elapsed_time(e) * 1000.0 / (iters * reps))
++    return round(statistics.median(out), 2)
++
++
++def timed(n, k, m, split, rows=None):
++    copies = max(2, min(20, (64 << 20) // (n * k) + 1))
++    sets = [make(m, n, k, 900 + i) for i in range(copies)]
++    if rows is not None:
++        sets = [(x, w[:rows].contiguous(), s[:rows // 32].contiguous(), b) for x, w, s, b in sets]
++    nn = sets[0][1].shape[0]
++    outs = torch.empty(m, nn, dtype=torch.half, device=dev)
++    part = torch.empty(split * m * nn, device=dev)
++    cs = [torch.zeros((nn + 15) // 16, dtype=torch.int32, device=dev) for _ in sets]
++    row = {"old": graphed_us([lambda t=t: K41.fp8_gemv(outs, t[0], t[1], t[2], part, split, None) for t in sets])}
++    for layout in ((0, 1) if m <= 6 else (0,)):
++        row[f"new_l{layout}"] = graphed_us(
++            [lambda t=t, c=c, L=layout: KD.fp8_gemv2(outs, t[0], t[1], t[2], part, split, None, c, L)
++             for t, c in zip(sets, cs)])
++    return row
++
++
++if not args.no_time:
++    timing, tot = {}, {"old": 0.0, "new_l0": 0.0, "new_l1": 0.0, "new_best": 0.0}
++    for name, n, k, m, calls in SITES:
++        row = timed(n, k, m, gemv_split(n, k))
++        timing[name] = dict(row, M=m, calls=calls)
++        best = min(v for kk, v in row.items() if kk.startswith("new"))
++        for key in ("old", "new_l0", "new_l1"):
++            tot[key] += calls * row.get(key, row["new_l0"])
++        tot["new_best"] += calls * best
++        print("TIME", name, f"M{m}", f"x{calls}", json.dumps(row), flush=True)
++    sh = timed(5120, 15360, 6, gemv_split(5120, 15360), rows=1280)
++    timing["main_proj_shard_1280"] = sh
++    print("TIME main_proj_shard_1280 M6 x1", json.dumps(sh), flush=True)
++    mp = timing["main_proj"]
++    tot_mp_old = tot["old"] - mp["old"] + sh["old"]
++    tot_mp_new = tot["new_best"] - min(mp["new_l0"], mp["new_l1"]) + min(sh["new_l0"], sh["new_l1"])
++    summary = {"round_old_us": round(tot["old"], 1), "round_gemv2_l0_us": round(tot["new_l0"], 1),
++               "round_gemv2_l1_us": round(tot["new_l1"], 1), "round_gemv2_best_us": round(tot["new_best"], 1),
++               "round_mp_shard_only_us": round(tot_mp_old, 1), "round_both_best_us": round(tot_mp_new, 1),
++               "note": "isolated graphed kernels; excludes the fp8_reduce launch gaps and the all-gather (~15 us)"}
++    results["timing_us"], results["timing_round"] = timing, summary
++    print("TIME round", json.dumps(summary), flush=True)
++    record("timing collected (informational)", True)
++
++results["ok"] = not fails
++results["fails"] = fails
++results["finished"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
++if args.json:
++    with open(args.json, "w") as f:
++        json.dump(results, f, indent=1)
++print("ALL OK" if not fails else "FAILED: " + ", ".join(fails))
++sys.exit(0 if not fails else 1)
+diff --git a/benchmarks/deepseek_v41/v41draft/fp8_ref.py b/benchmarks/deepseek_v41/v41draft/fp8_ref.py
+new file mode 100644
+index 000000000..77790c0fd
+--- /dev/null
++++ b/benchmarks/deepseek_v41/v41draft/fp8_ref.py
+@@ -0,0 +1,108 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""CPU oracle for the DSpark draft FP8 GEMV (numpy only, no torch, no GPU).
++
++ref_gemv(x, w, scales, split, bias) computes, in exactly the order of
++#1277's v41k fp8_gemv_kernel<M> + fp8_reduce (v41k.cu, "FP8 (e4m3, UE8M0
++32x32 block scales) small-M GEMV for the DSpark draft"):
++  * lane l of split s walks the 16-code chunks k0 = kbeg + 16 l + 512 j;
++  * dot = fmaf chain over the chunk (E4M3 -> fp16 bit placement -> fp32);
++  * acc_l = fmaf(dot, scale, acc_l); the xor butterfly 16, 8, 4, 2, 1;
++  * direct (split 1, no bias): fp16(partial); else fp16(0 + p_0 + ... + bias).
++fmaf is emulated exactly: the product of two float32 is exact in float64,
++TwoSum recovers the error of the float64 sum, and the one case where float64
++rounding can change the float32 result (the sum lands exactly on a float32
++midpoint) is resolved by the error's sign.
++"""
++
++import numpy as np
++
++F32 = np.float32
++
++
++def e4m3_fp16_bits(codes):
++    """The fp16 bit pattern the kernels give an E4M3 code: E4M3 x 2^-8."""
++    b = codes.astype(np.uint32)
++    return (((b & 0x7F) << 7) | ((b & 0x80) << 8)).astype(np.uint16)
++
++
++def e4m3_decode(codes):
++    return e4m3_fp16_bits(codes).view(np.float16).astype(F32)
++
++
++def ue8m0_scale(e):
++    e = e.astype(np.uint32)
++    hi = (e + 8) < 255
++    a = ((e + 8) << 23).astype(np.uint32).view(F32)
++    with np.errstate(over="ignore"):
++        b = (e << 23).astype(np.uint32).view(F32) * F32(256.0)
++    return np.where(hi, a, b).astype(F32)
++
++
++def fmaf(a, b, c):
++    """Exact float32 fused multiply-add, elementwise (round to nearest even)."""
++    a64, b64, c64 = (np.asarray(v, F32).astype(np.float64) for v in (a, b, c))
++    p = a64 * b64  # exact: 24 + 24 significant bits
++    s = p + c64
++    bb = s - p
++    t = (p - (s - bb)) + (c64 - bb)  # s + t == p + c exactly (TwoSum)
++    with np.errstate(over="ignore", invalid="ignore"):
++        r = s.astype(F32)
++        up = np.nextafter(r, F32(np.inf))
++        down = np.nextafter(r, F32(-np.inf))
++        mid_up = (r.astype(np.float64) + up.astype(np.float64)) * 0.5
++        mid_dn = (r.astype(np.float64) + down.astype(np.float64)) * 0.5
++        r = np.where((s == mid_up) & (t > 0), up, r)
++        r = np.where((s == mid_dn) & (t < 0), down, r)
++    return r.astype(F32)
++
++
++def ksplit_of(k, split):
++    ksplit = (k + split - 1) // split
++    return (ksplit + 15) // 16 * 16
++
++
++def gemv_split(n, k):
++    """fp8_block32_linear's split for its GEMV path (see fp8_linear.py)."""
++    ctas = (n + 31) // 32
++    return max(1, min(k // 512 if k >= 512 else 1, (240 + ctas - 1) // ctas))
++
++
++def ref_partials(x, w, scales, split):
++    """[split, M, N] float32 partials (lane 0 of the butterfly)."""
++    x = np.asarray(x, np.float16).astype(F32)
++    m, k = x.shape
++    n = w.shape[0]
++    wv = e4m3_decode(np.asarray(w, np.uint8))  # [N, K]
++    sc = ue8m0_scale(np.asarray(scales, np.uint8))  # [N/32, K/32]
++    ks = ksplit_of(k, split)
++    out = np.zeros((split, m, n), F32)
++    for s in range(split):
++        kbeg, kend = s * ks, min(k, s * ks + ks)
++        acc = np.zeros((32, m, n), F32)
++        for lane in range(32):
++            k0 = kbeg + lane * 16
++            while k0 < kend:
++                dot = np.zeros((m, n), F32)
++                for i in range(16):
++                    dot = fmaf(wv[None, :, k0 + i], x[:, None, k0 + i], dot)
++                scale = sc[np.arange(n) // 32, k0 // 32][None, :]
++                acc[lane] = fmaf(dot, scale, acc[lane])
++                k0 += 512
++        idx = np.arange(32)
++        for o in (16, 8, 4, 2, 1):
++            acc = (acc + acc[idx ^ o]).astype(F32)
++        out[s] = acc[0]
++    return out
++
++
++def ref_gemv(x, w, scales, split, bias=None):
++    parts = ref_partials(x, w, scales, split)
++    if split == 1 and bias is None:
++        return parts[0].astype(np.float16)
++    v = np.zeros(parts.shape[1:], F32)
++    for s in range(split):
++        v = (v + parts[s]).astype(F32)
++    if bias is not None:
++        v = (v + np.asarray(bias, np.float16).astype(F32)[None, :]).astype(F32)
++    return v.astype(np.float16)
+diff --git a/benchmarks/deepseek_v41/v41draft/test_v41draft_cpu.py b/benchmarks/deepseek_v41/v41draft/test_v41draft_cpu.py
+new file mode 100644
+index 000000000..932538f91
+--- /dev/null
++++ b/benchmarks/deepseek_v41/v41draft/test_v41draft_cpu.py
+@@ -0,0 +1,380 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""CPU tests for lane drafter1103 (VLLM_V41_DRAFT_GEMV2 / VLLM_V41_DRAFT_MP_SHARD). No GPU, no compile.
++
++  python -I test_v41draft_cpu.py --repo <worktree> [--base-rev 7e9a15686]
++  python -I test_v41draft_cpu.py --knob-off-only --file NEW=BASE [--file NEW=BASE ...]
++
++Checks (each prints OK/FAIL; exit 0 only if all pass):
++  knob-off   fp8_linear.py and dspark.py with every VLLM_V41_DRAFT_* statement removed are AST-identical to the base
++  decode     the kernel's two-codes-at-once E4M3 decode gives the same fp16 bits as the per-code formula (all 65536
++             pairs) and those bits are the OCP E4M3 value x 2^-8 (all 254 finite codes; independent float math)
++  fmaf       the oracle's exact float32 fma equals exact rational arithmetic (fractions) on random and tie cases
++  split      draft_gemv.gemv_split equals the split statements of base fp8_block32_linear for every N, K in a grid
++  ksplit     v41draft.cu's ksplit formula is v41k.cu's (text)
++  oracle     ref_gemv against an independent float64 dot product (tolerance check of the oracle itself)
++  shard      4 row shards computed with the full call's split and concatenated == the replicated call, bitwise,
++             through draft_gemv.sharded_projection (gemv replaced by the oracle); and with each shard's own split
++             (the mutant) they differ, so the check is sensitive
++  counters   draft_gemv.register_counters / counters_for: slices of a weight find its counters, overlaps and
++             unregistered weights raise
++"""
++
++import argparse
++import ast
++import fractions
++import importlib.util
++import os
++import random
++import re
++import subprocess
++import sys
++import types
++
++import numpy as np
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++sys.path.insert(0, HERE)
++import fp8_ref  # noqa: E402
++
++RESULTS = []
++
++
++def report(name, ok, detail=""):
++    RESULTS.append(ok)
++    print(f"{'OK  ' if ok else 'FAIL'} {name}{': ' + detail if detail else ''}", flush=True)
++
++
++# ---------------------------------------------------------------- knob-off identity
++def _names(node):
++    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
++
++
++def _strip(tree):
++    """Remove the drafter1103 additions: module names _DRAFT_*, functions _draft_*, `if <uses _DRAFT_*>:` blocks
++    without else, and `import os` at module level of fp8_linear.py (the base imports no os there)."""
++
++    class T(ast.NodeTransformer):
++        def generic_visit(self, node):
++            for field, value in ast.iter_fields(node):
++                if isinstance(value, list) and value and isinstance(value[0], ast.stmt):
++                    keep = []
++                    for st in value:
++                        if isinstance(st, ast.If) and any(x.startswith("_DRAFT_") for x in _names(st.test)):
++                            if st.orelse:
++                                raise ValueError("knob-off strip: an `if _DRAFT_*` with else is not allowed")
++                            continue
++                        if isinstance(st, ast.Assign) and all(
++                            isinstance(t, ast.Name) and t.id.startswith("_DRAFT_") for t in st.targets
++                        ):
++                            continue
++                        if isinstance(st, ast.FunctionDef) and st.name.startswith("_draft_"):
++                            continue
++                        keep.append(st)
++                    setattr(node, field, keep)
++            return super().generic_visit(node)
++
++    return T().visit(tree)
++
++
++def knob_off_sensitivity(base_src, name):
++    """The strip must not hide a real change: a mutant outside the knob code has to fail the comparison."""
++    mutant = base_src.replace("import torch\n", "import torch\nimport math\n", 1)
++    knobbed = mutant.replace("import torch\n", "import torch\n_DRAFT_X = 1\n", 1)
++    a = ast.dump(_strip(ast.parse(knobbed)), include_attributes=False)
++    report(f"knob-off checker catches a non-knob change in {name}", mutant != base_src and a != ast.dump(
++        ast.parse(base_src), include_attributes=False))
++
++
++def knob_off(new_src, base_src, name):
++    new = ast.parse(new_src)
++    base = ast.parse(base_src)
++    base_imports_os = any(
++        isinstance(s, ast.Import) and any(a.name == "os" for a in s.names) for s in base.body
++    )
++    if not base_imports_os:
++        new.body = [s for s in new.body if not (isinstance(s, ast.Import) and [a.name for a in s.names] == ["os"])]
++    stripped = _strip(new)
++    a, b = ast.dump(stripped, include_attributes=False), ast.dump(base, include_attributes=False)
++    report(f"knob-off {name}", a == b, "AST identical after removing VLLM_V41_DRAFT_* code" if a == b else "DIFFERS")
++    # the knob names must actually be read from the environment in the new file
++    if "_DRAFT_" in new_src:
++        ok = bool(re.search(r'VLLM_V41_DRAFT_(GEMV2|MP_SHARD)"', new_src))
++        report(f"knob-read {name}", ok)
++
++
++# ---------------------------------------------------------------- decode
++def byte_perm(x, y, sel):
++    """CUDA __byte_perm (default mode) on Python ints."""
++    src = [(x >> (8 * i)) & 0xFF for i in range(4)] + [(y >> (8 * i)) & 0xFF for i in range(4)]
++    return sum(src[(sel >> (4 * i)) & 0x7] << (8 * i) for i in range(4))
++
++
++def check_decode():
++    bad = 0
++    for word in range(0, 1 << 16):
++        for high in (False, True):
++            w32 = word if not high else word << 16
++            p = byte_perm(w32, 0, 0x4342 if high else 0x4140)
++            bits = ((p & 0x007F007F) << 7) | ((p & 0x00800080) << 8)
++            lo, hi = bits & 0xFFFF, bits >> 16
++            b0 = (w32 >> (16 if high else 0)) & 0xFF
++            b1 = (w32 >> (24 if high else 8)) & 0xFF
++            want = [int(fp8_ref.e4m3_fp16_bits(np.array([b], np.uint8))[0]) for b in (b0, b1)]
++            bad += (lo != want[0]) + (hi != want[1])
++    report("decode pair == per-code bits (65536 x 2 cases)", bad == 0, f"{bad} mismatches")
++    # OCP E4M3: s eeee mmm, bias 7, subnormal e=0: m/8 * 2^-6; 0x7f/0xff NaN
++    bad = 0
++    for b in range(256):
++        if b & 0x7F == 0x7F:
++            continue
++        s = -1.0 if b & 0x80 else 1.0
++        e, m = (b >> 3) & 0xF, b & 7
++        val = s * (m / 8.0) * 2.0**-6 if e == 0 else s * (1 + m / 8.0) * 2.0 ** (e - 7)
++        got = float(fp8_ref.e4m3_decode(np.array([b], np.uint8))[0])
++        bad += got != val * 2.0**-8 or (val == 0 and np.signbit(got) != (s < 0))
++    report("decode bits == OCP E4M3 value x 2^-8 (254 finite codes, signed zeros)", bad == 0, f"{bad} mismatches")
++
++
++# ---------------------------------------------------------------- fmaf
++def exact_fma(a, b, c):
++    a, b, c = (float(np.float32(v)) for v in (a, b, c))
++    r = fractions.Fraction(a) * fractions.Fraction(b) + fractions.Fraction(c)
++    # round the rational to float32, nearest even: bracket with float32 neighbours
++    f = np.float32(float(r))  # float(r) rounds to nearest double; fix up below
++    for _ in range(3):
++        lo, hi = (np.nextafter(f, np.float32(-np.inf)), f) if fractions.Fraction(float(f)) > r else (f, np.nextafter(f, np.float32(np.inf)))
++        dlo, dhi = r - fractions.Fraction(float(lo)), fractions.Fraction(float(hi)) - r
++        if dlo < dhi:
++            f = lo
++        elif dhi < dlo:
++            f = hi
++        else:
++            f = lo if (int(np.float32(lo).view(np.uint32)) & 1) == 0 else hi
++    return np.float32(f)
++
++
++def check_fmaf():
++    rng = random.Random(1103)
++    cases = []
++    for _ in range(4000):
++        cases.append(tuple(np.float32(rng.uniform(-4, 4) * 2.0 ** rng.randint(-30, 30)) for _ in range(3)))
++    # near-ties: a*b + c lands on/near float32 midpoints
++    for _ in range(4000):
++        a = np.float32(1 + rng.randint(0, 1 << 12) / (1 << 12))
++        b = np.float32(1 + rng.randint(0, 1 << 12) / (1 << 12))
++        c = np.float32(-float(np.float32(float(a) * float(b))) + rng.choice([0, 1, -1]) * 2.0**-24)
++        cases.append((a, b, c))
++    for _ in range(2000):  # products with exactly representable ties against large c
++        a = np.float32(2.0 ** rng.randint(-10, 10))
++        b = np.float32(1 + rng.randint(0, 255) / 256)
++        c = np.float32(rng.choice([1, -1]) * 2.0 ** rng.randint(10, 30))
++        cases.append((a, b, c))
++    a, b, c = (np.array(v, np.float32) for v in zip(*cases))
++    got = fp8_ref.fmaf(a, b, c)
++    bad = sum(int(got[i].view(np.uint32)) != int(exact_fma(*cases[i]).view(np.uint32)) for i in range(len(cases)))
++    report(f"fmaf oracle == exact rational ({len(cases)} cases incl. ties)", bad == 0, f"{bad} mismatches")
++
++
++# ---------------------------------------------------------------- split / ksplit
++def check_split(base_fp8_src):
++    tree = ast.parse(base_fp8_src)
++    fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "fp8_block32_linear")
++    stmts = []
++    for node in ast.walk(fn):
++        if isinstance(node, ast.Assign):
++            tgt = [t.id for t in node.targets if isinstance(t, ast.Name)]
++            if tgt in (["ctas"], ["split"]) and "torch" not in ast.unparse(node):
++                stmts.append(node)
++    src = "\n".join(ast.unparse(s) for s in stmts[:2])
++    ok = src.startswith("ctas = ") and "split = max(1" in src
++    report("split statements found in base fp8_block32_linear", ok, src.replace("\n", "; "))
++    if not ok:
++        return
++    sys.path.insert(0, os.path.dirname(DRAFT_GEMV_PATH))
++    dg = load_draft_gemv()
++    bad = 0
++    for n in list(range(32, 9000, 32)) + [576, 1280, 5120, 8192, 15360]:
++        for k in [32, 64, 480, 512, 544, 576, 1024, 1280, 2048, 4096, 5120, 15360]:
++            env = {"n": n, "k": k}
++            exec(src, {"max": max, "min": min}, env)
++            bad += env["split"] != dg.gemv_split(n, k) or env["split"] != fp8_ref.gemv_split(n, k)
++    report("gemv_split == base fp8_block32_linear split (N x K grid)", bad == 0, f"{bad} mismatches")
++
++
++def check_ksplit(v41k_cu, v41draft_cu):
++    old = re.search(r"int ksplit = \(K \+ split - 1\) / split;\s*ksplit = \(ksplit \+ 15\) / 16 \* 16;", v41k_cu)
++    new = re.search(
++        r"int ksplit = \(K \+ split - 1\) / split;[^\n]*\n\s*return \(ksplit \+ 15\) / 16 \* 16;", v41draft_cu
++    )
++    report("ksplit formula: v41draft.cu == v41k.cu", bool(old and new))
++
++
++# ---------------------------------------------------------------- oracle / shard
++def rand_case(rng, m, n, k, nan_codes=False):
++    x = (rng.standard_normal((m, k)) * rng.choice([0.01, 1, 8])).astype(np.float16)
++    w = rng.integers(0, 256, (n, k), dtype=np.uint8)
++    if not nan_codes:
++        w[(w & 0x7F) == 0x7F] ^= 1
++    scales = rng.integers(112, 124, ((n + 31) // 32, k // 32), dtype=np.uint8)
++    return x, w, scales
++
++
++def check_oracle():
++    rng = np.random.default_rng(1103)
++    worst = 0.0
++    for m, n, k, split in [(1, 32, 512, 1), (5, 64, 1024, 2), (6, 96, 1280, 3), (3, 32, 2048, 4)]:
++        x, w, s = rand_case(rng, m, n, k)
++        got = fp8_ref.ref_gemv(x, w, s, split).astype(np.float64)
++        wv = fp8_ref.e4m3_decode(w).astype(np.float64) * np.repeat(
++            np.repeat(fp8_ref.ue8m0_scale(s).astype(np.float64), 32, 0)[:n], 32, 1
++        )
++        want = x.astype(np.float64) @ wv.T
++        err = np.max(np.abs(got - want) / (np.abs(want) + 1e-3 * np.max(np.abs(want))))
++        worst = max(worst, float(err))
++    report("oracle vs float64 dot (sanity, not bitwise)", worst < 2e-3, f"max rel err {worst:.2e}")
++
++
++def load_draft_gemv():
++    """Import draft_gemv.py without vllm: stub vllm.logger."""
++    if "draft_gemv_under_test" in sys.modules:
++        return sys.modules["draft_gemv_under_test"]
++    import logging
++
++    vllm = types.ModuleType("vllm")
++    vlog = types.ModuleType("vllm.logger")
++    vlog.init_logger = logging.getLogger
++    sys.modules.setdefault("vllm", vllm)
++    sys.modules["vllm.logger"] = vlog
++    spec = importlib.util.spec_from_file_location("draft_gemv_under_test", DRAFT_GEMV_PATH)
++    mod = importlib.util.module_from_spec(spec)
++    sys.modules["draft_gemv_under_test"] = mod
++    spec.loader.exec_module(mod)
++    return mod
++
++
++def check_shard():
++    import torch
++
++    dg = load_draft_gemv()
++    rng = np.random.default_rng(7)
++    world = 4
++    calls = []
++
++    def oracle_gemv(x, weight, scales, split, bias=None):
++        calls.append((tuple(weight.shape), split))
++        return torch.from_numpy(
++            fp8_ref.ref_gemv(x.numpy(), weight.view(torch.uint8).numpy(), scales.view(torch.uint8).numpy(), split,
++                             None if bias is None else bias.numpy())
++        )
++
++    def gather(part, dim):
++        return gathered.setdefault("parts", []).append(part) or part
++
++    orig = dg.gemv
++    dg.gemv = oracle_gemv
++    try:
++        bad = 0
++        for m, n, k in [(6, 512, 1536), (1, 256, 1024), (5, 384, 2048)]:
++            x, w, s = rand_case(rng, m, n, k)
++            full = fp8_ref.ref_gemv(x, w, s, fp8_ref.gemv_split(n, k))
++            parts = []
++            for rank in range(world):
++                gathered = {}
++                dg.sharded_projection(
++                    torch.from_numpy(x), torch.from_numpy(w).view(torch.float8_e4m3fn),
++                    torch.from_numpy(s).view(torch.float8_e8m0fnu), rank, world, gather
++                )
++                parts.append(gathered["parts"][0].numpy())
++            cat = np.concatenate(parts, axis=1)
++            bad += int(not np.array_equal(cat.view(np.uint16), full.view(np.uint16)))
++            # mutant: each shard with its own (local-N) split
++            local = np.concatenate(
++                [
++                    fp8_ref.ref_gemv(x, w[r * n // world : (r + 1) * n // world],
++                                     s[r * n // world // 32 : (r + 1) * n // world // 32],
++                                     fp8_ref.gemv_split(n // world, k))
++                    for r in range(world)
++                ],
++                axis=1,
++            )
++            same_split = fp8_ref.gemv_split(n // world, k) == fp8_ref.gemv_split(n, k)
++            if not same_split and np.array_equal(local.view(np.uint16), full.view(np.uint16)):
++                bad += 1
++                print(f"  mutant not caught at M{m} N{n} K{k}")
++        splits = sorted(set(c[1] for c in calls))
++        report("shard: concat of 4 shards (full split) == replicated, bitwise; local-split mutant differs", bad == 0,
++               f"{bad} failures; splits used {splits}")
++        # the projection must refuse misaligned N
++        try:
++            dg.sharded_projection(torch.zeros(1, 64, dtype=torch.float16),
++                                  torch.zeros(96, 64, dtype=torch.uint8).view(torch.float8_e4m3fn),
++                                  torch.zeros(3, 2, dtype=torch.uint8).view(torch.float8_e8m0fnu), 0, 4, gather)
++            report("shard: N not a multiple of 32*TP raises", False)
++        except ValueError:
++            report("shard: N not a multiple of 32*TP raises", True)
++    finally:
++        dg.gemv = orig
++
++
++def check_counters():
++    import torch
++
++    dg = load_draft_gemv()
++    dg._STATE.update({"starts": [], "ranges": []})
++    a = torch.zeros(5120, 1024, dtype=torch.uint8)
++    b = torch.zeros(512, 1024, dtype=torch.uint8)
++    dg.register_counters(a)
++    dg.register_counters(b)
++    ok = dg.counters_for(a).numel() == 320 and dg.counters_for(b).numel() == 32
++    ok &= dg.counters_for(a[1280:2560]) is dg.counters_for(a)
++    ok &= int(dg.counters_for(a).abs().sum()) == 0
++    raised = 0
++    for fn in (lambda: dg.counters_for(torch.zeros(32, 1024, dtype=torch.uint8)),
++               lambda: dg.register_counters(a[32:64])):
++        try:
++            fn()
++        except RuntimeError:
++            raised += 1
++    report("counters: slices find their weight's counters; unregistered and overlapping raise", ok and raised == 2)
++
++
++def main():
++    global DRAFT_GEMV_PATH
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--repo", default=os.path.abspath(os.path.join(HERE, "..", "..", "..")))
++    ap.add_argument("--base-rev", default="7e9a15686")
++    ap.add_argument("--knob-off-only", action="store_true")
++    ap.add_argument("--file", action="append", default=[], help="NEW=BASE pairs for --knob-off-only")
++    ap.add_argument("--quick", action="store_true", help="skip the exhaustive decode and slow oracle checks")
++    a = ap.parse_args()
++    DRAFT_GEMV_PATH = os.path.join(a.repo, "vllm/models/deepseek_v41/draft_gemv.py")
++    if a.knob_off_only:
++        for pair in a.file:
++            new, base = pair.split("=", 1)
++            knob_off(open(new).read(), open(base).read(), os.path.basename(new))
++    else:
++        rel = "vllm/models/deepseek_v41"
++
++        def base(path):
++            return subprocess.run(["git", "-C", a.repo, "show", f"{a.base_rev}:{path}"], check=True,
++                                  capture_output=True, text=True).stdout
++
++        for f in ("fp8_linear.py", "dspark.py"):
++            knob_off(open(os.path.join(a.repo, rel, f)).read(), base(f"{rel}/{f}"), f)
++            knob_off_sensitivity(base(f"{rel}/{f}"), f)
++        if not a.quick:
++            check_decode()
++        check_fmaf()
++        check_split(base(f"{rel}/fp8_linear.py"))
++        check_ksplit(base("benchmarks/deepseek_v41/v41k/v41k.cu"),
++                     open(os.path.join(HERE, "v41draft.cu")).read())
++        check_oracle()
++        check_shard()
++        check_counters()
++    print("ALL OK" if all(RESULTS) else f"FAILED {RESULTS.count(False)} of {len(RESULTS)}")
++    return 0 if all(RESULTS) else 1
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/benchmarks/deepseek_v41/v41draft/v41draft.cu b/benchmarks/deepseek_v41/v41draft/v41draft.cu
+new file mode 100644
+index 000000000..35493dc19
+--- /dev/null
++++ b/benchmarks/deepseek_v41/v41draft/v41draft.cu
+@@ -0,0 +1,360 @@
++// SPDX-License-Identifier: Apache-2.0
++// SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++//
++// v41draft: the DSpark draft's FP8 (E4M3, UE8M0 32x32 block scales) small-M GEMV for SM70, BITWISE equal to
++// #1277's v41k fp8_gemv_kernel<M> + fp8_reduce (VLLM_V41_DRAFT_GEMV2, lane drafter1103).
++//
++// Arithmetic contract (copied from v41k fp8_gemv_kernel, unchanged): for output (m, n) and split s
++// (kbeg = s * ksplit, kend = min(K, kbeg + ksplit), ksplit = round_up(ceil(K / split), 16)), "lane" l = 0..31 walks
++// the 16-code chunks k0 = kbeg + 16 l + 512 j < kend in ascending j:
++//     dot = 0; for i in 0..15: dot = fmaf(e4m3_as_fp16(w[n, k0 + i]), float(x[m, k0 + i]), dot)
++//     acc_l = fmaf(dot, scale(n, k0 / 32), acc_l)                      (acc_l starts at 0)
++// then the 32 lane values are summed by the xor butterfly 16, 8, 4, 2, 1 (lane 0's value is the partial).
++// split == 1 and no bias: out = half_rn(partial). Otherwise out = half_rn(((0 + p_0) + p_1) + ... + float(bias)).
++// e4m3_as_fp16(b) is the fp16 with bits ((b & 0x7f) << 7) | ((b & 0x80) << 8) (= E4M3 x 2^-8, exact, subnormals
++// included); the 2^8 is folded into the scale: e + 8 < 255 ? 2^(e + 8 - 127) : 2^(e - 127) * 256.
++//
++// What is different (scheduling only; every FP operation and its operand order is the same):
++//   * rows of x are split over two warp groups (M = 5 -> 3 + 2, M = 6 -> 3 + 3, M = 4 -> 2 + 2, M = 7/8 -> 4 + 3/4),
++//     so a warp holds at most 3 (4) rows of x in registers: <= 128 registers for M <= 6 (old: 162 at M 6), two
++//     256-thread CTAs per SM instead of one for M 6. The two groups read the same weight rows (L1 hits) and run the
++//     same code (the second group of M 5/7 computes one zero row of x that it never stores);
++//   * E4M3 -> fp16 for two codes at once (byte_perm + two shifts + one lop3 per pair), the same 16-bit patterns;
++//   * the next chunk's weight words and scales are loaded before the current chunk is computed;
++//   * split-K partials are summed by the last CTA of each row block (threadfence + atomic counter, fixed split order,
++//     __ldcg reads), so there is no second fp8_reduce launch. The counter is reset by that CTA; a counter that is not
++//     below the split count on entry is an illegal state and traps (no silent wrong sums).
++// CTA: 256 threads, 8 warps x 4 rows; 32 rows per CTA with one warp group (M <= 3), 16 rows with two. Grid
++// (ceil(N / rows), split). Workspace: partials [split, M, N] fp32 (caller-owned, no init) and counters int32
++// [>= ceil(N / 16)] that start at zero and are left at zero (allocate once per weight; never shared by two
++// concurrently running launches). No allocation, no host sync: CUDA-graph capturable.
++//
++// Compile check without torch:
++//   nvcc -DV41DRAFT_NO_TORCH -std=c++17 -O3 -gencode=arch=compute_70,code=sm_70 -Xptxas=-v -cubin -o x.cubin v41draft.cu
++#include <cuda_fp16.h>
++#include <cstdint>
++
++#ifndef V41DRAFT_NO_TORCH
++#include <ATen/cuda/CUDAContext.h>
++#include <c10/cuda/CUDAGuard.h>
++#include <torch/all.h>
++#include <torch/library.h>
++#endif
++
++namespace v41draft {
++
++constexpr int kThreads = 256;
++constexpr int64_t kVersion = 1;  // bumped on any change of the kernel or its contract
++
++struct Params {
++  half* out;              // [M, N]
++  float* partials;        // [split, M, N] (unused when direct)
++  int* counters;          // [ceil(N / rows)] (unused when direct)
++  const half* x;          // [M, K]
++  const uint8_t* w;       // [N, K] E4M3 codes
++  const uint8_t* scales;  // [ceil(N / 32), K / 32] UE8M0 exponents
++  const half* bias;       // [N] or nullptr
++  int M, N, K, ksplit, split, direct;
++};
++
++// Two E4M3 codes (bytes 0 and 1 of p32 = b0 | b1 << 16) -> the two fp16 patterns of the contract, as floats.
++__device__ __forceinline__ float2 e4m3_pair(uint32_t word, bool high) {
++  const uint32_t p = __byte_perm(word, 0u, high ? 0x4342u : 0x4140u);
++  const uint32_t bits = ((p & 0x007f007fu) << 7) | ((p & 0x00800080u) << 8);
++  __half2_raw raw;
++  raw.x = static_cast<unsigned short>(bits & 0xffffu);
++  raw.y = static_cast<unsigned short>(bits >> 16);
++  return __half22float2(__half2(raw));
++}
++
++__device__ __forceinline__ float ue8m0_scale(int e) {
++  return e + 8 < 255 ? __int_as_float((e + 8) << 23) : __int_as_float(e << 23) * 256.f;
++}
++
++// One warp: rows n0 .. n0 + 3 (those below N), x rows mbase .. mbase + mcount - 1 (mcount <= MS), split s. Both warp
++// groups run this one instance (one hot loop in the instruction cache); a group with mcount < MS computes on zero
++// rows of x that it never stores.
++template <int MS>
++__device__ __forceinline__ void warp_rows(const Params& p, int n0, int mbase, int mcount, int s, int lane) {
++  const int K = p.K, N = p.N;
++  const int nvalid = min(4, N - n0);  // may be <= 0: the warp then only joins the CTA barriers
++  const int sgroups = K / 32;
++  const int kbeg = s * p.ksplit, k_end = min(K, kbeg + p.ksplit);
++  float acc[4][MS];
++#pragma unroll
++  for (int r = 0; r < 4; ++r)
++#pragma unroll
++    for (int m = 0; m < MS; ++m) acc[r][m] = 0.f;
++  uint4 q[4];
++  int e[4];
++  int k0 = kbeg + lane * 16;
++  if (k0 < k_end) {
++#pragma unroll
++    for (int r = 0; r < 4; ++r) {
++      if (r < nvalid) {
++        q[r] = __ldg(reinterpret_cast<const uint4*>(p.w + int64_t(n0 + r) * K + k0));
++        e[r] = __ldg(p.scales + ((n0 + r) / 32) * sgroups + k0 / 32);
++      } else {
++        q[r] = make_uint4(0u, 0u, 0u, 0u);
++        e[r] = 0;
++      }
++    }
++  }
++  while (k0 < k_end) {
++    const int kn = k0 + 512;
++    uint4 qn[4];
++    int en[4];
++    if (kn < k_end) {
++#pragma unroll
++      for (int r = 0; r < 4; ++r) {
++        if (r < nvalid) {
++          qn[r] = __ldg(reinterpret_cast<const uint4*>(p.w + int64_t(n0 + r) * K + kn));
++          en[r] = __ldg(p.scales + ((n0 + r) / 32) * sgroups + kn / 32);
++        } else {
++          qn[r] = make_uint4(0u, 0u, 0u, 0u);
++          en[r] = 0;
++        }
++      }
++    }
++    float xv[MS][16];
++#pragma unroll
++    for (int m = 0; m < MS; ++m) {
++      uint4 a = make_uint4(0u, 0u, 0u, 0u), b = a;
++      if (m < mcount) {
++        const half* xr = p.x + int64_t(mbase + m) * K + k0;
++        a = __ldg(reinterpret_cast<const uint4*>(xr));
++        b = __ldg(reinterpret_cast<const uint4*>(xr + 8));
++      }
++      const half2* ha = reinterpret_cast<const half2*>(&a);
++      const half2* hb = reinterpret_cast<const half2*>(&b);
++#pragma unroll
++      for (int i = 0; i < 4; ++i) {
++        const float2 fa = __half22float2(ha[i]), fb = __half22float2(hb[i]);
++        xv[m][2 * i] = fa.x;
++        xv[m][2 * i + 1] = fa.y;
++        xv[m][8 + 2 * i] = fb.x;
++        xv[m][8 + 2 * i + 1] = fb.y;
++      }
++    }
++#pragma unroll
++    for (int r = 0; r < 4; ++r) {
++      if (r < nvalid) {
++        const float scale = ue8m0_scale(e[r]);
++        const uint32_t words[4] = {q[r].x, q[r].y, q[r].z, q[r].w};
++        float v[16];
++#pragma unroll
++        for (int j = 0; j < 4; ++j) {
++          const float2 lo = e4m3_pair(words[j], false), hi = e4m3_pair(words[j], true);
++          v[4 * j] = lo.x;
++          v[4 * j + 1] = lo.y;
++          v[4 * j + 2] = hi.x;
++          v[4 * j + 3] = hi.y;
++        }
++        float dot[MS];
++#pragma unroll
++        for (int m = 0; m < MS; ++m) dot[m] = 0.f;
++#pragma unroll
++        for (int i = 0; i < 16; ++i)
++#pragma unroll
++          for (int m = 0; m < MS; ++m) dot[m] = fmaf(v[i], xv[m][i], dot[m]);
++#pragma unroll
++        for (int m = 0; m < MS; ++m) acc[r][m] = fmaf(dot[m], scale, acc[r][m]);
++      }
++    }
++    k0 = kn;
++#pragma unroll
++    for (int r = 0; r < 4; ++r) {
++      q[r] = qn[r];
++      e[r] = en[r];
++    }
++  }
++#pragma unroll
++  for (int r = 0; r < 4; ++r)
++#pragma unroll
++    for (int m = 0; m < MS; ++m) {
++      float v = acc[r][m];
++#pragma unroll
++      for (int o = 16; o; o >>= 1) v += __shfl_xor_sync(0xffffffffU, v, o);
++      acc[r][m] = v;
++    }
++  if (lane == 0) {
++#pragma unroll
++    for (int r = 0; r < 4; ++r) {
++      if (r < nvalid) {
++        const int n = n0 + r;
++#pragma unroll
++        for (int m = 0; m < MS; ++m) {
++          if (m >= mcount) continue;
++          if (p.direct)
++            p.out[int64_t(mbase + m) * N + n] = __float2half_rn(acc[r][m]);
++          else
++            p.partials[(int64_t(s) * p.M + mbase + m) * N + n] = acc[r][m];
++        }
++      }
++    }
++  }
++}
++
++// Two CTAs per SM (<= 128 registers) while a warp holds <= 3 rows of x; M 7/8 (4 rows) keep one CTA and no spills.
++template <int M0, int M1>
++__global__ void __launch_bounds__(kThreads, M0 <= 3 ? 2 : 1) fp8_gemv2_kernel(const Params p) {
++  constexpr int kGroups = M1 > 0 ? 2 : 1;
++  constexpr int kWarpsPerGroup = 8 / kGroups;
++  constexpr int kRows = kWarpsPerGroup * 4;
++  const int warp = threadIdx.x / 32, lane = threadIdx.x % 32;
++  const int group = warp / kWarpsPerGroup;
++  const int n0 = blockIdx.x * kRows + (warp % kWarpsPerGroup) * 4;
++  const int s = blockIdx.y;
++  static_assert(M1 <= M0, "the first warp group holds the most rows of x");
++  warp_rows<M0>(p, n0, group * M0, group == 0 ? M0 : M1, s, lane);
++  if (p.direct) return;
++  __shared__ int s_last;
++  __threadfence();
++  __syncthreads();
++  if (threadIdx.x == 0) {
++    const int prev = atomicAdd(p.counters + blockIdx.x, 1);
++    if (prev < 0 || prev >= static_cast<int>(gridDim.y)) __trap();  // stale counter: illegal state
++    s_last = prev == static_cast<int>(gridDim.y) - 1;
++  }
++  __syncthreads();
++  if (!s_last) return;
++  __threadfence();
++  const int nbase = blockIdx.x * kRows;
++  const int rows = min(kRows, p.N - nbase);
++  for (int i = threadIdx.x; i < rows * p.M; i += kThreads) {
++    const int m = i / rows, n = nbase + i % rows;
++    float v = 0.f;
++    for (int ss = 0; ss < p.split; ++ss) v += __ldcg(p.partials + (int64_t(ss) * p.M + m) * p.N + n);
++    if (p.bias) v += __half2float(p.bias[n]);
++    p.out[int64_t(m) * p.N + n] = __float2half_rn(v);
++  }
++  if (threadIdx.x == 0) atomicExch(p.counters + blockIdx.x, 0);
++}
++
++// Layouts (same arithmetic, scheduling only): 0 = two warp groups for M >= 4 (16 rows per CTA); 1 = one warp group
++// holding all M rows of x (32 rows per CTA, the original kernel's geometry; M <= 6). M <= 3 is one group in both.
++inline int rows_per_cta(int M, int layout) { return (M <= 3 || layout == 1) ? 32 : 16; }
++
++inline int ksplit_of(int K, int split) {
++  int ksplit = (K + split - 1) / split;  // v41k_fp8_gemv's formula
++  return (ksplit + 15) / 16 * 16;
++}
++
++inline void launch(const Params& p, int layout, cudaStream_t stream) {
++  const int rows = rows_per_cta(p.M, layout);
++  const dim3 grid((p.N + rows - 1) / rows, p.split);
++#define V41DRAFT_L(A, B) fp8_gemv2_kernel<A, B><<<grid, kThreads, 0, stream>>>(p)
++  if (layout == 1 && p.M >= 4) {
++    switch (p.M) {
++      case 4: V41DRAFT_L(4, 0); break;
++      case 5: V41DRAFT_L(5, 0); break;
++      default: V41DRAFT_L(6, 0); break;
++    }
++    return;
++  }
++  switch (p.M) {
++    case 1: V41DRAFT_L(1, 0); break;
++    case 2: V41DRAFT_L(2, 0); break;
++    case 3: V41DRAFT_L(3, 0); break;
++    case 4: V41DRAFT_L(2, 2); break;
++    case 5: V41DRAFT_L(3, 2); break;
++    case 6: V41DRAFT_L(3, 3); break;
++    case 7: V41DRAFT_L(4, 3); break;
++    default: V41DRAFT_L(4, 4); break;
++  }
++#undef V41DRAFT_L
++}
++
++#ifdef V41DRAFT_NO_TORCH
++__global__ void version_kernel(int64_t* out) { *out = kVersion; }
++// compile-check instantiations
++template __global__ void fp8_gemv2_kernel<1, 0>(const Params);
++template __global__ void fp8_gemv2_kernel<2, 0>(const Params);
++template __global__ void fp8_gemv2_kernel<3, 0>(const Params);
++template __global__ void fp8_gemv2_kernel<2, 2>(const Params);
++template __global__ void fp8_gemv2_kernel<3, 2>(const Params);
++template __global__ void fp8_gemv2_kernel<3, 3>(const Params);
++template __global__ void fp8_gemv2_kernel<4, 3>(const Params);
++template __global__ void fp8_gemv2_kernel<4, 4>(const Params);
++template __global__ void fp8_gemv2_kernel<4, 0>(const Params);
++template __global__ void fp8_gemv2_kernel<5, 0>(const Params);
++template __global__ void fp8_gemv2_kernel<6, 0>(const Params);
++#else
++// out [M, N] fp16; x [M, K] fp16; w [N, K] uint8 (E4M3 bits); scales [ceil(N/32), K/32] uint8 (UE8M0);
++// partials fp32 >= split*M*N elements unless direct; counters int32 >= ceil(N / 16) unless direct.
++// direct = split == 1 and no bias (v41k_fp8_gemv's rule). layout: see rows_per_cta (1 needs M <= 6).
++void fp8_gemv2(at::Tensor out, const at::Tensor& x, const at::Tensor& w, const at::Tensor& scales,
++               at::Tensor partials, int64_t split, const c10::optional<at::Tensor>& bias, at::Tensor counters,
++               int64_t layout) {
++  const at::cuda::OptionalCUDAGuard guard(x.device());
++  TORCH_CHECK(x.is_cuda() && x.scalar_type() == at::kHalf && x.dim() == 2 && x.is_contiguous(),
++              "v41draft.fp8_gemv2: x must be contiguous CUDA fp16 [M, K]");
++  const int64_t M = x.size(0), K = x.size(1), N = w.size(0);
++  TORCH_CHECK(M >= 1 && M <= 8, "v41draft.fp8_gemv2: M must be 1..8, got ", M);
++  TORCH_CHECK(K % 32 == 0 && K > 0, "v41draft.fp8_gemv2: K must be a positive multiple of 32");
++  TORCH_CHECK(split >= 1 && split <= 65535, "v41draft.fp8_gemv2: split must be 1..65535");
++  TORCH_CHECK(layout == 0 || (layout == 1 && M <= 6), "v41draft.fp8_gemv2: layout must be 0, or 1 with M <= 6");
++  TORCH_CHECK(w.scalar_type() == at::kByte && w.dim() == 2 && w.size(1) == K && w.is_contiguous() &&
++                  w.device() == x.device() && N >= 1,
++              "v41draft.fp8_gemv2: w must be contiguous uint8 [N, K] on x's device");
++  TORCH_CHECK(scales.scalar_type() == at::kByte && scales.dim() == 2 && scales.size(0) == (N + 31) / 32 &&
++                  scales.size(1) == K / 32 && scales.is_contiguous() && scales.device() == x.device(),
++              "v41draft.fp8_gemv2: scales must be contiguous uint8 [ceil(N/32), K/32]");
++  TORCH_CHECK(out.scalar_type() == at::kHalf && out.dim() == 2 && out.size(0) == M && out.size(1) == N &&
++                  out.is_contiguous() && out.device() == x.device(),
++              "v41draft.fp8_gemv2: out must be contiguous fp16 [M, N]");
++  TORCH_CHECK(reinterpret_cast<uintptr_t>(x.data_ptr()) % 16 == 0 &&
++                  reinterpret_cast<uintptr_t>(w.data_ptr()) % 16 == 0,
++              "v41draft.fp8_gemv2: x and w must be 16-byte aligned");
++  const bool direct = split == 1 && !bias.has_value();
++  Params p{};
++  p.out = reinterpret_cast<half*>(out.data_ptr());
++  p.x = reinterpret_cast<const half*>(x.data_ptr());
++  p.w = w.data_ptr<uint8_t>();
++  p.scales = scales.data_ptr<uint8_t>();
++  p.bias = nullptr;
++  p.M = static_cast<int>(M);
++  p.N = static_cast<int>(N);
++  p.K = static_cast<int>(K);
++  p.split = static_cast<int>(split);
++  p.ksplit = ksplit_of(p.K, p.split);
++  p.direct = direct ? 1 : 0;
++  if (!direct) {
++    TORCH_CHECK(partials.scalar_type() == at::kFloat && partials.is_contiguous() &&
++                    partials.numel() >= split * M * N && partials.device() == x.device(),
++                "v41draft.fp8_gemv2: partials must be contiguous fp32 with >= split*M*N elements");
++    TORCH_CHECK(counters.scalar_type() == at::kInt && counters.is_contiguous() && counters.dim() == 1 &&
++                    counters.numel() >= (N + 15) / 16 && counters.device() == x.device(),
++                "v41draft.fp8_gemv2: counters must be contiguous int32 [>= ceil(N/16)] on x's device");
++    p.partials = partials.data_ptr<float>();
++    p.counters = counters.data_ptr<int>();
++    if (bias.has_value()) {
++      TORCH_CHECK(bias->scalar_type() == at::kHalf && bias->numel() == N && bias->is_contiguous() &&
++                      bias->device() == x.device(),
++                  "v41draft.fp8_gemv2: bias must be contiguous fp16 [N]");
++      p.bias = reinterpret_cast<const half*>(bias->data_ptr());
++    }
++  }
++  launch(p, static_cast<int>(layout), at::cuda::getCurrentCUDAStream());
++  C10_CUDA_KERNEL_LAUNCH_CHECK();
++}
++
++int64_t rows_per_cta_op(int64_t M, int64_t layout) {
++  return rows_per_cta(static_cast<int>(M), static_cast<int>(layout));
++}
++int64_t version_op() { return kVersion; }
++#endif
++
++}  // namespace v41draft
++
++#ifndef V41DRAFT_NO_TORCH
++TORCH_LIBRARY(v41draft, m) {
++  m.def(
++      "fp8_gemv2(Tensor(a!) out, Tensor x, Tensor w, Tensor scales, Tensor(b!) partials, int split, "
++      "Tensor? bias, Tensor(c!) counters, int layout) -> ()");
++  m.def("rows_per_cta(int M, int layout) -> int", &v41draft::rows_per_cta_op);
++  m.def("version() -> int", &v41draft::version_op);
++}
++
++TORCH_LIBRARY_IMPL(v41draft, CUDA, m) { m.impl("fp8_gemv2", &v41draft::fp8_gemv2); }
++#endif
+diff --git a/vllm/models/deepseek_v41/draft_gemv.py b/vllm/models/deepseek_v41/draft_gemv.py
+new file mode 100644
+index 000000000..0a6c0d16e
+--- /dev/null
++++ b/vllm/models/deepseek_v41/draft_gemv.py
+@@ -0,0 +1,220 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""DSpark draft FP8 GEMV levers (lane drafter1103). Both are BITWISE.
++
++VLLM_V41_DRAFT_GEMV2=1
++    Every call that fp8_block32_linear sends to v41k's fp8_gemv (1 <= M <= 8
++    with VLLM_V41_FP8_GEMV=1) runs v41draft's fp8_gemv2 instead: the same
++    per-output FP32 operations in the same order (see v41draft.cu), with the
++    rows of x split over two warp groups, a cheaper E4M3 decode, a prefetched
++    next chunk and the split-K sum done in-kernel by the last CTA (no
++    fp8_reduce launch). Needs v41draft.so and per-weight counters, which
++    V41Fp8LinearMethod registers at load time.
++VLLM_V41_DRAFT_GEMV2_LAYOUT=0|1
++    0 (default): two warp groups for M >= 4; 1: one group (the original
++    kernel's geometry; M <= 6, M 7..8 use 0). Scheduling only; the output
++    bits are the same.
++VLLM_V41_DRAFT_MP_SHARD=1
++    The draft's main_proj (a ReplicatedLinear: every TP rank reads the full
++    5120 x 15360 FP8 weight, 78.6 MB, every round) computes only this rank's
++    N / TP output columns with the split of the full call, then all-gathers
++    them. An output element depends only on its x row, its weight row, K and
++    the split, so the gathered result is bitwise the replicated one. Scope:
++    the GEMV path (1 <= M <= 8, VLLM_V41_FP8_GEMV=1); larger M (prefill) keeps
++    the replicated call by design.
++
++The knobs are read with os.getenv here so envs.py (patched by other kits)
++stays untouched. Library: VLLM_V41_DRAFT_GEMV_LIB, else
++benchmarks/deepseek_v41/v41draft/build/v41draft.so beside VLLM_V41K_LIB's
++v41k directory.
++"""
++
++import bisect
++import os
++
++import torch
++
++from vllm.logger import init_logger
++
++logger = init_logger(__name__)
++
++
++def _flag(name):
++    value = os.getenv(name, "0") or "0"
++    if value not in ("0", "1"):
++        raise ValueError(f"{name} must be 0 or 1, got {value!r}")
++    return value == "1"
++
++
++GEMV2 = _flag("VLLM_V41_DRAFT_GEMV2")
++MP_SHARD = _flag("VLLM_V41_DRAFT_MP_SHARD")
++LAYOUT = int(os.getenv("VLLM_V41_DRAFT_GEMV2_LAYOUT", "0") or "0")
++if LAYOUT not in (0, 1):
++    raise ValueError("VLLM_V41_DRAFT_GEMV2_LAYOUT must be 0 or 1")
++LIB_VERSION = 1
++MAX_M = 8
++
++_STATE: dict = {"loaded": False, "starts": [], "ranges": [], "logged": set()}
++
++
++def gemv_split(n, k):
++    """Split-K count of fp8_block32_linear's GEMV path for an n x k weight."""
++    ctas = (n + 31) // 32
++    return max(1, min(k // 512 if k >= 512 else 1, (240 + ctas - 1) // ctas))
++
++
++def library_path():
++    explicit = os.getenv("VLLM_V41_DRAFT_GEMV_LIB")
++    if explicit:
++        return explicit
++    v41k = os.getenv("VLLM_V41K_LIB")
++    if v41k:
++        root = os.path.dirname(os.path.dirname(os.path.dirname(v41k)))
++    else:
++        root = os.path.join(
++            os.path.dirname(os.path.abspath(__file__)),
++            "..",
++            "..",
++            "..",
++            "benchmarks",
++            "deepseek_v41",
++        )
++    return os.path.join(root, "v41draft", "build", "v41draft.so")
++
++
++def ready():
++    """Load v41draft.so once. With GEMV2 on, a missing library is an error."""
++    if not _STATE["loaded"]:
++        path = library_path()
++        torch.ops.load_library(path)  # raises OSError when the .so is missing
++        version = torch.ops.v41draft.version()
++        if version != LIB_VERSION:
++            raise RuntimeError(
++                f"VLLM_V41_DRAFT_GEMV2: {path} is version {version}, "
++                f"this module needs {LIB_VERSION}"
++            )
++        _STATE["loaded"] = True
++        logger.info(
++            "V4.1 draft GEMV2: v41draft fp8_gemv2 active (%s, layout %d)",
++            path,
++            LAYOUT,
++        )
++    return True
++
++
++def register_counters(weight):
++    """Allocate the split-K counters of one FP8 weight (load time, zeros).
++
++    Slices of the weight (grouped wo_a, the main_proj shard) use the counters
++    of the weight they lie in; a weight's launches are stream-ordered, never
++    concurrent, and each launch leaves its counters at zero.
++    """
++    start = weight.data_ptr()
++    end = start + weight.numel() * weight.element_size()
++    i = bisect.bisect_right(_STATE["starts"], start)
++    if (i and _STATE["ranges"][i - 1][1] > start) or (
++        i < len(_STATE["starts"]) and _STATE["starts"][i] < end
++    ):
++        raise RuntimeError("V4.1 draft GEMV2: overlapping FP8 weight registrations")
++    counters = torch.zeros(
++        (weight.shape[0] + 15) // 16, dtype=torch.int32, device=weight.device
++    )
++    _STATE["starts"].insert(i, start)
++    _STATE["ranges"].insert(i, (start, end, counters))
++
++
++def counters_for(weight):
++    start = weight.data_ptr()
++    end = start + weight.numel() * weight.element_size()
++    i = bisect.bisect_right(_STATE["starts"], start) - 1
++    if i < 0 or not _STATE["ranges"][i][0] <= start < end <= _STATE["ranges"][i][1]:
++        raise RuntimeError(
++            "V4.1 draft GEMV2: no counters registered for this FP8 weight "
++            "(V41Fp8LinearMethod.process_weights_after_loading registers them)"
++        )
++    counters = _STATE["ranges"][i][2]
++    if counters.numel() < (weight.shape[0] + 15) // 16:
++        raise RuntimeError("V4.1 draft GEMV2: counters smaller than the weight")
++    return counters
++
++
++def gemv(x, weight, scales, split, bias=None):
++    """fp8_block32_linear's GEMV path with an explicit split.
++
++    weight [N, K] float8_e4m3fn and scales [ceil(N/32), K/32] float8_e8m0fnu
++    may be row slices (32-row aligned) of a registered weight. Returns
++    [M, N] fp16, bitwise v41k fp8_gemv(..., split, bias).
++    """
++    m, n = x.shape[0], weight.shape[0]
++    if not 1 <= m <= MAX_M:
++        raise ValueError(f"V4.1 draft GEMV: M must be 1..{MAX_M}, got {m}")
++    result = torch.empty(m, n, dtype=x.dtype, device=x.device)
++    partials = torch.empty(
++        split * m * n if (split > 1 or bias is not None) else 1,
++        device=x.device,
++        dtype=torch.float32,
++    )
++    if GEMV2:
++        ready()
++        torch.ops.v41draft.fp8_gemv2(
++            result,
++            x,
++            weight.view(torch.uint8),
++            scales.view(torch.uint8),
++            partials,
++            split,
++            bias,
++            counters_for(weight),
++            LAYOUT if m <= 6 else 0,  # layout 1 exists for M <= 6 only
++        )
++    else:
++        torch.ops.v41k.fp8_gemv(
++            result,
++            x,
++            weight.view(torch.uint8),
++            scales.view(torch.uint8),
++            partials,
++            split,
++            bias,
++        )
++    return result
++
++
++def sharded_projection(x, weight, scales, rank, world, gather):
++    """Rows [rank * N / world, (rank + 1) * N / world) with the full call's
++    split, then ``gather`` (dim -1). Bitwise the replicated GEMV."""
++    n, k = weight.shape
++    if n % (32 * world):
++        raise ValueError(f"V4.1 draft MP_SHARD: N={n} is not a multiple of 32*{world}")
++    if x.dtype != torch.float16 or x.ndim != 2 or not x.is_contiguous():
++        raise ValueError("V4.1 draft MP_SHARD needs contiguous FP16 [M, K] input")
++    if x.shape[1] != k or k % 32:
++        raise ValueError("V4.1 draft MP_SHARD: input width does not match the weight")
++    if scales.shape != (n // 32, k // 32):
++        raise ValueError("V4.1 draft MP_SHARD needs [N/32, K/32] UE8M0 scales")
++    if weight.dtype != torch.float8_e4m3fn or scales.dtype != torch.float8_e8m0fnu:
++        raise ValueError("V4.1 draft MP_SHARD needs an FP8 E4M3 weight, UE8M0 scales")
++    if not (weight.is_contiguous() and scales.is_contiguous()):
++        raise ValueError("V4.1 draft MP_SHARD needs contiguous weight and scales")
++    rows = n // world
++    split = gemv_split(n, k)
++    part = gemv(
++        x,
++        weight[rank * rows : (rank + 1) * rows],
++        scales[rank * rows // 32 : (rank + 1) * rows // 32],
++        split,
++    )
++    key = ("mp", rank, world, n, k)
++    if key not in _STATE["logged"]:
++        _STATE["logged"].add(key)
++        logger.info(
++            "V4.1 DSpark main_proj: TP-sharded GEMV (rank %d/%d, rows %d..%d, "
++            "split %d, gemv2 %s)",
++            rank,
++            world,
++            rank * rows,
++            (rank + 1) * rows,
++            split,
++            GEMV2,
++        )
++    return gather(part, -1)
+diff --git a/vllm/models/deepseek_v41/dspark.py b/vllm/models/deepseek_v41/dspark.py
+index f921fd5ba..9583336ea 100644
+--- a/vllm/models/deepseek_v41/dspark.py
++++ b/vllm/models/deepseek_v41/dspark.py
+@@ -73,6 +73,32 @@ class V41DraftQuantConfig(Fp8Config):
+ 
+ 
+ _LONG = __import__("os").environ.get("VLLM_V41_PACKED_KV", "0") == "1"
++# VLLM_V41_DRAFT_MP_SHARD (lane drafter1103, draft_gemv.py): TP-sharded main_proj.
++_DRAFT_MP_SHARD = __import__("os").environ.get("VLLM_V41_DRAFT_MP_SHARD", "0") == "1"
++
++
++def _draft_mp_scope(x):
++    """MP_SHARD covers the GEMV path only (1 <= M <= 8, VLLM_V41_FP8_GEMV=1)."""
++    from .fp8_linear import _gemv_ready
++
++    return 1 <= x.shape[0] <= 8 and _gemv_ready()
++
++
++def _draft_mp_shard(main_proj, x):
++    from vllm.distributed import tensor_model_parallel_all_gather
++
++    from .draft_gemv import sharded_projection
++
++    if getattr(main_proj, "bias", None) is not None:
++        raise ValueError("VLLM_V41_DRAFT_MP_SHARD: main_proj has a bias")
++    return sharded_projection(
++        x,
++        main_proj.weight,
++        main_proj.weight_scale_inv,
++        get_tensor_model_parallel_rank(),
++        get_tensor_model_parallel_world_size(),
++        tensor_model_parallel_all_gather,
++    )
+ 
+ 
+ class V41DraftAttention(V41Attention):
+@@ -178,6 +204,8 @@ class V41DraftModel(nn.Module):
+         # the following RMS normalization removes this common factor.
+         if auxiliary.dtype != torch.float16:  # target stores pre-scaled FP16
+             auxiliary = (auxiliary * (2.0**-6)).to(torch.float16)
++        if _DRAFT_MP_SHARD and _draft_mp_scope(auxiliary):
++            return self.main_norm(_draft_mp_shard(self.main_proj, auxiliary))
+         return self.main_norm(self.main_proj(auxiliary))
+ 
+     def precompute_and_store_context_kv(self, states, positions, slots=None):
+diff --git a/vllm/models/deepseek_v41/fp8_linear.py b/vllm/models/deepseek_v41/fp8_linear.py
+index 8d42932b9..b820285f1 100644
+--- a/vllm/models/deepseek_v41/fp8_linear.py
++++ b/vllm/models/deepseek_v41/fp8_linear.py
+@@ -6,6 +6,8 @@ Dequantization is local to each MMA tile. There is no second resident dense
+ weight bank, and the checkpoint's native FP8 bytes/scales remain on device.
+ """
+ 
++import os
++
+ import torch
+ 
+ import vllm.envs as envs
+@@ -24,6 +26,9 @@ from vllm.models.deepseek_v4.common.ops.fp8_software import (
+ )
+ from vllm.triton_utils import tl, triton
+ 
++# VLLM_V41_DRAFT_GEMV2 (lane drafter1103, draft_gemv.py): bitwise fp8_gemv2.
++_DRAFT_GEMV2 = os.getenv("VLLM_V41_DRAFT_GEMV2", "0") == "1"
++
+ 
+ @triton.jit(do_not_specialize=["M"])
+ def _linear(
+@@ -165,6 +170,8 @@ def fp8_block32_linear(x, weight, scales, bias=None, *, split_k=None):
+         raise ValueError("V4.1 draft linear requires raw FP8/UE8M0 32x32 blocks")
+     result = torch.empty(x.shape[0], weight.shape[0], dtype=x.dtype, device=x.device)
+     if 1 <= x.shape[0] <= 8 and _gemv_ready():
++        if _DRAFT_GEMV2:
++            return _draft_gemv2(x, weight, scales, bias)
+         # Bandwidth-bound small-M GEMV (exact e4m3 bit placement, FP32 sums).
+         m, n, k = x.shape[0], weight.shape[0], x.shape[1]
+         ctas = (n + 31) // 32
+@@ -235,6 +242,12 @@ def fp8_block32_linear(x, weight, scales, bias=None, *, split_k=None):
+     return result
+ 
+ 
++def _draft_gemv2(x, weight, scales, bias):
++    from .draft_gemv import gemv, gemv_split
++
++    return gemv(x, weight, scales, gemv_split(*weight.shape), bias)
++
++
+ @register_weight_loader_v2_supported_method
+ class V41Fp8LinearMethod(LinearMethodBase):
+     def create_weights(
+@@ -283,6 +296,10 @@ class V41Fp8LinearMethod(LinearMethodBase):
+     def process_weights_after_loading(self, layer):
+         if (layer.weight_scale_inv.view(torch.uint8) == 255).any():
+             raise ValueError("Nonfinite UE8M0 scale in V4.1 draft weights")
++        if _DRAFT_GEMV2:
++            from .draft_gemv import register_counters
++
++            register_counters(layer.weight)
+ 
+     def apply(self, layer, x, bias=None):
+         return fp8_block32_linear(x, layer.weight, layer.weight_scale_inv, bias)
