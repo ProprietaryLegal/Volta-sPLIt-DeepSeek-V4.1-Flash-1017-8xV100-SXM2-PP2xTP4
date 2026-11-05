@@ -1,6 +1,13 @@
 # Production
 
-What serves on our host as of 2026-11-04 (afternoon), and how to reproduce it.
+What serves on our host as of 2026-11-05, and how to reproduce it.
+
+**The 2026-11-05 checkpoint.** This build is our checkpoint: we measure it and use it as it stands, and further build and
+test work happens on a separate test machine, not on this host. It is the 2026-11-04 production set plus three
+adoptions: the all-reduce push path (test D44R5, 2026-11-04 evening), lever G (`NCCL_P2P_LEVEL=NVL`, installed
+2026-11-05 14:06Z) and the SM70 prefill expert GEMM (test D51, installed 2026-11-05 15:12Z). One request at a time
+(`max-num-seqs: 1`). Greedy identity of the production prompts, unchanged by both 2026-11-05 installs (MEASURED, the
+installs' own checks): 32,768 tokens → output sha `cdf3cf45c3cf`, 131,072 tokens → `e70897e7b29e`.
 
 ## Hardware
 
@@ -50,7 +57,16 @@ The files we serve are byte-identical to those revisions. 1Cat #1277's README li
    name. Build `v41pidx.so` with `python build.py` in `benchmarks/deepseek_v41/v41pidx/` (`V41PIDX_BUILD_DIR`
    overrides the output directory). `v41draft.so` (`benchmarks/deepseek_v41/v41draft/`) is only needed for
    `DRAFT_GEMV2`; production does not build it.
-4. Build vLLM into a venv (torch 2.10.0+cu128; pins in
+4. Then [engine/production/0056-allreduce-sum2-push.patch](../engine/production/0056-allreduce-sum2-push.patch) (the
+   custom all-reduce push path for V4.1's MoE-sum message; result tree `007852b33339`; it changes `csrc/`, so the vLLM
+   build compiles it into `_C`) and
+   [engine/production/0057-prefill-iq-gemm.patch](../engine/production/0057-prefill-iq-gemm.patch) (our SM70 prefill IQ
+   GEMM and the source of its `v41prefmoe` library; result tree `42947e400952`). MEASURED 2026-11-05 with
+   `git apply --check` on the tree before each, rebuilt from the published patches: the 0056 files and the three Python
+   files of 0057 are byte-identical to the deployed files ([engine/README.md](../engine/README.md) lists the one known
+   `envs.py` difference). Build `v41prefmoe.so` after the vLLM build with `python build.py` in
+   `benchmarks/deepseek_v41/v41prefmoe/`; it is copied next to `gguf_prefill_iq.py`, where the module loads it.
+5. Build vLLM into a venv (torch 2.10.0+cu128; pins in
    [forks/1cat-4xv100-tp4/configs/requirements-venv.txt](../forks/1cat-4xv100-tp4/configs/requirements-venv.txt)) and
    `v41k` with `TORCH_CUDA_ARCH_LIST=7.0` on the serving machine ([engine/README.md](../engine/README.md)).
 
@@ -89,15 +105,23 @@ VLLM_V41_INDEX_TILED=1 (VLLM_V41_INDEX_TILED_LIB = the v41idx.so path)        ad
 VLLM_V41_INDEX_FUSE=ilp4 (VLLM_V41_INDEX_FUSE_LIB = the v41pidx.so path)      adopted 2026-11-04
 VLLM_V41_DRAFT_MP_SHARD=1                                                     adopted 2026-11-04
 VLLM_USE_V2_MODEL_RUNNER=1                                                    adopted 2026-11-04
+VLLM_SM70_MOE_ADD_ALLREDUCE=1 VLLM_V41_SUM2_PUSH_ANY=1
+VLLM_SM70_TP4_PUSH_ALLREDUCE_SMALL_MESSAGES=1                                 adopted 2026-11-04 (D44R5)
+NCCL_P2P_LEVEL=NVL                                                            adopted 2026-11-05 (lever G)
+VLLM_V41_PREFILL_IQ_GEMM=1 VLLM_V41_PREFILL_IQ_TILES=5,4,4,4,4,4
+VLLM_V41_PREFILL_IQ_GRID=0                                                    adopted 2026-11-05 (D51)
 HOT_REFILL on by default
 ```
 
-23 keys. The first 17 are the production boot's recorded set of 2026-11-03. `INDEX_TILED` and `INDEX_FUSE` joined on
+30 keys. The first 17 are the production boot's recorded set of 2026-11-03. `INDEX_TILED` and `INDEX_FUSE` joined on
 2026-11-04 (long context only; short context unchanged), then `DRAFT_MP_SHARD` and Model Runner V2. MEASURED on the
 17-key set after the PCIe-switch move: T=0 119.0 tok/s, T=1 120.8 tok/s, decode-only 25.30 / 25.20 ms per round. On the
 22-key set with Model Runner V2, which is the production set (test D54A ON arms, 2026-11-04): T=0 134.2 / 135.0 tok/s,
-T=1 136.6 / 136.4, decode-only 22.26 / 22.22 and 22.17 / 22.19 ms per round. The production boot itself (up
-2026-11-04 16:38Z, adoption activation lines present) has not been benchmarked yet.
+T=1 136.6 / 136.4, decode-only 22.26 / 22.22 and 22.17 / 22.19 ms per round. The all-reduce push path took a further
+0.180 ms per round off decode (D44R5, ABBAABBA, 95 % interval −0.278..−0.081). Lever G and D51 change prompt reading
+only: first token at 32K −13.4 % (G) and −4.1 % (D51), each in its own window (numbers in
+[levers.md](levers.md#adopted)). The checkpoint boot itself was benchmarked on 2026-11-05
+([measurements.md](measurements.md#checkpoint-benchmark-2026-11-05)).
 
 ## Start
 

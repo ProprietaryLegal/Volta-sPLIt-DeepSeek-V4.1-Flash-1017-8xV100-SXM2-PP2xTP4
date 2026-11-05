@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-11-05: the checkpoint build (30 keys), speed by kind of text at 1K-256K
+
+- **New headline, MEASURED** (context sweep, 135 requests, thinking off, greedy): decode depends on the kind of text.
+  Code 215 tok/s after a 1K prompt and 160 at 256K; structured (JSON) 203 and 180; legal 118 and 103; prose 89 and 84;
+  chat 95 and 81. Prompt reading 830-950 tok/s at 1K, 1,900 at 32K, 2,200 at 128K and 256K, the same for every kind.
+  First token 17 s at 32K, 59 s at 128K, 119 s at 256K. Thinking on: code 106-144 tok/s, JSON 131-177. These replace the
+  single 134.2 / 136.6 tok/s headline.
+- Adopted the all-reduce push for V4.1's message size (test D44R5, `engine/production/0056-allreduce-sum2-push.patch`):
+  −0.180 ms per round (ABBAABBA, 95 % −0.278..−0.081).
+- Adopted the NCCL host hand-off between the boards (`NCCL_P2P_LEVEL=NVL`): first token −13.4 % at 32K, −14.2 % at
+  128K, bitwise.
+- Adopted the SM70 prefill expert GEMM (test D51, `0057-prefill-iq-gemm.patch`, `v41prefmoe`): first token −4.1 % at
+  32K, −4.3 % at 150K, −2.4 % at 300K, near-tie gate PASS.
+- `rec.env` now has 30 keys. This is the checkpoint build: it is frozen, and new work is built and tested on a separate
+  4-GPU test machine.
+- Quality: LegalBench 0.716 balanced accuracy over 22 tasks (MEASURED). Fidelity to the original model, MMLU-Pro and
+  HumanEval+ are running.
+- Did not work: fused prefill attention in exact-softmax mode (lever A mode 2): first token −11 % but near-tie gate FAIL;
+  a bitwise mode 3 is ready on the test machine.
+- Removed sections that no longer describe this build (the four-card table and the old long-prompt tables).
+- `evidence/queue-log.txt` extended through the checkpoint.
+
 ## 2026-11-04 (afternoon): Model Runner V2, fused prefill index scorer and drafter sharding adopted
 
 - **New headline, MEASURED** (test D54A, the production set, two arms): T=0 **134.2 / 135.0 tok/s**, T=1 **136.6 / 136.4

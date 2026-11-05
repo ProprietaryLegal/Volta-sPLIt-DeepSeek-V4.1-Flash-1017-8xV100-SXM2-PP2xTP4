@@ -8,6 +8,8 @@
 | [production/0053-index-fuse.patch](production/0053-index-fuse.patch) | our fused prefill index scorer (`VLLM_V41_INDEX_FUSE`) and its `v41pidx` library, on top of 0052; adopted 2026-11-04 |
 | [production/0054-draft-mp-shard.patch](production/0054-draft-mp-shard.patch) | drafter projection sharding (`VLLM_V41_DRAFT_MP_SHARD`, on) and the bitwise FP8 drafter mat-vec (`VLLM_V41_DRAFT_GEMV2`, off) with its `v41draft` library, on top of 0053; adopted 2026-11-04 |
 | [production/0055-mrv2.patch](production/0055-mrv2.patch) | our DeepSeek-V4.1 port of Model Runner V2 (`VLLM_USE_V2_MODEL_RUNNER`), on top of 0054; adopted 2026-11-04 |
+| [production/0056-allreduce-sum2-push.patch](production/0056-allreduce-sum2-push.patch) | admits V4.1's 61,440-byte MoE-sum message to the custom all-reduce push path (`VLLM_V41_SUM2_PUSH_ANY`), on top of 0055; adopted 2026-11-04 (test D44R5); formerly `in-testing/T03` |
+| [production/0057-prefill-iq-gemm.patch](production/0057-prefill-iq-gemm.patch) | our SM70 prefill IQ GEMM for the routed experts (`VLLM_V41_PREFILL_IQ_GEMM`) and the source of its `v41prefmoe` library, on top of 0056; adopted 2026-11-05 (test D51) |
 | [in-testing/](in-testing/) | patches for the changes in the test queue; not production |
 | [configs/](configs/) | serving profile, engine environment, start script, production lever set (`rec.env`) |
 
@@ -23,8 +25,12 @@ git apply ../engine/production/0052-index-tiled.patch     # tree 4760febd4fe7
 git apply ../engine/production/0053-index-fuse.patch      # tree 421c427444a4
 git apply ../engine/production/0054-draft-mp-shard.patch  # tree 09cf8cc28b7b
 git apply ../engine/production/0055-mrv2.patch            # tree e85291152ae9
+git apply ../engine/production/0056-allreduce-sum2-push.patch   # tree 007852b33339 (changes csrc/: the vLLM build compiles it into _C)
+git apply ../engine/production/0057-prefill-iq-gemm.patch       # tree 42947e400952
 (cd benchmarks/deepseek_v41/v41idx && TORCH_CUDA_ARCH_LIST=7.0 python build.py)   # v41idx.so
 (cd benchmarks/deepseek_v41/v41pidx && TORCH_CUDA_ARCH_LIST=7.0 python build.py)  # v41pidx.so
+# v41prefmoe.so: after the vLLM build, in the venv it serves from; build.py copies it next to gguf_prefill_iq.py
+(cd benchmarks/deepseek_v41/v41prefmoe && TORCH_CUDA_ARCH_LIST=7.0 python build.py)
 # v41draft.so (benchmarks/deepseek_v41/v41draft) is only needed for DRAFT_GEMV2, which production leaves off
 # vLLM: build into a venv with the pins in forks/1cat-4xv100-tp4/configs/requirements-venv.txt
 # v41k: on the serving machine, against that venv's torch
@@ -46,6 +52,27 @@ Each patch is a diff of the published tree before it against the files that prod
   deployed. The branch also holds 28 test and tool files, which are not included.
 - MEASURED 2026-11-04: after 0053-0055, 25 of the 26 files they touch are byte-identical to the deployed files. The 26th,
   `v41pidx/build.py`, differs in one docstring line, where we replaced our host's name.
+
+## Where the 2026-11-04/05 patches 0056 and 0057 come from
+
+Both were checked the same way: we rebuilt the tree after 0055 from the published patches (it gave the recorded
+`e85291152ae9`), applied the new patch with `git apply --check` and then `git apply`, and compared the result with the
+files production runs.
+
+- **0056** is the former `in-testing/T03-allreduce-sum2-push.patch`, unchanged. MEASURED 2026-11-05: the four
+  `csrc/` and `vllm/config/` files it touches are byte-identical to the deployed files; `vllm/envs.py` differs only by
+  the D51 switches (0057) and two entries outside this build's path (next paragraph).
+- **0057** is our D51 install kit's transformation applied to the tree after 0056: the switch registry in `vllm/envs.py`,
+  the call-site change in `gguf_shared_prefill.py` (the old grouped GEMM still runs when the switch is off; the install
+  kit proves the switch-off code is the old code), the new modules `gguf_prefill_iq.py` and `gguf_prefill_iq_observe.py`,
+  and `benchmarks/deepseek_v41/v41prefmoe/`: `csrc/prefill_iq.cu` with the 42 OpenMMLab TurboMind / 1Cat SM70 headers it
+  reuses (original notices kept; their Apache-2.0 licence is beside them) and a `build.py` with the same sources and
+  compiler flags as our production build (only our build-window guards removed). MEASURED 2026-11-05: the
+  `gguf_shared_prefill.py`, `gguf_prefill_iq.py` and `gguf_prefill_iq_observe.py` this gives are byte-identical to the
+  deployed files. The library itself is not published (no compiled code is).
+- Known difference, not part of these patches: the deployed `vllm/envs.py` also registers `VLLM_V41_ASYNC_EOR_GUARD`
+  (the V1 async request-end guard, off; see [docs/levers.md](../docs/levers.md#did-not-work)) and does not register `VLLM_V41_EXPERT_DIET`, which the
+  `v41k` library reads by itself. Neither changes what production runs.
 
 ## The diet patch
 

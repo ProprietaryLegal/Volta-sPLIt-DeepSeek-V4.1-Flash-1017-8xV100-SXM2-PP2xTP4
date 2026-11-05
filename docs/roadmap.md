@@ -1,9 +1,11 @@
 # Roadmap and test queue
 
-Status on 2026-11-04, about 17:15Z. The production server is up on the 23-key set. The queue runs one test at a time on the production host; each test boots its own arms and
-restores the production stack when it finishes. Nothing here is a result until its row says so.
+Status on 2026-11-05. The production server runs the **2026-11-05 checkpoint** (30 keys, one request at a time;
+[production.md](production.md)). We measure and use the checkpoint as it stands. Build and test work for the next
+changes runs on a separate 4x V100-SXM2-32GB test machine (two NVLink pairs) that cannot hold the whole model; a change
+returns to the production host only for its final serving window. Nothing here is a result until its row says so.
 
-## Done (2026-11-03/04)
+## Done (2026-11-03/05)
 
 D1-D34R: the levers in [levers.md](levers.md#adopted), among them the expert-kernel instruction diet (D34, −0.871 ms per
 round) and the router floor (D34R, inconclusive, kept as upstream-backed). Then:
@@ -31,25 +33,30 @@ round) and the router floor (D34R, inconclusive, kept as upstream-backed). Then:
 | D45-D45R4 | Expert "wave" down kernel, `EXPERT_WAVE` | rejected: +0.216 ms per round (95 % +0.118..+0.314), detectably slower; the earlier runs stopped in their own checks |
 | IQ1_M repack | Lookup-free IQ1_M experts in spare GPU memory (was D55) | no-go before a build: −4.4 % instructions against a 20 % gate, +35.7 % bytes |
 | D55 | Depth sweep, V1 runner against MRV2, production set, 2K-64K | report-only, MEASURED: MRV2 −2.59..−2.94 ms per round at 2K, 8K, 16K and 64K; **+1.41 / +1.44 at 32K**; tokens per round the same |
+| D44R5 | All-reduce push path for V4.1's message size, `SUM2_PUSH_ANY` (2026-11-04 evening) | **ADOPTED**: −0.180 ms per round (ABBAABBA, 95 % −0.278..−0.081), T=1 texts 11 of 11; patch 0056 |
+| D40 | Four-card fork smoke on one board | boot failed (2026-11-04); the four-card series predates patches 0052-0057 and is not current ([four-card.md](four-card.md)) |
+| Lever G | `NCCL_P2P_LEVEL=NVL` (2026-11-05) | **ADOPTED**: first token −13.4 % at 32K, −14.2 % at 128K; output identical; decode unchanged |
+| D51 (R4, R5) | SM70 prefill IQ GEMM for the routed experts, `PREFILL_IQ_GEMM` | **ADOPTED** (2026-11-05): first token −4.1 % at 32K, −4.3 % at 150K, −2.4 % at 300K; generated tokens identical; near-tie gate PASS on install, 8 of 8 identical; patch 0057. D51R4 had stopped on a missing profiler event; R5 qualified it |
+| Lever A, mode 2 | Fused prefill attention (2026-11-05) | **not installed**: first token −11.4 % at 32K, −10.4 % at 128K, but NUMERICS-GATE FAIL (identical 1 of 8, KL mean 0.0109) |
+| CONC | Two and three requests at once on Model Runner V2 | not in the checkpoint. The conc2 crash on a lone 32K request was found and fixed; a prefill-budget correction makes conc2/conc3 output match single-request output exactly (49,152 generated positions); a deployable aggregate gain is not established yet |
+| BENCH | Benchmark of the checkpoint (2026-11-05) | speed and LegalBench done ([measurements.md](measurements.md#checkpoint-benchmark-2026-11-05), [quality.md](quality.md)); context sweep and the remaining quality tests in progress |
 Details: [levers.md](levers.md), [measurements.md](measurements.md).
 
-## In the queue
+## Next (on the test machine first)
 
-In order. Estimates are the lanes' figures before the test, labelled ESTIMATED; none is a result.
+None of these is a result. Each returns to the production host only for its final serving window.
 
-| # | test | patch | what decides it | expectation |
-|---|---|---|---|---|
-| D51R4 | Tensor-core prefill routed-expert GEMM, `PREFILL_IQ_GEMM` (D51R3 stopped on a check-script limit; fixed) | – | near-tie gate; first token at 32K / 150K / 300K; report only | micro-benchmark MEASURED 30,989 µs against 38,270 (−19 %); end to end not measured |
-| D44R5 | All-reduce push path for V4.1's message size, `SUM2_PUSH_ANY` (D44-D44R4 stopped in their build, check and deploy steps; each was fixed) | [T03](../engine/in-testing/T03-allreduce-sum2-push.patch) | v2 ABBAABBA | ESTIMATED −0.08..−0.15 ms per round |
-| CONC | Two and three requests at once on Model Runner V2 (`single`, `conc2`, `conc3`); replaces the withdrawn V1 build (D42) | – | single-request identity; combined tok/s at 2 and 3 requests; lone-request cost | CPU tests pass; one boot crash found in review and fixed; not measured |
-| BENCH | Final benchmark of the production set: tok/s at T=0 and T=1, plus first token and decode at 32K and 150K | – | one production boot with the full set | – |
-| D40 | Four-card fork smoke on one board | [forks/](../forks/1cat-4xv100-tp4/) | greedy identity, activation lines | queued after BENCH |
+| item | what it is | status |
+|---|---|---|
+| Lever A, mode 3 | the fused prefill attention with production's summation order, so its output is bitwise production's | built; bitwise-identical to production's attention on every synthetic case tried (40 shapes across both stages, 17 to 8,192 tokens, context 0 to 300K, and all 256 final-chunk shapes), sanitizers clean; ESTIMATED from mode 2's window: first token −11 to −14 % at 32K and −10 to −13 % at 128K. Needs a serving window on real weights |
+| Prefill expert GEMM follow-ups | measuring the D51 kernel on the real production shapes (ordinary 8,188-token chunks and the tail), mixed tile sizes, padding | in progress |
+| Concurrency | conc2/conc3 on Model Runner V2 with the budget correction; the aim is more combined tok/s for 2-3 long-context requests | in progress |
+| MRV2 at 32K | the decode round at the 32K prompt is slower than on V1 (D55); cause open (INCONCLUSIVE) | open |
+| Decode kernels that failed the near-tie gate | `ATTN_HMMA` (D47R2), `SHARED_DOWN` (D49R): find the element-level difference and whether a bitwise form keeps the speed | open |
 
-## After the queue
+## Quality, after the speed benchmarks
 
-- **Decode by text type** (code, structured, chat, prose) and a legal benchmark.
-- **Token-level fidelity**: KL divergence and top-1 agreement against the unquantized model.
+- KL divergence and top-1 agreement against the original (unquantized) model, on the served path: pending.
+- MMLU-Pro and HumanEval+: pending. LegalBench is done ([quality.md](quality.md)).
 - **Asynchronous scheduling on MRV2**: built and bitwise in D54R/D54A; MEASURED −0.085..−0.117 ms per round against
   synchronous MRV2, no verdict run. It needs its own serving profile; not in production.
-- **MRV2 at 32K**: the decode round there is slower than on V1 (see D55); a device trace of the block-table gather and
-  padding comes first.

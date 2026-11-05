@@ -3,7 +3,7 @@
 Every number on our host, 8x V100-SXM2-32GB at 150 W, one request at a time, DSpark 5 drafts per round. Labels:
 MEASURED (observed here, with date), ESTIMATED (arithmetic on measurements), UPSTREAM CLAIM (someone else's figure).
 
-## Two benchmarks
+## The benchmarks
 
 - **The A/B harness** ([method](method.md)) decides levers: T=0 is 3 x 1,024 greedy tokens with thinking off; T=1 is a
   seeded set of 12 prompts at temperature 1 with thinking on. The drafter accepts about 2.2 drafts per round here.
@@ -12,9 +12,99 @@ MEASURED (observed here, with date), ESTIMATED (arithmetic on measurements), UPS
   `needle.py`), unmodified, temperature 1, top_p 1, thinking on at high effort, cold prompts on an idle server, 1,500 generated
   tokens. Decode tok/s = (generated tokens − 1) / (last token time − first token time). On its legal prompt the drafter
   accepts 1.2-1.6 drafts per round.
+- **The serving benchmark** (from 2026-11-05) measures the server as a client sees it: decode by text class, thinking
+  on, long prompts, requests sent together and LegalBench ([quality.md](quality.md)); results below.
 
-Per-request throughput is (1 + accepted drafts per round) / round time, so the same engine shows different tok/s on the
-two sets.
+Per-request throughput is (1 + accepted drafts per round) / round time, so the same engine shows different tok/s on
+different sets.
+
+## Checkpoint benchmark (2026-11-05)
+
+MEASURED 2026-11-05 15:15-15:46Z on the checkpoint boot (all 30 keys, one request at a time), with our serving benchmark
+kit: real server-sent streams, token IDs and server counters reconciled per request; 1,342 records, 0 errors. Decode
+tok/s = (completion tokens − 1) / (last streamed token − first), client side, median of the repetitions (range).
+Tokens per round = 1 + accepted drafts per verify round, from the server's counters. Each class is one prompt of that
+kind of text, 1,024 generated tokens, thinking off.
+
+| class | greedy (T=0) tok/s | tokens per round | T=1 tok/s | tokens per round |
+|---|---:|---:|---:|---:|
+| code | **213.1** (211.8-213.3) | 4.70 | 196.8 (188.3-203.8) | 4.34 |
+| structured (JSON) | **209.4** (209.3-210.3) | 4.63 | 205.4 (200.8-213.3) | 4.56 |
+| legal | **115.7** (115.3-115.7) | 2.56 | 108.4 (106.7-116.9) | 2.40 |
+| prose | **98.0** (97.7-98.3) | 2.17 | 87.2 (87.1-89.5) | 1.92 |
+| chat | **96.2** (96.1-96.5) | 2.11 | 93.8 (93.4-96.5) | 2.05 |
+
+Greedy repetitions were byte-identical for every class. The spread between classes is the drafter: on code and JSON it
+gets 3.6-3.7 drafts per round accepted, on prose and chat 1.1-1.2. The engine's round time is the same.
+
+Thinking on (T=1, seeded): 200.7, 151.8, 182.7 and 114.1 tok/s on four prompts (209 to 2,048 tokens), token-weighted
+**132.3 tok/s**.
+
+Long prompts (cold, public CC BY legal text with a unique first line, 2 repetitions, median; prompt reading = prompt
+tokens / first-token time, which includes the first sampled token):
+
+| prompt | first token | prompt reading | decode after it |
+|---:|---:|---:|---:|
+| 8,167 tokens | 6.57 s | 1,245 tok/s | 103.7 tok/s |
+| 32,744 tokens | **16.42 s** | 1,994 tok/s | 88.2 tok/s |
+| 130,448 tokens | **58.26 s** | 2,239 tok/s | 90.6 tok/s |
+
+Two and three requests sent together: the checkpoint queues them (one request at a time, `max-num-seqs: 1`), so they
+run one after another: 120.2 tok/s combined for two, 108.5 for three.
+
+### Context sweep 2026-11-05
+
+MEASURED 2026-11-05 on the checkpoint build: 135 requests, one at a time. Each prompt is a real document of its kind,
+cut to exactly the stated length in the server's own chat template, then the head-to-head kit's instruction for that
+kind (code = vLLM's Python source; structured = LegalBench items as JSON lines; legal = a public CC BY legal corpus, then
+LegalBench prompt texts; prose = War and Peace; chat = a chat-style instruction over Les Misérables). Greedy, 1,024
+tokens out, random cache salt (no prefix-cache hits). Thinking off: 2 runs per cell (largest difference 2.7 tok/s;
+greedy outputs byte-identical in 45 of 45 cells). Thinking on (reasoning effort 50): 1 run per cell.
+
+**Thinking off: first token, prompt reading, decode tok/s**
+
+| prompt | first token | prompt reading | code | structured | legal | prose | chat |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1K | 1.22 s | 820-948 tok/s | 215.0 | 202.5 | 117.6 | 89.2 | 95.1 |
+| 2K | 1.95 s | 1,024-1,082 tok/s | 203.6 | 207.2 | 114.8 | 97.9 | 94.5 |
+| 4K | 3.26 s | 1,245-1,264 tok/s | 194.9 | 195.6 | 111.6 | 92.9 | 103.4 |
+| 8K | 6.94 s | 1,178-1,188 tok/s | 207.9 | 209.0 | 109.1 | 92.2 | 108.2 |
+| 16K | 10.4 s | 1,574-1,583 tok/s | 201.8 | 212.7 | 105.6 | 95.8 | 110.7 |
+| 32K | 17.2 s | 1,894-1,913 tok/s | 200.5 | 206.6 | 116.5 | 90.1 | 106.9 |
+| 64K | 30.9 s | 2,111-2,132 tok/s | 194.1 | 196.3 | 108.3 | 92.1 | 94.7 |
+| 128K | 59.2 s | 2,198-2,220 tok/s | 182.8 | 196.5 | 110.9 | 91.1 | 95.8 |
+| 256K | 118.7 s | 2,197-2,222 tok/s | 160.0 | 179.7 | 103.1 | 84.1 | 80.5 |
+
+**Thinking on: decode tok/s**
+
+| prompt | first token | code | structured | legal | prose | chat |
+|---|---:|---:|---:|---:|---:|---:|
+| 1K | 1.2 s | 135.4 | 165.8 | 113.8 | 102.9 | 96.2 |
+| 2K | 1.9 s | 136.1 | 158.3 | 118.7 | 99.0 | 110.4 |
+| 4K | 3.2 s | 127.6 | 159.7 | 113.1 | 92.8 | 97.3 |
+| 8K | 6.9 s | 133.3 | 134.6 | 110.1 | 101.7 | 100.2 |
+| 16K | 10.3 s | 132.8 | 170.1 | 104.5 | 97.2 | 94.9 |
+| 32K | 17.1 s | 125.6 | 177.3 | 112.5 | 102.0 | 91.1 |
+| 64K | 30.9 s | 143.6 | 155.3 | 113.6 | 98.6 | 93.0 |
+| 128K | 59.2 s | 141.9 | 168.0 | 103.2 | 93.8 | 96.7 |
+| 256K | 119.0 s | 106.3 | 131.3 | 94.8 | 86.0 | 87.7 |
+
+**Prompt reading tok/s by kind (thinking off)**
+
+| prompt | code | structured | legal | prose | chat |
+|---|---:|---:|---:|---:|---:|
+| 1K | 834 | 820 | 838 | 948 | 852 |
+| 2K | 1,024 | 1,038 | 1,051 | 1,082 | 1,062 |
+| 4K | 1,264 | 1,245 | 1,254 | 1,255 | 1,259 |
+| 8K | 1,178 | 1,178 | 1,180 | 1,182 | 1,188 |
+| 16K | 1,579 | 1,574 | 1,576 | 1,583 | 1,577 |
+| 32K | 1,904 | 1,894 | 1,903 | 1,913 | 1,897 |
+| 64K | 2,119 | 2,118 | 2,111 | 2,132 | 2,115 |
+| 128K | 2,220 | 2,199 | 2,198 | 2,218 | 2,216 |
+| 256K | 2,208 | 2,202 | 2,197 | 2,222 | 2,219 |
+
+**Accepted drafts per round (thinking off, mean over lengths):** code 3.72, structured 3.82, legal 1.62, prose 1.16,
+chat 1.33. A round costs about 22.5-23 ms after a 1K prompt and 26.5-27 ms after 256K for every kind.
 
 ## Decode, tok/s and ms per round (A/B harness, 2026-11-03/04)
 

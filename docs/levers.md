@@ -2,7 +2,7 @@
 
 Every speed change we tried on this build, with its source and its measured result. A lever is a `VLLM_V41_*` switch
 that defaults off; with the switch off, the code path is unchanged (proved by a CPU test and an AST comparison). Numbers
-are ms per verify round, ABBA averages on the A/B harness ([method](method.md)), 2026-11-03 or 2026-11-04, unless
+are ms per verify round, ABBA averages on the A/B harness ([method](method.md)), 2026-11-03 to 2026-11-05, unless
 labelled. Negative is faster.
 
 Baseline, the PP2 x TP4 port with no levers: T=0 31.1 ms per round (99.2 tok/s); T=1 31.7 ms (88.0 tok/s, 1.78
@@ -156,6 +156,44 @@ accepted drafts per round).
 - **Harness v2** (D39): greedy references re-recorded on the deterministic stack (three identical runs), a decode-only
   round metric, and a measured A/A spread under 0.1 ms per round (T=0 −0.096, T=1 −0.077 ms per round decode-only).
 
+### All-reduce, pipeline hand-off and prefill experts (adopted 2026-11-04/05; the 2026-11-05 checkpoint)
+
+- **All-reduce push path for V4.1's MoE sum, `VLLM_V41_SUM2_PUSH_ANY=1`** with `VLLM_SM70_MOE_ADD_ALLREDUCE=1` and
+  `VLLM_SM70_TP4_PUSH_ALLREDUCE_SMALL_MESSAGES=1` (ours on 1Cat's custom all-reduce;
+  [engine/production/0056-allreduce-sum2-push.patch](../engine/production/0056-allreduce-sum2-push.patch), formerly
+  in-testing T03; test D44R5, 2026-11-04 evening). Folding the shared + routed expert sum into the TP4 all-reduce lost
+  0.28 ms as an env-only switch, because V4.1's 61,440-byte message was not admitted to the push path and fell back to
+  pull. The rebuilt admission lets it in. MEASURED, ABBAABBA decode-only ms per round, 8 pairs: −0.034, −0.067,
+  −0.138, +0.003, −0.062, −1.062, −0.056, −0.021, average **−0.180** (95 % interval −0.278..−0.081); T=1 texts 11 of 11
+  the same; A/A +0.069 (T=0) and +0.031 (T=1). Earlier runs D44-D44R4 had stopped in their own build, check and deploy
+  steps.
+- **Lever G, `NCCL_P2P_LEVEL=NVL`** (environment only; installed 2026-11-05 14:06Z). NCCL uses peer-to-peer transfers
+  only between GPUs on the same NVLink board, so the pipeline hand-off from board B to board C takes NCCL's host path.
+  A step timer on the stage-1 board found the later prefill chunks waiting on the hand-off: later-chunk forward median
+  4,176 ms in production against 3,429 ms with the setting (MEASURED, 2026-11-05, timer arms). Its window (OFF ON ON2
+  OFF2, one prompt per length per arm, MEASURED): first token at 32,718 tokens 18.99 / 19.41 s → **16.67 / 16.57 s**
+  (−13.4 % of the means), at 131,419 tokens 69.05 / 71.48 s → **60.34 / 60.27 s** (−14.2 %); greedy output identical
+  (sha) in every arm; decode 28.10 / 27.95 against 27.74 / 27.88 ms per round at 32K, A/A +0.053 (not a decode lever).
+- **SM70 prefill IQ GEMM for the routed experts, `VLLM_V41_PREFILL_IQ_GEMM=1`, `TILES=5,4,4,4,4,4`, `GRID=0`** (ours;
+  [engine/production/0057-prefill-iq-gemm.patch](../engine/production/0057-prefill-iq-gemm.patch) and its `v41prefmoe`
+  library; test D51, installed 2026-11-05 15:12Z). Prompt reading on the first pipeline stage was 44 % expert FFN, routed and shared
+  (MEASURED profile, 131K prompt). The kernel keeps 1Cat's SM70 operand decoders, FP32 HMMA mainloop and FP16 epilogue
+  (OpenMMLab TurboMind code carried by 1Cat) and replaces the scheduling: compact per-expert member tiles, a tile family
+  of 4 and 8 warps, and one tile choice frozen per codec and role. Decode (at most 6 tokens per step) never enters it.
+  MEASURED:
+  - micro-benchmark on real routing histograms (153,600 captured rows): 35,601 µs (current kernels) → **29,693 µs**
+    (−16.6 %); the exact and tuned old paths 35,114 and 35,052 µs;
+  - FP64 matrix: within bound in every case, 504 of 1,280 cases bit-identical, at most 48 ulp, relative L2 at most
+    6.5e-5 (so not bitwise: it went through the near-tie gate); compute-sanitizer memcheck, racecheck and synccheck
+    clean on single-GPU and on each TP4 worker;
+  - serving window (OFF ON ON2 OFF2, before lever G): first token **−4.1 % at 32,768** tokens (20.40 → 19.57 s),
+    **−4.3 % at 150,000** (82.41 → 78.86 s), **−2.4 % at 300,000** (161.77 → 157.86 s); generated tokens identical at
+    every length; decode time ratio 0.9998 (T=0) and 0.9987 (T=1), not a decode lever;
+  - install on the production set with lever G: near-tie gate PASS, identical 8 of 8, KL 0.0 over 1,215 positions;
+    activation census on all 8 workers; long-prompt output sha unchanged (32,768 → `cdf3cf45c3cf`, 131,072 →
+    `e70897e7b29e`).
+- **Checkpoint benchmark** (2026-11-05, all 30 keys): [measurements.md](measurements.md#checkpoint-benchmark-2026-11-05).
+
 ## Did not work
 
 | change | result | why |
@@ -177,7 +215,7 @@ accepted drafts per round).
 | 19 expert-kernel variants | all bit-clean, none beat production; half-warp variants 25-30 % slower | issue- and latency-bound; this led to the instruction diet |
 | L2 warm-up of the next weight matrix on a side graph branch | lost | branches overlapped, but the warm-up stretched to 21-28 µs beside the main kernel; best case 2.4-4 µs per projection |
 | Deeper dense-kernel prefetch (`DMV_X_DEEP`) | lost, bitwise over 3,648 runs | every variant 1.2-5 µs slower; the existing double buffer is enough |
-| MoE sum folded into the all-reduce, env-only | +0.28 ms | V4.1's 61,440-byte message is not admitted to the push path and falls back to pull; a rebuilt admission is in testing |
+| MoE sum folded into the all-reduce, env-only | +0.28 ms | V4.1's 61,440-byte message was not admitted to the push path and fell back to pull; the rebuilt admission (0056) was adopted on 2026-11-04 (above) |
 | Spin-loop wait in the broadcast queue | +0.04..+0.09 ms | — |
 | 200 W instead of 150 W per card | −0.06 ms, neutral | the clamp acts mostly outside decode; an older 200 W gain came from the higher clock ceiling |
 | 3 or 4 drafts per round | refused at boot | the DSpark checkpoint's block size is 5 |
@@ -192,6 +230,7 @@ accepted drafts per round).
 | At most 3 verified drafts per round (`dspark_max_verification_tokens: 3`, D46) | T=0 −2.09 ms per round but −0.877 accepted drafts per round: −14.5 % tok/s | shorter rounds do not pay for the lost drafts |
 | Bitwise FP8 drafter mat-vec (`DRAFT_GEMV2`, D53R) | both drafter switches together: identical, average −0.069 ms per round, 7 of 8 pairs faster, not detectable; isolated drafter step 780.1 µs both, 627.8 µs sharding only, 828.2 µs before | slower than the sharding alone; off |
 | Lookup-free IQ1_M expert repack | no-go before a build: 360 → 344 instructions per 256 weights (−4.4 % against a 20 % gate), +35.7 % bytes | not worth the memory; dropped |
+| Fused prefill attention, lever A mode 2 (2026-11-05 window, on the production set with lever G; a port of philbert440's SM70 sparse prefill attention) | first token 32,768 tokens 16.68 / 16.71 → 14.78 / 14.83 s (−11.4 %), 131,072 tokens 60.27 / 60.67 → 54.26 / 54.11 s (−10.4 %); two-to-three-request serial cohorts +5 to +13 % aggregate; NUMERICS-GATE FAIL: identical 1 of 8, a confident token moved (first at a top-2 gap of 0.406 nats), KL mean 0.0109 over 366 positions | not installed: it changes output. Its kernel matches production's attention on 99.4 % of elements (at most 1 ulp); the difference is the order of the score sums. A summation-order-exact version (mode 3) is being prepared on our test machine |
 | Asynchronous scheduling on Model Runner V2 (D54R, D54A) | against V1: −2.872 / −2.860 ms per round; against synchronous MRV2: −0.085..−0.117 (D54A), no verdict run; bitwise | about 0.4 %; it needs its own serving profile; off for now |
 
 Prefill chunk: 8,192 kept. 4,096 saved 5.6 % of first-token time at 32K, 1.8 % at 64K and nothing at 128K (greedy 6 of 8
@@ -200,8 +239,9 @@ plus 2 near-ties), then failed the approved near-tie gate on its re-test (above)
 
 On 2026-11-03 every lever that was not adopted was re-reviewed for a build or deploy defect that could void its result.
 None was found. Two verdicts were reopened instead: the router floor (its old result was one unpaired arm on a
-different base; re-tested and kept, above) and the all-reduce push path (a port gap; in testing).
+different base; re-tested and kept, above) and the all-reduce push path (a port gap; rebuilt and adopted on 2026-11-04,
+above).
 
 ## In testing
 
-The rest of the queue (D51R4, D44R5, the concurrency window, the final benchmark and D40): [roadmap.md](roadmap.md).
+What comes after the 2026-11-05 checkpoint: [roadmap.md](roadmap.md).

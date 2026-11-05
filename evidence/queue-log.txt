@@ -1115,3 +1115,718 @@ determinism ON10 vs ON10b: T1 COMPARE 12 vs 12 prompts: DIFFER ['t1-05', 't1-06'
 2026-11-04T17:05:00Z QUEUE-D55 summary rc=0
 2026-11-04T17:09:37Z QUEUE-D55 server up: REC (serve-v41pkg-pp2.yaml)
 2026-11-04T17:09:37Z QUEUE-D55 done
+2026-11-04T17:09:46Z QUEUE-D51R4 REC for the window: 23 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T17:09:46Z QUEUE-D51R4 start PREFILL_IQ_GEMM window (serve-v41pkg-pp2.yaml), report-only
+2026-11-04T18:28:55Z QUEUE-D51R4 window rc=143: Real-model descriptor capture: 153600 rows, 320 layer/rank/role cells;18 SM70 GEMMs, zero spills; runtime shared memory/occupancy remains a GPU measurement;INSTRUMENTATION UNAVAILABLE: dispatch: no_cuda_events: INCONCLUSIVE: CUDA profiler events missing;INSTRUMENTATION UNAVAILABLE: counters: ncu_permission: ==ERROR== ERR_NVGPUCTRPERM - The user does not have permission to access NVIDIA GPU Performance Counters on the target device 0. For instructions on enabling permissions and to get more information see https://developer.nvidia.com/ERR_NVGPUCTRPERM;Candidate beats both original and warm-tuned cold aggregate; serving A/B remains required;Terminated;
+2026-11-04T18:28:55Z QUEUE-D51R4 first error: INSTRUMENTATION UNAVAILABLE: dispatch: no_cuda_events: INCONCLUSIVE: CUDA profiler events missing
+2026-11-04T18:28:55Z QUEUE-D51R4 done
+2026-11-04T18:29:12Z QUEUE-D44R5 REC for the window: 23 keys (serve-v41pkg-pp2.yaml)
+2026-11-04T18:29:15Z QUEUE-D44R5 start SUM2P window (serve-v41pkg-pp2.yaml)
+2026-11-04T19:52:50Z QUEUE-D44R5 window rc=0: 2026-11-04T19:52:50Z server serve-pp2 up after about 135 s; MemAvailable 124 GiB;0, 18204 MiB;1, 18204 MiB;2, 22938 MiB;3, 22938 MiB;4, 18204 MiB;5, 18204 MiB;6, 22938 MiB;7, 22938 MiB;2026-11-04T19:52:50Z READY: serve-pp2 group 3955092 on 127.0.0.1:18042;WIN means [-0.034, -0.067, -0.138, 0.003, -0.062, -1.062, -0.056, -0.021] avg -0.180 max +0.003 t1-texts-same True design abbaabba metric dec;ACTION ADOPT;NOISE sd(avg) 0.050 (aa-sd 0.126, rho 0.264, legacy A/A used for dec); 95% interval of avg [-0.278, -0.081];POWER (pair rule) P(WIN) at true +0.00: 0%, -0.10: 13%, -0.15: 42%, -0.20: 75%, -0.25: 92%;A/A T0 SUM2P-OFF4 - SUM2P-OFF: mean +0.069 ms/round-dec, negative 0/3;A/A T1 SUM2P-OFF4 - SUM2P-OFF: mean +0.031 ms/round-dec, negative 5/11 texts same 11/11;WIN: rebuilt DSO retained and experiment enabled on REC;
+2026-11-04T19:52:50Z QUEUE-D44R5 server up: REC + VLLM_SM70_MOE_ADD_ALLREDUCE=1 VLLM_V41_SUM2_PUSH_ANY=1 VLLM_SM70_TP4_PUSH_ALLREDUCE_SMALL_MESSAGES=1 (adopted)
+2026-11-04T19:52:50Z QUEUE-D44R5 done
+2026-11-04T19:53:38Z OWNER-CONC start concmrv2-1104 window (REC 26 keys, single/conc2/conc3), owner gap before QUEUE-OPT-DONE
+2026-11-04T19:54:00Z QUEUE-BENCH final REC: 26 keys -> ${BENCH_DIR}/REC-bench-final.env (final-rec: 26 keys = 17 base (${BENCH_DIR}/REC-postboot-20261103.env, T0 2026-11-03T22:36:51Z) + 9 adopted or companion keys [QUEUE-D48@2026-11-04T03:43:50Z: VLLM_V41_INDEX_TILED; QUEUE-D52R2@2026-11-04T10:43:47Z: VLLM_V41_INDEX_FUSE VLLM_V41_INDEX_FUSE_LIB; QUEUE-D53R2@2026-11-04T11:40:01Z: VLLM_V41_DRAFT_MP_SHARD; QUEUE-MRV2PROD@2026-11-04T16:38:05Z: VLLM_USE_V2_MODEL_RUNNER; QUEUE-D44R5@2026-11-04T19:52:50Z: VLLM_SM70_MOE_ADD_ALLREDUCE VLLM_V41_SUM2_PUSH_ANY VLLM_SM70_TP4)
+2026-11-04T19:54:00Z QUEUE-BENCH NOT RUN: h2h kit lacks the LegalBench fix (no lb_extract in /path/to/out / report.py; run_h2h.py 66d59e8c0c7a report.py b1805ed6ec24): mirror the build host /path/to/work first (run.json pins both files, so mirroring after the speed part breaks the quality part); production left as it is (NOT healthy)
+2026-11-04T19:54:00Z QUEUE-BENCH done
+2026-11-04T19:54:30Z QUEUE-D40 start: 4-card fork smoke (sync, async) on Board B :18044; then REC 26 keys, runner MRV2 (serve-v41pkg-pp2.yaml), = final-rec.sh (CHECK OK: 26 keys identical to ${BENCH_DIR}/REC-d40.env (different order))
+2026-11-04T19:57:54Z QUEUE-D40 smoke rc=1: 2026-11-04T19:55:50Z smoke-4card: fork /path/to/out; engine ${ENGINE_HOME}/.venv-pp2/bin/python; v41k ${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build/v41k.so; GPUs 0,1,4,5; port 18044; arms sync async;2026-11-04T19:55:51Z Board B check: DS41_GPUS = Board B indices {0,1,4,5};2026-11-04T19:55:52Z P2P inside the four: True;gpus: 0, 150.00 W, 1530 MHz, 135 MHz, 0 MiB;1, 150.00 W, 1530 MHz, 135 MHz, 0 MiB;4, 150.00 W, 1530 MHz, 135 MHz, 0 MiB;5, 150.00 W, 1530 MHz, 135 MHz, 0 MiB;2026-11-04T19:55:55Z verify --static PASS;2026-11-04T19:55:55Z arm sync: boot;2026-11-04T19:57:02Z arm sync: BOOT FAILED: start.sh: FAIL: server exited during startup (see /path/to/out);2026-11-04T19:57:02Z arm async: boot;2026-11-04T19:57:54Z arm async: BOOT FAILED: start.sh: FAIL: server exited 
+2026-11-04T19:58:04Z QUEUE-D40 boot FAILED
+2026-11-04T19:58:04Z OWNER-CONC window rc=0
+2026-11-04T19:58:09Z QUEUE-D40 boot proof FAILED: boot rc=1 warm FAIL runner MRV2 26 keys mrv2-state 8 dummy-chain 1 v1-fallback 0 traceback 0; log ${BENCH_DIR}/serve-pp2-D40-boot.log
+2026-11-04T19:58:09Z QUEUE-D40 done
+2026-11-04T19:58:35Z OWNER-CONC CORRECTION: the window rc=0 line above is wrong (owner launch-line bug: $? read after $(date)). Real result: experiment FAILED at IDENT-OFF boot (server exited during startup, no traceback); restoration EXACT_PRODUCTION_SINGLE; production healthy 19:58:01Z
+2026-11-04T19:59:40Z OWNER-CONC start r2 (instrumented re-run after silent IDENT-OFF boot exit; bootwatch.log snapshots every 5 s)
+2026-11-04T20:28:43Z OWNER-CONC r2 window rc=1
+2026-11-04T20:30:09Z OWNER-CONC2 start: BASECHECK, install kit, conc2, mixed-context aggregate
+2026-11-04T20:30:13Z OWNER-CONC2 kit installed (DEPLOYED.json)
+2026-11-04T20:36:16Z OWNER-CONC2 FAILED: conc2 boot (serve-mode recovered single; kit stays installed, single proven identical 8/8)
+2026-11-04T20:36:31Z OWNER-CONC2 start: BASECHECK, install kit, conc2, mixed-context aggregate
+2026-11-04T20:36:35Z OWNER-CONC2 previous kit rolled back to production bytes
+2026-11-04T20:36:35Z OWNER-CONC2 kit installed (DEPLOYED.json)
+2026-11-04T20:39:03Z OWNER-CONC2 conc2 up: slots=2;
+2026-11-04T20:40:40Z OWNER-CONC2 mixctx FAILED or INCONCLUSIVE: see /path/to/out; server left in conc2
+2026-11-04T20:40:40Z OWNER-CONC2 FAILED: server unhealthy after mixctx
+2026-11-04T20:44:01Z OWNER-CONC2 restore: conc2 engine crashed 20:40:40Z (CUDA unspecified launch failure on a lone 32K request); rolling back to production bytes, booting single
+2026-11-04T20:47:40Z OWNER-CONC2 restore single rc=0
+CONCFIX 2026-11-04T20:49:42Z exit verification: no deployment or server stop; launcher conflicts with no-sudo and query-spacing rules
+CONCFIX restore single OK
+CONCFIX run2 window acquired; live Board B/C verified; production baseline next
+CONCFIX production single lone32K baseline
+CONCFIX deploy initial kit; conc2 CUDA_LAUNCH_BLOCKING=1 repro
+CONCFIX restore begin 2026-11-04T20:57:54Z
+CONCFIX restore single OK
+CONCFIX deploy fixed kit; mixed-context qualification
+CONCFIX boot conc2; mixed ABBA and admission
+CONCFIX slow boot diagnostic: workers progress ~3MiB/s; nvme1n1 99%util r_await407ms; unrelated campaign mirror rsync pid758004 active since21:00Z; not touched
+OWNER 2026-11-04T21:08:32Z owner: the drafter host dsv41-mirror-the 8-GPU host.service (hourly mirror -> the 8-GPU host /path/to/work-mirror) pegged the 8-GPU host nvme1n1 (99% util, r_await 407 ms) during the CONCFIX conc2 boot; stopped this run via systemctl; script now runs the the 8-GPU host-side receiver under ionice -c3 nice 10 (backup .pre-ionice-20261104); timer unchanged, next run hourly.
+CONCFIX boot conc3; mixed ABBA and admission
+CONCFIX 2026-11-04T21:23:16Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-04T21:23:19Z boot capacity=3; profile=serve-v41pkg-pp2.yaml
+CONCFIX restore begin 2026-11-04T21:47:56Z
+CONCFIX 2026-11-04T21:48:02Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-04T21:48:03Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+CONCFIX restore single OK
+CONCFIX A single healthy 2026-11-04T21:55:03Z
+CONCFIX B owner sequence started 2026-11-04T21:55:03Z
+2026-11-04T21:55:04Z OWNER-SEQ start /path/to/out: single lone
+2026-11-04T22:01:09Z OWNER-SEQ single lone done
+2026-11-04T22:01:13Z OWNER-SEQ kit installed; boot conc2
+CONCFIX 2026-11-04T22:01:15Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-04T22:01:15Z boot capacity=2; profile=serve-v41pkg-pp2.yaml
+2026-11-04T22:07:22Z OWNER-SEQ GPU-GRANT=owner (the owner finish 1 and 2 asap: 32K probe then D51R5); restore single
+CONCFIX restore begin 2026-11-04T22:07:23Z
+CONCFIX 2026-11-04T22:07:26Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-04T22:07:27Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+CONCFIX restore single OK
+2026-11-04T22:11:24Z OWNER-SEQ 32K probe start (probe-r26, 26-key REC)
+2026-11-04T22:11:29Z AB MD32R26-1104221124-SHORT PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=ae7d463ce1b3f319 harness=b36f867f4a418977
+2026-11-04T22:11:34Z AB MD32R26-1104221124-SHORT ACT n=8 pat=a2627b15 expect=on
+2026-11-04T22:12:49Z AB MD32R26-1104221124-SHORT GATE approved PASS rc=0
+2026-11-04T22:20:19Z AB MD32R26-1104221124-SHORT ACT n=8 pat=a2627b15 expect=on
+2026-11-04T22:21:32Z OWNER-SEQ AB32K arm MRV2
+2026-11-04T22:25:09Z OWNER-SEQ AB32K boot V1 (V2_MODEL_RUNNER=0)
+2026-11-04T22:28:46Z OWNER-SEQ AB32K arm V1
+2026-11-04T22:32:29Z OWNER-SEQ AB32K restore production single
+CONCFIX restore begin 2026-11-04T22:32:29Z
+CONCFIX 2026-11-04T22:32:33Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-04T22:32:33Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+2026-11-04T22:34:18Z OWNER-SEQ NOTE concbatch1104: the owner directive appended to CONCBATCH1104/BRIEF.md (section the owner DIRECTIVE): re-read it before any GPU step
+2026-11-04T22:35:02Z OWNER-SEQ NOTE concbatch1104: upstream code list appended to CONCBATCH1104/BRIEF.md (section Upstream code to evaluate)
+CONCFIX restore single OK
+2026-11-04T22:36:04Z OWNER-SEQ AB32K restore single OK
+2026-11-04T22:36:06Z OWNER-SEQ NOTE concbatch1104+concbatchop1104: the owner GOAL appended to each lane BRIEF.md (2-3 high-context requests; aggregate gain or stop)
+2026-11-04T22:36:07Z OWNER-SEQ AB32K arm MRV2b
+2026-11-04T22:39:42Z OWNER-SEQ AB32K done /path/to/out
+2026-11-04T22:40:49Z OWNER-SEQ ppfill: GPU busy per board during one 64K prefill, then two concurrent prefills (read-only requests)
+2026-11-04T22:44:55Z OWNER-SEQ AB32K verdict: MRV2 faster than V1 on 9/9 same prompts (30K -1.66, 32K -2.91, 34K -1.68 ms/round); no 32K regression. ppfill: prefill stage0 (GPUs 0,4,1,5) ~100% SM 120-130 W, stage1 ~38% SM 81-91 W; concurrent prefills serialize. GPU-GRANT=d51r5
+2026-11-04T22:45:28Z OWNER-SEQ NOTE concbatch1104+concbatchop1104: OWNER MEASUREMENT appended to BRIEF.md (prefill is bound by PP0; PP1 ~60% idle)
+2026-11-04T22:52:23Z OWNER-SEQ NOTE: concbatchop1104 reassigned to option 1 (stage-1 prefill); concbatch1104 owner note appended (forecast or stop). GPU order: d51r5 -> concbatchop1104
+D51R5 2026-11-04T23:29:59Z window launch (log /path/to/out)
+D51R5 2026-11-04T23:29:59Z window start APM1103-20261104T232959Z
+D51R5 2026-11-04T23:30:00Z stop production server
+D51R5 2026-11-04T23:30:04Z kit staged; census boot
+D51R5 2026-11-04T23:34:04Z build
+D51R5 2026-11-04T23:34:51Z gpu_check (dispatch, micro, matrices, sanitizers)
+D51R5 2026-11-04T23:51:17Z sanitizer phase A start (single x4 GPUs)
+D51R5 2026-11-05T00:46:05Z diagnostics (non-gating) on Board B GPUs 0/2/3: plain/racecheck-race/memcheck-29dn
+D51R5 2026-11-05T00:49:15Z diagnostics 2 (non-gating): closure-free gpu.py memcheck supplemental 29/dn + all, Board B GPUs 0/3
+D51R5 2026-11-05T01:05:56Z ending window: kill own racecheck compute-sanitizer (phase A already failed: memcheck supplemental OOM); trap restores REC
+D51R5 2026-11-05T01:09:37Z window exit rc=1
+D51R5 2026-11-05T01:09:38Z restore single OK
+D51R5 2026-11-05T01:09:38Z GPU-GRANT returned to owner
+2026-11-05T01:12:42Z OWNER-SEQ prefixcheck start (single mode, 64K book body + 4 questions)
+2026-11-05T01:15:56Z OWNER-SEQ prefixcheck: 64K follow-up TTFT 35.7 s vs cold 36.1 s; prefix hits 0, queries 0 on follow-ups (prefix caching NOT effective on production). GPU-GRANT=concbatchop1104
+OWNER-SEQ 2026-11-05T02:13:48Z owner chain start: prof-window then fa-window (lane waiter died), then GPU-GRANT=d51r5
+CONCBATCHOP 2026-11-05T02:13:48Z prof window start (production bytes; LENS=32768,131072)
+CONCBATCHOP 2026-11-05T02:13:48Z prof arm plain boot env+: VLLM_SM70_ASYNC_CPU_TRACE=1 VLLM_SM70_ASYNC_CPU_TRACE_EVERY=1
+CONCBATCHOP 2026-11-05T02:18:50Z prof arm plain: L=32768 TTFT 19.593 s L=131072 TTFT 72.313 s
+CONCBATCHOP 2026-11-05T02:18:50Z prof arm timed boot env+: VLLM_SM70_ASYNC_CPU_TRACE=1 VLLM_SM70_ASYNC_CPU_TRACE_EVERY=1 VLLM_V41_ATTN_TIMING=1 VLLM_V41_PREFILL_TIMING=1
+CONCBATCHOP 2026-11-05T02:22:51Z prof arm timed: L=32768 TTFT 19.435 s L=131072 TTFT 71.094 s
+CONCBATCHOP 2026-11-05T02:22:52Z prof arm stept boot env+: VLLM_SM70_ASYNC_CPU_TRACE=1 VLLM_SM70_ASYNC_CPU_TRACE_EVERY=1 VLLM_CBOP_STEP_TIMER=1
+CONCBATCHOP 2026-11-05T02:22:55Z steptimer kit deployed
+CONCBATCHOP 2026-11-05T02:27:01Z prof arm stept: L=32768 TTFT 19.194 s L=131072 TTFT 70.39 s
+CONCBATCHOP 2026-11-05T02:27:01Z prof window done
+CONCBATCHOP 2026-11-05T02:27:01Z restore begin (rc=0)
+CONCBATCHOP 2026-11-05T02:29:37Z restore single OK
+CONCBATCHOP 2026-11-05T02:29:38Z fa window start (REC + kit fusedattn; so sha 31fec638dac7)
+CONCBATCHOP 2026-11-05T02:29:57Z fa micro PASS: packed r2 ctx64K prod 41.0 fused 14.4 ms; packed r2 ctx64K peaked prod 41.1 fused 14.3 ms; packed r4 ctx128K prod 41.3 fused 14.3 ms; packed r2 ctx0 prod 40.5 fused 13.3 ms; window-only ctx64K prod 14.7 fused 2.0 ms
+CONCBATCHOP 2026-11-05T02:30:01Z fa deploy OK
+2026-11-05T02:32:40Z AB CBOPFA-11050230-OFF PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=fe4f75de6ce9cbc7 harness=b36f867f4a418977
+2026-11-05T02:33:41Z AB CBOPFA-11050230-OFF GATE approved PASS rc=0
+2026-11-05T02:34:43Z AB CBOPFA-11050230-OFF ACT n=0 pat=9ac45955 expect=off
+CONCBATCHOP 2026-11-05T02:39:39Z fa arm CBOPFA-11050230-OFF: AB CBOPFA-11050230-OFF GATE approved PASS rc=0;AB CBOPFA-11050230-OFF ACT n=0 pat=9ac45955 expect=off | DEPTH CBOPFA-11050230-OFF L=32768 rep 0: prompt 32718 TTFT 19.079 s decode 145.37 tok/s rounds 125 tok/round 4.10 ms/round 28.12 sha cdf3cf45c3cf;DEPTH CBOPFA-11050230-OFF L=131072 rep 0: prompt 131419 TTFT 72.085 s decode 149.11 tok/s rounds 136 tok/round 3.76 ms/round 25.2 sha e70897e7b29e
+2026-11-05T02:42:11Z AB CBOPFA-11050230-ON PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=fe4f75de6ce9cbc7 harness=b36f867f4a418977
+2026-11-05T02:47:13Z AB CBOPFA-11050230-ON INVALID: warm-up failed
+CONCBATCHOP 2026-11-05T02:47:13Z fa arm CBOPFA-11050230-ON: harness rc=1
+CONCBATCHOP 2026-11-05T02:47:13Z fa restore begin (rc=6)
+CONCBATCHOP 2026-11-05T02:49:44Z CONCBATCHOP restore single OK (fa window rc=6)
+OWNER-SEQ 2026-11-05T02:49:44Z owner chain: prof rc=0 fa rc=6; GPU-GRANT=d51r5
+D51R5 2026-11-05T02:50:00Z window launch (log /path/to/out)
+D51R5 2026-11-05T02:50:00Z window start APM1103-20261105T025000Z
+D51R5 2026-11-05T02:50:01Z stop production server
+D51R5 2026-11-05T02:50:04Z kit staged; census boot
+D51R5 2026-11-05T02:54:26Z build
+D51R5 2026-11-05T02:55:13Z gpu_check (dispatch, micro, matrices, sanitizers)
+D51R5 2026-11-05T03:11:30Z sanitizer phase A start (single x4 GPUs)
+D51R5 2026-11-05T03:30:17Z sanitizer phase A done
+D51R5 2026-11-05T03:30:17Z sanitizer phase B tp4 memcheck real
+D51R5 2026-11-05T03:33:59Z window exit rc=1
+D51R5 2026-11-05T03:34:01Z restore single OK
+D51R5 2026-11-05T03:34:01Z GPU-GRANT returned to owner
+OWNER-SEQ 2026-11-05T03:34:01Z chain2: D51 r2 returned grant; GPU-GRANT=concbatchop1104; lever G ec-window start (ec-20261105T033401Z)
+CONCBATCHOP 2026-11-05T03:34:01Z ec window start (REC + kit ecguard; FLOOR=2048 MB)
+CONCBATCHOP 2026-11-05T03:34:05Z ec kits deployed (ecguard + steptimer)
+CONCBATCHOP 2026-11-05T03:34:05Z ec timer arm ecprod boot env+: 
+CONCBATCHOP 2026-11-05T03:38:25Z ec timer arm ecprod: L=32768 TTFT 19.452 s L=131072 TTFT 71.293 s
+CONCBATCHOP 2026-11-05T03:38:25Z ec timer arm ecguard boot env+: VLLM_V41_EMPTY_CACHE_MODE=guard VLLM_V41_EMPTY_CACHE_FREE_MB=2048
+CONCBATCHOP 2026-11-05T03:42:41Z ec timer arm ecguard: L=32768 TTFT 18.213 s L=131072 TTFT 67.089 s
+CONCBATCHOP 2026-11-05T03:42:41Z ec timers rc=2: EC ecprod INCONCLUSIVE: ec lines 0, step lines 20;EC ecguard INCONCLUSIVE: ec lines 0, step lines 20
+CONCBATCHOP 2026-11-05T03:42:44Z steptimer rolled back (ecguard stays deployed for the ABBA arms)
+2026-11-05T03:45:19Z AB CBOPEC-11050342-OFF PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8b3d886518f042b8 harness=b36f867f4a418977
+2026-11-05T03:46:18Z AB CBOPEC-11050342-OFF GATE approved PASS rc=0
+2026-11-05T03:47:20Z AB CBOPEC-11050342-OFF ACT n=0 pat=247c2032 expect=off
+CONCBATCHOP 2026-11-05T03:52:17Z ec arm CBOPEC-11050342-OFF: AB CBOPEC-11050342-OFF GATE approved PASS rc=0;AB CBOPEC-11050342-OFF ACT n=0 pat=247c2032 expect=off | DEPTH CBOPEC-11050342-OFF L=32768 rep 0: prompt 32718 TTFT 19.62 s decode 145.93 tok/s rounds 125 tok/round 4.10 ms/round 28.01 sha cdf3cf45c3cf;DEPTH CBOPEC-11050342-OFF L=131072 rep 0: prompt 131419 TTFT 71.025 s decode 150.17 tok/s rounds 136 tok/round 3.76 ms/round 25.02 sha e70897e7b29e
+2026-11-05T03:55:05Z AB CBOPEC-11050342-ON PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8b3d886518f042b8 harness=b36f867f4a418977
+2026-11-05T03:56:07Z AB CBOPEC-11050342-ON GATE approved PASS rc=0
+2026-11-05T03:57:14Z AB CBOPEC-11050342-ON ACT n=8 pat=247c2032 expect=on
+CONCBATCHOP 2026-11-05T04:02:04Z ec arm CBOPEC-11050342-ON: AB CBOPEC-11050342-ON GATE approved PASS rc=0;AB CBOPEC-11050342-ON ACT n=8 pat=247c2032 expect=on | DEPTH CBOPEC-11050342-ON L=32768 rep 0: prompt 32718 TTFT 18.445 s decode 126.98 tok/s rounds 125 tok/round 4.10 ms/round 32.19 sha cdf3cf45c3cf;DEPTH CBOPEC-11050342-ON L=131072 rep 0: prompt 131419 TTFT 66.831 s decode 130.14 tok/s rounds 136 tok/round 3.76 ms/round 28.87 sha e70897e7b29e
+2026-11-05T04:04:53Z AB CBOPEC-11050342-ON2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8b3d886518f042b8 harness=b36f867f4a418977
+2026-11-05T04:05:52Z AB CBOPEC-11050342-ON2 GATE approved PASS rc=0
+2026-11-05T04:06:56Z AB CBOPEC-11050342-ON2 ACT n=8 pat=247c2032 expect=on
+CONCBATCHOP 2026-11-05T04:11:39Z ec arm CBOPEC-11050342-ON2: AB CBOPEC-11050342-ON2 GATE approved PASS rc=0;AB CBOPEC-11050342-ON2 ACT n=8 pat=247c2032 expect=on | DEPTH CBOPEC-11050342-ON2 L=32768 rep 0: prompt 32718 TTFT 18.465 s decode 136.54 tok/s rounds 125 tok/round 4.10 ms/round 29.94 sha cdf3cf45c3cf;DEPTH CBOPEC-11050342-ON2 L=131072 rep 0: prompt 131419 TTFT 66.328 s decode 145.2 tok/s rounds 136 tok/round 3.76 ms/round 25.88 sha e70897e7b29e
+2026-11-05T04:14:18Z AB CBOPEC-11050342-OFF2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=8b3d886518f042b8 harness=b36f867f4a418977
+2026-11-05T04:15:17Z AB CBOPEC-11050342-OFF2 GATE approved PASS rc=0
+2026-11-05T04:16:20Z AB CBOPEC-11050342-OFF2 ACT n=0 pat=247c2032 expect=off
+CONCBATCHOP 2026-11-05T04:21:09Z ec arm CBOPEC-11050342-OFF2: AB CBOPEC-11050342-OFF2 GATE approved PASS rc=0;AB CBOPEC-11050342-OFF2 ACT n=0 pat=247c2032 expect=off | DEPTH CBOPEC-11050342-OFF2 L=32768 rep 0: prompt 32718 TTFT 18.548 s decode 146.35 tok/s rounds 125 tok/round 4.10 ms/round 27.93 sha cdf3cf45c3cf;DEPTH CBOPEC-11050342-OFF2 L=131072 rep 0: prompt 131419 TTFT 69.906 s decode 147.92 tok/s rounds 136 tok/round 3.76 ms/round 25.4 sha e70897e7b29e
+CONCBATCHOP 2026-11-05T04:21:09Z ec decode scorer rc=0 1 (pairs_arms_v2 | win3)
+CONCBATCHOP 2026-11-05T04:21:09Z ec score: VERDICT NO-GAIN | bitwise BITWISE | decode: A/A T1 CBOPEC-11050342-OFF2 - CBOPEC-11050342-OFF: mean +0.038 ms/round-dec, negative 4/11 texts same 11/11
+CONCBATCHOP 2026-11-05T04:21:09Z ec window done
+CONCBATCHOP 2026-11-05T04:21:09Z ec restore begin (rc=0)
+CONCBATCHOP 2026-11-05T04:23:45Z CONCBATCHOP restore single OK (ec window rc=0)
+OWNER-SEQ 2026-11-05T04:23:45Z chain2: ec-window rc=0; GPU-GRANT=owner
+OWNER-SEQ 2026-11-05T05:08:42Z GPU-GRANT=concbatch1104; owner launches PP14 pilot (pp14-pilot-1)
+2026-11-05T05:08:42Z CONCBATCH begin granted window; bench server ownership transferred for window
+2026-11-05T05:08:42Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T05:08:46Z CONCBATCH boot capacity=1 throughput=False
+CONCBATCH 2026-11-05T05:11:13Z natural mode=single2 original single run start
+CONCBATCH 2026-11-05T05:11:13Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T05:11:13Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T05:11:14Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T05:11:16Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T05:11:18Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T05:11:20Z natural mode=single2 warmup
+CONCBATCH 2026-11-05T05:11:25Z natural mode=single2 arm start cohort=0 arm=0 kind=serial
+CONCBATCH 2026-11-05T05:12:23Z natural mode=single2 arm complete cohort=0 arm=0 wall_tok_s=35.685395
+CONCBATCH 2026-11-05T05:12:23Z natural mode=single2 arm start cohort=0 arm=1 kind=serial
+CONCBATCH 2026-11-05T05:13:21Z natural mode=single2 arm complete cohort=0 arm=1 wall_tok_s=35.417993
+CONCBATCH 2026-11-05T05:13:21Z natural mode=single2 warmup
+CONCBATCH 2026-11-05T05:13:27Z natural mode=single2 arm start cohort=1 arm=0 kind=serial
+CONCBATCH 2026-11-05T05:14:56Z natural mode=single2 arm complete cohort=1 arm=0 wall_tok_s=22.930014
+CONCBATCH 2026-11-05T05:14:56Z natural mode=single2 arm start cohort=1 arm=1 kind=serial
+CONCBATCH 2026-11-05T05:16:25Z natural mode=single2 arm complete cohort=1 arm=1 wall_tok_s=22.953305
+CONCBATCH 2026-11-05T05:16:25Z natural mode=single2 warmup
+2026-11-05T05:16:26Z QUEUE-BENCH final REC: 26 keys -> ${BENCH_DIR}/REC-bench-final.env (final-rec: 26 keys = 17 base (${BENCH_DIR}/REC-postboot-20261103.env, T0 2026-11-03T22:36:51Z) + 9 adopted or companion keys [QUEUE-D48@2026-11-04T03:43:50Z: VLLM_V41_INDEX_TILED; QUEUE-D52R2@2026-11-04T10:43:47Z: VLLM_V41_INDEX_FUSE VLLM_V41_INDEX_FUSE_LIB; QUEUE-D53R2@2026-11-04T11:40:01Z: VLLM_V41_DRAFT_MP_SHARD; QUEUE-MRV2PROD@2026-11-04T16:38:05Z: VLLM_USE_V2_MODEL_RUNNER; QUEUE-D44R5@2026-11-04T19:52:50Z: VLLM_SM70_MOE_ADD_ALLREDUCE VLLM_V41_SUM2_PUSH_ANY VLLM_SM70_TP4)
+2026-11-05T05:16:26Z QUEUE-BENCH boot: final REC 26 keys, runner MRV2 (serve-v41pkg-pp2.yaml); kit run_h2h.py d56360da2625 report.py da743892474e lbfix yes; last server line before boot: QUEUE-D44R5 server up: REC + VLLM_SM70_MOE_ADD_ALLREDUCE=1 VLLM_V41_SUM2_PUSH_ANY=1 VLLM_SM70_TP4_PUSH_ALLREDUCE_SMALL_MESSAGES=1 (adopted)
+2026-11-05T05:16:31Z CONCBATCH restore begin
+2026-11-05T05:16:31Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T05:16:32Z CONCBATCH boot capacity=1 throughput=False
+2026-11-05T05:18:50Z CONCBATCH restore single OK
+OWNER-SEQ 2026-11-05T05:18:50Z PP14 pilot rc=1; health 200; GPU-GRANT=owner
+OWNER-SEQ 2026-11-05T05:18:56Z GPU-GRANT=concbatch1104; owner relaunches PP14 pilot (run 1 cut by owner bench-queue error 05:16Z) (pp14-pilot-2)
+2026-11-05T05:18:56Z CONCBATCH begin granted window; bench server ownership transferred for window
+2026-11-05T05:18:56Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T05:18:58Z CONCBATCH boot capacity=1 throughput=False
+CONCBATCH 2026-11-05T05:22:16Z natural mode=single2 original single run start
+CONCBATCH 2026-11-05T05:22:16Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T05:22:16Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T05:22:17Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T05:22:19Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T05:22:22Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T05:22:23Z natural mode=single2 warmup
+CONCBATCH 2026-11-05T05:22:29Z natural mode=single2 arm start cohort=0 arm=0 kind=serial
+CONCBATCH 2026-11-05T05:23:26Z natural mode=single2 arm complete cohort=0 arm=0 wall_tok_s=36.012431
+CONCBATCH 2026-11-05T05:23:26Z natural mode=single2 arm start cohort=0 arm=1 kind=serial
+CONCBATCH 2026-11-05T05:24:23Z natural mode=single2 arm complete cohort=0 arm=1 wall_tok_s=35.702980
+CONCBATCH 2026-11-05T05:24:23Z natural mode=single2 warmup
+CONCBATCH 2026-11-05T05:24:29Z natural mode=single2 arm start cohort=1 arm=0 kind=serial
+CONCBATCH 2026-11-05T05:25:58Z natural mode=single2 arm complete cohort=1 arm=0 wall_tok_s=23.138738
+CONCBATCH 2026-11-05T05:25:58Z natural mode=single2 arm start cohort=1 arm=1 kind=serial
+CONCBATCH 2026-11-05T05:27:27Z natural mode=single2 arm complete cohort=1 arm=1 wall_tok_s=23.025834
+CONCBATCH 2026-11-05T05:27:27Z natural mode=single2 warmup
+CONCBATCH 2026-11-05T05:27:32Z natural mode=single2 arm start cohort=2 arm=0 kind=serial
+CONCBATCH 2026-11-05T05:30:09Z natural mode=single2 arm complete cohort=2 arm=0 wall_tok_s=13.069408
+CONCBATCH 2026-11-05T05:30:09Z natural mode=single2 arm start cohort=2 arm=1 kind=serial
+CONCBATCH 2026-11-05T05:32:45Z natural mode=single2 arm complete cohort=2 arm=1 wall_tok_s=13.245212
+CONCBATCH 2026-11-05T05:32:45Z natural mode=single2 original single run complete
+CONCBATCH 2026-11-05T05:32:46Z natural mode=single3 original single run start
+CONCBATCH 2026-11-05T05:32:46Z natural mode=single3 tokenize
+CONCBATCH 2026-11-05T05:32:46Z natural mode=single3 tokenize
+CONCBATCH 2026-11-05T05:32:47Z natural mode=single3 tokenize
+CONCBATCH 2026-11-05T05:32:50Z natural mode=single3 tokenize
+CONCBATCH 2026-11-05T05:32:52Z natural mode=single3 tokenize
+CONCBATCH 2026-11-05T05:32:54Z natural mode=single3 warmup
+CONCBATCH 2026-11-05T05:33:00Z natural mode=single3 arm start cohort=0 arm=0 kind=serial
+CONCBATCH 2026-11-05T05:35:31Z natural mode=single3 arm complete cohort=0 arm=0 wall_tok_s=20.413727
+CONCBATCH 2026-11-05T05:35:31Z natural mode=single3 arm start cohort=0 arm=1 kind=serial
+CONCBATCH 2026-11-05T05:38:04Z natural mode=single3 arm complete cohort=0 arm=1 wall_tok_s=20.163297
+CONCBATCH 2026-11-05T05:38:05Z natural mode=single3 warmup
+CONCBATCH 2026-11-05T05:38:11Z natural mode=single3 arm start cohort=1 arm=0 kind=serial
+CONCBATCH 2026-11-05T05:40:26Z natural mode=single3 arm complete cohort=1 arm=0 wall_tok_s=22.997566
+CONCBATCH 2026-11-05T05:40:26Z natural mode=single3 arm start cohort=1 arm=1 kind=serial
+CONCBATCH 2026-11-05T05:42:40Z natural mode=single3 arm complete cohort=1 arm=1 wall_tok_s=23.075809
+CONCBATCH 2026-11-05T05:42:41Z natural mode=single3 original single run complete
+2026-11-05T05:42:41Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T05:42:44Z CONCBATCH deploy hash-checked candidate to source and site
+2026-11-05T05:42:44Z CONCBATCH install hash-checked kit
+2026-11-05T05:43:05Z CONCBATCH boot capacity=2 throughput=False
+2026-11-05T05:46:48Z CONCBATCH admission refusal and recovery before natural conc2
+CONCBATCH 2026-11-05T05:46:49Z natural mode=conc2 run start
+CONCBATCH 2026-11-05T05:46:49Z natural mode=conc2 tokenize
+CONCBATCH 2026-11-05T05:46:49Z natural mode=conc2 tokenize
+CONCBATCH 2026-11-05T05:46:51Z natural mode=conc2 tokenize
+CONCBATCH 2026-11-05T05:46:54Z natural mode=conc2 tokenize
+CONCBATCH 2026-11-05T05:46:57Z natural mode=conc2 tokenize
+CONCBATCH 2026-11-05T05:46:58Z natural mode=conc2 warmup
+CONCBATCH 2026-11-05T05:47:05Z natural mode=conc2 arm start cohort=0 arm=0 kind=serial
+CONCBATCH 2026-11-05T05:48:01Z natural mode=conc2 arm complete cohort=0 arm=0 wall_tok_s=36.842399
+CONCBATCH 2026-11-05T05:48:01Z natural mode=conc2 arm start cohort=0 arm=1 kind=concurrent
+CONCBATCH 2026-11-05T05:48:48Z natural mode=conc2 arm complete cohort=0 arm=1 wall_tok_s=43.906691
+CONCBATCH 2026-11-05T05:48:48Z natural mode=conc2 arm start cohort=0 arm=2 kind=concurrent
+CONCBATCH 2026-11-05T05:49:35Z natural mode=conc2 arm complete cohort=0 arm=2 wall_tok_s=43.645440
+CONCBATCH 2026-11-05T05:49:35Z natural mode=conc2 arm start cohort=0 arm=3 kind=serial
+CONCBATCH 2026-11-05T05:50:30Z natural mode=conc2 arm complete cohort=0 arm=3 wall_tok_s=37.125335
+CONCBATCH 2026-11-05T05:50:30Z natural mode=conc2 warmup
+CONCBATCH 2026-11-05T05:50:36Z natural mode=conc2 arm start cohort=1 arm=0 kind=serial
+CONCBATCH 2026-11-05T05:52:05Z natural mode=conc2 arm complete cohort=1 arm=0 wall_tok_s=23.058307
+CONCBATCH 2026-11-05T05:52:05Z natural mode=conc2 arm start cohort=1 arm=1 kind=concurrent
+CONCBATCH 2026-11-05T05:53:26Z natural mode=conc2 arm complete cohort=1 arm=1 wall_tok_s=25.265212
+CONCBATCH 2026-11-05T05:53:26Z natural mode=conc2 arm start cohort=1 arm=2 kind=concurrent
+CONCBATCH 2026-11-05T05:54:48Z natural mode=conc2 arm complete cohort=1 arm=2 wall_tok_s=25.253926
+CONCBATCH 2026-11-05T05:54:48Z natural mode=conc2 arm start cohort=1 arm=3 kind=serial
+CONCBATCH 2026-11-05T05:56:16Z natural mode=conc2 arm complete cohort=1 arm=3 wall_tok_s=23.135988
+CONCBATCH 2026-11-05T05:56:16Z natural mode=conc2 warmup
+CONCBATCH 2026-11-05T05:56:22Z natural mode=conc2 arm start cohort=2 arm=0 kind=serial
+CONCBATCH 2026-11-05T05:58:58Z natural mode=conc2 arm complete cohort=2 arm=0 wall_tok_s=13.217494
+CONCBATCH 2026-11-05T05:58:58Z natural mode=conc2 arm start cohort=2 arm=1 kind=concurrent
+CONCBATCH 2026-11-05T06:01:25Z natural mode=conc2 arm complete cohort=2 arm=1 wall_tok_s=13.903491
+CONCBATCH 2026-11-05T06:01:25Z natural mode=conc2 arm start cohort=2 arm=2 kind=concurrent
+CONCBATCH 2026-11-05T06:03:53Z natural mode=conc2 arm complete cohort=2 arm=2 wall_tok_s=13.882586
+CONCBATCH 2026-11-05T06:03:53Z natural mode=conc2 arm start cohort=2 arm=3 kind=serial
+CONCBATCH 2026-11-05T06:06:27Z natural mode=conc2 arm complete cohort=2 arm=3 wall_tok_s=13.244479
+2026-11-05T06:06:28Z CONCBATCH restore begin
+2026-11-05T06:06:28Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T06:06:31Z CONCBATCH restore rollback
+2026-11-05T06:06:31Z CONCBATCH rollback kit
+2026-11-05T06:06:31Z CONCBATCH boot capacity=1 throughput=False
+2026-11-05T06:24:45Z CONCBATCH restore single OK
+OWNER-SEQ 2026-11-05T06:24:45Z PP14 pilot rc=1; health 200; GPU-GRANT=owner
+OWNER-SEQ 2026-11-05T06:24:52Z GPU-GRANT=d51r5; owner starts D51 run 3 (resume r2 APM1103-20261105T025000Z)
+D51R5 2026-11-05T06:24:52Z window launch (log /path/to/out)
+D51R5 2026-11-05T06:24:53Z window start APM1103-20261105T062453Z
+D51R5 2026-11-05T06:24:53Z stop production server
+D51R5 2026-11-05T06:24:57Z kit staged; resume from APM1103-20261105T025000Z (no census, no build)
+D51R5 2026-11-05T06:24:59Z gpu_check phase B (TP4 API control, TP4 memcheck, qualify)
+D51R5 2026-11-05T06:24:59Z sanitizer phase B tp4 memcheck api-control
+D51R5 2026-11-05T06:25:24Z sanitizer phase B tp4 memcheck api-control-host
+D51R5 2026-11-05T06:25:48Z sanitizer phase B tp4 memcheck real
+D51R5 2026-11-05T06:44:23Z window exit rc=1
+D51R5 2026-11-05T06:44:24Z restore single OK
+D51R5 2026-11-05T06:44:24Z GPU-GRANT returned to owner
+OWNER-SEQ 2026-11-05T06:44:24Z D51 run 3 exited rc=0; grant owner
+OWNER-SEQ 2026-11-05T06:44:24Z chain3: GPU-GRANT=concbatchop1104; combo-window start (combo-20261105T064424Z)
+CONCBATCHOP 2026-11-05T06:44:25Z combo window start (production bytes; kits fusedattn + ecguard + steptimer)
+CONCBATCHOP 2026-11-05T06:44:55Z micro A PASS: packed r2 ctx64K prod 41.1 fused 14.3 ms; packed r2 ctx64K peaked prod 41.1 fused 14.3 ms; packed r4 ctx128K prod 41.3 fused 14.2 ms; packed r2 ctx0 prod 40.7 fused 13.3 ms; window-only ctx64K prod 14.9 fused 2.0 ms; packed r4 warmup T42 prod 0.3 fused 0.5 ms; window-only warmup T42 prod 0.2 fused 0.2 ms; packed r2 T17 ctx1K prod 0.2 fused 0.5 ms
+CONCBATCHOP 2026-11-05T06:45:10Z combo restore begin (rc=1)
+2026-11-05T06:50:52Z CONCBATCH CPU ready d760931d8d: top20 transport fixed; next granted step diagnostic-run2-1 before pilot3; no production takeover yet
+CONCBATCHOP 2026-11-05T07:02:44Z CONCBATCHOP restore single OK (combo window rc=1)
+OWNER-SEQ 2026-11-05T07:02:44Z chain3: combo-window rc=1; GPU-GRANT=owner
+OWNER-SEQ 2026-11-05T07:14:10Z owner decision for concbatch1104: chain5 order is combo -> concbatch1104 diagnostic-run2-1 ONLY (return grant to owner after its restore) -> D51 r4 window -> concbatch1104 pilot3 (second grant). Run only the diagnostic on the first grant.
+OWNER-SEQ 2026-11-05T07:34:46Z chain4c: models/gguf -> /home/user/dsv41-gguf-1277, engram -> /home/user/dsv41-engram-1277 (nvme0; old dirs kept *.nvme1-slow-20261105; sha256 in copy.log/dl.log); GPU-GRANT=concbatchop1104
+OWNER-SEQ 2026-11-05T07:34:46Z chain4c: combo-window start (combo-20261105T073446Z)
+CONCBATCHOP 2026-11-05T07:34:47Z combo window start (production bytes; kits fusedattn + ecguard + steptimer)
+CONCBATCHOP 2026-11-05T07:35:14Z micro A PASS: packed r2 ctx64K prod 41.1 fused 14.2 ms; packed r2 ctx64K peaked prod 41.1 fused 14.2 ms; packed r4 ctx128K prod 41.3 fused 14.3 ms; packed r2 ctx0 prod 40.7 fused 13.3 ms; window-only ctx64K prod 14.6 fused 2.0 ms; packed r4 warmup T42 prod 0.3 fused 0.5 ms; window-only warmup T42 prod 0.1 fused 0.2 ms; packed r2 T17 ctx1K prod 0.2 fused 0.5 ms
+CONCBATCHOP 2026-11-05T07:35:30Z micro B default rc=0: P2P default: recv median ms 941.5 947.8 942.3 946.9 | GB/s per pair 0.18 0.18 0.18 0.18 | data OK | transports:      52  via P2P/CUMEM;      1  via P2P/the 8-GPU host;      1  via Pine420;     16  via SHM/direct/direct
+CONCBATCHOP 2026-11-05T07:35:38Z micro B nvl rc=0: P2P nvl: recv median ms 87.2 87.3 87.1 87.1 | GB/s per pair 1.92 1.92 1.92 1.93 | data OK | transports:       1  via P2host420;     46  via P2P/CUMEM;      1  via P2Phost420;     24  via SHM/direct/direct
+CONCBATCHOP 2026-11-05T07:35:47Z micro B nvlce rc=0: P2P nvlce: recv median ms 91.7 91.1 91.7 91.1 | GB/s per pair 1.83 1.84 1.83 1.84 | data OK | transports:      46  via P2P/CUMEM;      2  via P2P/the 8-GPU host;     24  via SHM/CE/direct
+CONCBATCHOP 2026-11-05T07:35:47Z kits deployed (fusedattn + ecguard + steptimer)
+CONCBATCHOP 2026-11-05T07:35:47Z timer arm t-prod env+: VLLM_CBOP_EC_TIMER=1 VLLM_CBOP_STEP_TIMER=1 NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,ENV
+CONCBATCHOP 2026-11-05T08:00:37Z timer arm t-prod: L=32768 TTFT 19.675 s L=131072 TTFT 71.042 s
+CONCBATCHOP 2026-11-05T08:00:37Z timer arm t-late env+: VLLM_CBOP_EC_TIMER=1 VLLM_CBOP_STEP_TIMER=1 VLLM_V41_EMPTY_CACHE_MODE=late
+CONCBATCHOP 2026-11-05T08:05:07Z timer arm t-late: L=32768 TTFT 18.44 s L=131072 TTFT 67.293 s
+CONCBATCHOP 2026-11-05T08:05:07Z timer arm t-p2p env+: VLLM_CBOP_EC_TIMER=1 VLLM_CBOP_STEP_TIMER=1 NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,ENV NCCL_P2P_LEVEL=NVL
+CONCBATCHOP 2026-11-05T08:09:15Z timer arm t-p2p: L=32768 TTFT 16.485 s L=131072 TTFT 60.156 s
+CONCBATCHOP 2026-11-05T08:09:15Z timer arm t-split env+: VLLM_CBOP_EC_TIMER=1 VLLM_CBOP_STEP_TIMER=1 VLLM_V41_ATTN_TIMING=1 VLLM_V41_PREFILL_TIMING=1 VLLM_V41_EMPTY_CACHE_MODE=late
+CONCBATCHOP 2026-11-05T08:13:44Z timer arm t-split: L=32768 TTFT 18.639 s L=131072 TTFT 67.6 s
+CONCBATCHOP 2026-11-05T08:13:44Z timer arm t-fa env+: VLLM_CBOP_EC_TIMER=1 VLLM_CBOP_STEP_TIMER=1 VLLM_V41_ATTN_TIMING=1 VLLM_V41_PREFILL_TIMING=1 VLLM_V41_PREFILL_FUSED_ATTN=1 VLLM_V41_PREFILL_FUSED_SO=/path/to/out
+CONCBATCHOP 2026-11-05T08:18:02Z timer arm t-fa: L=32768 TTFT 16.923 s L=131072 TTFT 62.768 s
+CONCBATCHOP 2026-11-05T08:18:02Z timers: EC t-prod first-chunk fwd median 3239 ms | later-chunk fwd median 4176 ms | later entry release_ms median 904 | later exit release_ms median 0;EC t-late first-chunk fwd median 3145 ms | later-chunk fwd median 3876 ms | later entry release_ms median 0 | later exit release_ms median 235;EC t-p2p first-chunk fwd median 3125 ms | later-chunk fwd median 3429 ms | later entry release_ms median 306 | later exit release_ms median 0;EC t-split first-chunk fwd median 3156 ms | later-chunk fwd median 3870 ms | later entry release_ms median 0 | later exit release_ms median 18;EC t-fa first-chunk fwd median 2651 ms | later-chunk fwd median 3685 ms | later entry release_ms median 685 | later exit release_ms median 0
+CONCBATCHOP 2026-11-05T08:18:05Z steptimer rolled back (fusedattn + ecguard stay deployed, default off)
+2026-11-05T08:21:04Z AB CBOPA-11050818-OFF PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=cbd0acfcec4b3173 harness=b36f867f4a418977
+2026-11-05T08:22:04Z AB CBOPA-11050818-OFF GATE approved PASS rc=0
+2026-11-05T08:23:07Z AB CBOPA-11050818-OFF ACT n=0 pat=9ac45955 expect=off
+CONCBATCHOP 2026-11-05T08:28:09Z arm CBOPA-11050818-OFF: AB CBOPA-11050818-OFF GATE approved PASS rc=0;AB CBOPA-11050818-OFF ACT n=0 pat=9ac45955 expect=off | DEPTH CBOPA-11050818-OFF L=32768 rep 0: prompt 32718 TTFT 19.434 s decode 143.69 tok/s rounds 125 tok/round 4.10 ms/round 28.45 sha cdf3cf45c3cf;DEPTH CBOPA-11050818-OFF L=131072 rep 0: prompt 131419 TTFT 72.071 s decode 148.08 tok/s rounds 136 tok/round 3.76 ms/round 25.37 sha e70897e7b29e
+2026-11-05T08:31:28Z AB CBOPA-11050818-ON PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=cbd0acfcec4b3173 harness=b36f867f4a418977
+2026-11-05T08:32:24Z AB CBOPA-11050818-ON GATE approved FAIL rc=1
+2026-11-05T08:33:23Z AB CBOPA-11050818-ON ACT n=8 pat=9ac45955 expect=on
+CONCBATCHOP 2026-11-05T08:37:42Z arm CBOPA-11050818-ON: AB CBOPA-11050818-ON GATE approved FAIL rc=1;AB CBOPA-11050818-ON ACT n=8 pat=9ac45955 expect=on | DEPTH CBOPA-11050818-ON L=32768 rep 0: prompt 32718 TTFT 16.401 s decode 136.81 tok/s rounds 133 tok/round 3.85 ms/round 28.08 sha d1e597012eb5;DEPTH CBOPA-11050818-ON L=131072 rep 0: prompt 131419 TTFT 60.727 s decode 165.95 tok/s rounds 122 tok/round 4.20 ms/round 25.24 sha 301808ded752
+2026-11-05T08:41:00Z AB CBOPA-11050818-ON2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=cbd0acfcec4b3173 harness=b36f867f4a418977
+2026-11-05T08:41:57Z AB CBOPA-11050818-ON2 GATE approved FAIL rc=1
+2026-11-05T08:42:55Z AB CBOPA-11050818-ON2 ACT n=8 pat=9ac45955 expect=on
+CONCBATCHOP 2026-11-05T08:47:21Z arm CBOPA-11050818-ON2: AB CBOPA-11050818-ON2 GATE approved FAIL rc=1;AB CBOPA-11050818-ON2 ACT n=8 pat=9ac45955 expect=on | DEPTH CBOPA-11050818-ON2 L=32768 rep 0: prompt 32718 TTFT 16.972 s decode 136.54 tok/s rounds 133 tok/round 3.85 ms/round 28.14 sha d1e597012eb5;DEPTH CBOPA-11050818-ON2 L=131072 rep 0: prompt 131419 TTFT 63.656 s decode 164.15 tok/s rounds 122 tok/round 4.20 ms/round 25.52 sha 301808ded752
+2026-11-05T08:49:25Z CONCBATCH ready checkpoint65dada1183: exact-grant waiter armed; diagnostic only on first grant; 4 configurations plus restore, estimated25-45min; healthy-drive tensor artifacts; pilot waits second grant
+2026-11-05T08:50:31Z AB CBOPA-11050818-OFF2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=cbd0acfcec4b3173 harness=b36f867f4a418977
+2026-11-05T08:51:29Z AB CBOPA-11050818-OFF2 GATE approved PASS rc=0
+2026-11-05T08:52:32Z AB CBOPA-11050818-OFF2 ACT n=0 pat=9ac45955 expect=off
+CONCBATCHOP 2026-11-05T08:57:25Z arm CBOPA-11050818-OFF2: AB CBOPA-11050818-OFF2 GATE approved PASS rc=0;AB CBOPA-11050818-OFF2 ACT n=0 pat=9ac45955 expect=off | DEPTH CBOPA-11050818-OFF2 L=32768 rep 0: prompt 32718 TTFT 19.105 s decode 145.74 tok/s rounds 125 tok/round 4.10 ms/round 28.05 sha cdf3cf45c3cf;DEPTH CBOPA-11050818-OFF2 L=131072 rep 0: prompt 131419 TTFT 69.685 s decode 148.64 tok/s rounds 136 tok/round 3.76 ms/round 25.28 sha e70897e7b29e
+CONCBATCHOP 2026-11-05T08:57:25Z CBOPA-11050818 decode scorer rc=0 2: A/A T1 CBOPA-11050818-OFF2 - CBOPA-11050818-OFF: mean -0.142 ms/round-dec, negative 8/11 texts same 11/11
+CONCBATCHOP 2026-11-05T08:57:25Z lever A: VERDICT GATE-FAIL
+CONCBATCHOP 2026-11-05T08:57:25Z lever G choice: p2p (later-chunk PP0 GPU fwd median ms: prod 4176, late 3876, p2p 3429; rule: lowest, if <= prod - 150)
+2026-11-05T09:00:29Z AB CBOPG-11050818-OFF PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=cbd0acfcec4b3173 harness=b36f867f4a418977
+2026-11-05T09:01:27Z AB CBOPG-11050818-OFF GATE approved PASS rc=0
+2026-11-05T09:02:30Z AB CBOPG-11050818-OFF ACT n=0 pat=723983e3 expect=off
+CONCBATCHOP 2026-11-05T09:07:19Z arm CBOPG-11050818-OFF: AB CBOPG-11050818-OFF GATE approved PASS rc=0;AB CBOPG-11050818-OFF ACT n=0 pat=723983e3 expect=off | DEPTH CBOPG-11050818-OFF L=32768 rep 0: prompt 32718 TTFT 18.987 s decode 145.48 tok/s rounds 125 tok/round 4.10 ms/round 28.1 sha cdf3cf45c3cf;DEPTH CBOPG-11050818-OFF L=131072 rep 0: prompt 131419 TTFT 69.052 s decode 148.89 tok/s rounds 136 tok/round 3.76 ms/round 25.24 sha e70897e7b29e
+2026-11-05T09:10:28Z AB CBOPG-11050818-ON PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=cbd0acfcec4b3173 harness=b36f867f4a418977
+2026-11-05T09:11:24Z AB CBOPG-11050818-ON GATE approved PASS rc=0
+2026-11-05T09:12:26Z AB CBOPG-11050818-ON ACT n=2 pat=723983e3 expect=on
+CONCBATCHOP 2026-11-05T09:16:47Z arm CBOPG-11050818-ON: AB CBOPG-11050818-ON GATE approved PASS rc=0;AB CBOPG-11050818-ON ACT n=2 pat=723983e3 expect=on | DEPTH CBOPG-11050818-ON L=32768 rep 0: prompt 32718 TTFT 16.674 s decode 147.38 tok/s rounds 125 tok/round 4.10 ms/round 27.74 sha cdf3cf45c3cf;DEPTH CBOPG-11050818-ON L=131072 rep 0: prompt 131419 TTFT 60.337 s decode 151.1 tok/s rounds 135 tok/round 3.79 ms/round 25.05 sha e70897e7b29e
+2026-11-05T09:19:58Z AB CBOPG-11050818-ON2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=cbd0acfcec4b3173 harness=b36f867f4a418977
+2026-11-05T09:20:54Z AB CBOPG-11050818-ON2 GATE approved PASS rc=0
+2026-11-05T09:21:55Z AB CBOPG-11050818-ON2 ACT n=2 pat=723983e3 expect=on
+CONCBATCHOP 2026-11-05T09:26:16Z arm CBOPG-11050818-ON2: AB CBOPG-11050818-ON2 GATE approved PASS rc=0;AB CBOPG-11050818-ON2 ACT n=2 pat=723983e3 expect=on | DEPTH CBOPG-11050818-ON2 L=32768 rep 0: prompt 32718 TTFT 16.568 s decode 146.6 tok/s rounds 125 tok/round 4.10 ms/round 27.88 sha cdf3cf45c3cf;DEPTH CBOPG-11050818-ON2 L=131072 rep 0: prompt 131419 TTFT 60.266 s decode 149.09 tok/s rounds 136 tok/round 3.76 ms/round 25.2 sha e70897e7b29e
+2026-11-05T09:29:22Z AB CBOPG-11050818-OFF2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=cbd0acfcec4b3173 harness=b36f867f4a418977
+2026-11-05T09:30:21Z AB CBOPG-11050818-OFF2 GATE approved PASS rc=0
+2026-11-05T09:31:24Z AB CBOPG-11050818-OFF2 ACT n=0 pat=723983e3 expect=off
+CONCBATCHOP 2026-11-05T09:36:20Z arm CBOPG-11050818-OFF2: AB CBOPG-11050818-OFF2 GATE approved PASS rc=0;AB CBOPG-11050818-OFF2 ACT n=0 pat=723983e3 expect=off | DEPTH CBOPG-11050818-OFF2 L=32768 rep 0: prompt 32718 TTFT 19.407 s decode 146.24 tok/s rounds 125 tok/round 4.10 ms/round 27.95 sha cdf3cf45c3cf;DEPTH CBOPG-11050818-OFF2 L=131072 rep 0: prompt 131419 TTFT 71.481 s decode 148.38 tok/s rounds 136 tok/round 3.76 ms/round 25.32 sha e70897e7b29e
+CONCBATCHOP 2026-11-05T09:36:20Z CBOPG-11050818 decode scorer rc=0 0: A/A T1 CBOPG-11050818-OFF2 - CBOPG-11050818-OFF: mean +0.053 ms/round-dec, negative 4/11 texts same 11/11
+CONCBATCHOP 2026-11-05T09:36:20Z lever G (p2p): VERDICT GAIN | bitwise BITWISE
+CONCBATCHOP 2026-11-05T09:36:20Z combo window done
+CONCBATCHOP 2026-11-05T09:36:20Z combo restore begin (rc=0)
+CONCBATCHOP 2026-11-05T09:39:24Z CONCBATCHOP restore single OK (combo window rc=0)
+OWNER-SEQ 2026-11-05T09:39:24Z chain4c: combo-window rc=0; GPU-GRANT=owner
+OWNER-SEQ 2026-11-05T09:39:31Z chain5: GPU-GRANT=concbatch1104 for diagnostic-run2-1 ONLY (lane runs it and returns the grant to owner)
+2026-11-05T09:39:40Z CONCBATCH diagnostic window takeover
+2026-11-05T09:39:40Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T09:39:42Z CONCBATCH diagnostic boot original-single dumps=/path/to/out
+2026-11-05T09:43:23Z CONCBATCH diagnostic request original-single plain
+2026-11-05T09:43:44Z CONCBATCH diagnostic request original-single plain-clean
+2026-11-05T09:44:05Z CONCBATCH diagnostic request original-single top20
+2026-11-05T09:44:26Z CONCBATCH diagnostic request original-single plain-repeat
+2026-11-05T09:44:47Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T09:44:50Z CONCBATCH deploy hash-checked candidate to source and site
+2026-11-05T09:44:50Z CONCBATCH install hash-checked kit
+2026-11-05T09:44:51Z CONCBATCH diagnostic boot installed-single dumps=/path/to/out
+2026-11-05T09:48:10Z CONCBATCH diagnostic request installed-single plain
+2026-11-05T09:48:30Z CONCBATCH diagnostic request installed-single plain-clean
+2026-11-05T09:48:51Z CONCBATCH diagnostic request installed-single top20
+2026-11-05T09:49:11Z CONCBATCH diagnostic request installed-single plain-repeat
+2026-11-05T09:49:32Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T09:49:35Z CONCBATCH diagnostic boot adapter-single dumps=/path/to/out
+2026-11-05T09:52:26Z CONCBATCH diagnostic request adapter-single plain
+2026-11-05T09:52:47Z CONCBATCH diagnostic request adapter-single plain-clean
+2026-11-05T09:53:08Z CONCBATCH diagnostic request adapter-single top20
+2026-11-05T09:53:28Z CONCBATCH diagnostic request adapter-single plain-repeat
+2026-11-05T09:53:49Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T09:53:52Z CONCBATCH diagnostic boot conc2 dumps=/path/to/out
+2026-11-05T09:57:45Z CONCBATCH diagnostic request conc2 plain
+2026-11-05T09:58:07Z CONCBATCH diagnostic request conc2 plain-clean
+2026-11-05T09:58:27Z CONCBATCH diagnostic request conc2 top20
+2026-11-05T09:58:48Z CONCBATCH diagnostic request conc2 plain-repeat
+2026-11-05T09:59:09Z CONCBATCH restore begin
+2026-11-05T09:59:09Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T09:59:12Z CONCBATCH restore rollback
+2026-11-05T09:59:12Z CONCBATCH rollback kit
+2026-11-05T09:59:13Z CONCBATCH boot capacity=1 throughput=False
+2026-11-05T10:02:26Z CONCBATCH restore single OK
+2026-11-05T10:04:42Z CONCBATCH diagnostic complete; exact targets/dependencies/profile restored, ledger absent, live health200; return grant owner
+OWNER-SEQ 2026-11-05T10:05:01Z chain5: concbatch1104 returned grant after diagnostic-run2-1: owner
+OWNER-SEQ 2026-11-05T10:05:01Z chain5: GPU-GRANT=d51r5; D51 r4 serving window start
+D51R5 2026-11-05T10:05:01Z window launch (log /path/to/out)
+D51R5 2026-11-05T10:05:01Z window start APM1103-20261105T100501Z
+D51R5 2026-11-05T10:05:03Z stop production server
+D51R5 2026-11-05T10:05:07Z kit staged; resume from APM1103-20261105T025000Z (no census, no build)
+D51R5 2026-11-05T10:05:20Z phase B imported from TESTBED-20261105T064637Z; qualify
+D51R5 2026-11-05T10:05:22Z TTFT arm OFF
+D51R5 2026-11-05T10:13:59Z TTFT arm ON
+2026-11-05T10:22:35Z CONCBATCH CPU ready kit9ad4c20369: measured cause path is capacity-scaled draft reservation (8188->8184 prefill, final16->32 rows); default-off one-forward budget correction built, fullCPU+42targetrollback PASS. Next lane grant: ~25min budget counterfactual, then pilot3 ~120-150min if verified; originalsingle restored10:04:42Z.
+D51R5 2026-11-05T10:33:32Z TTFT arm ON2
+D51R5 2026-11-05T10:40:59Z TTFT arm OFF2
+D51R5 2026-11-05T10:49:56Z decode arm OFF
+2026-11-05T10:53:02Z AB APM1103-20261105T100501Z-OFF PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=9dbe78a4a285269a harness=b36f867f4a418977
+2026-11-05T10:54:01Z AB APM1103-20261105T100501Z-OFF GATE approved PASS rc=0
+2026-11-05T10:55:03Z AB APM1103-20261105T100501Z-OFF ACT n=0 pat=7414396b expect=off
+D51R5 2026-11-05T10:55:04Z decode arm ON
+2026-11-05T10:58:13Z AB APM1103-20261105T100501Z-ON PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=9dbe78a4a285269a harness=b36f867f4a418977
+2026-11-05T10:59:12Z AB APM1103-20261105T100501Z-ON GATE approved PASS rc=0
+2026-11-05T11:00:15Z AB APM1103-20261105T100501Z-ON ACT n=8 pat=7414396b expect=on
+D51R5 2026-11-05T11:00:16Z decode arm ON2
+2026-11-05T11:03:22Z AB APM1103-20261105T100501Z-ON2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=9dbe78a4a285269a harness=b36f867f4a418977
+2026-11-05T11:04:20Z AB APM1103-20261105T100501Z-ON2 GATE approved PASS rc=0
+2026-11-05T11:05:23Z AB APM1103-20261105T100501Z-ON2 ACT n=8 pat=7414396b expect=on
+D51R5 2026-11-05T11:05:24Z decode arm OFF2
+2026-11-05T11:08:30Z AB APM1103-20261105T100501Z-OFF2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=9dbe78a4a285269a harness=b36f867f4a418977
+2026-11-05T11:09:29Z AB APM1103-20261105T100501Z-OFF2 GATE approved PASS rc=0
+2026-11-05T11:10:31Z AB APM1103-20261105T100501Z-OFF2 ACT n=0 pat=7414396b expect=off
+D51R5 2026-11-05T11:10:32Z summary written; restoring REC
+D51R5 2026-11-05T11:13:23Z window exit rc=0
+D51R5 2026-11-05T11:13:24Z restore single OK
+D51R5 2026-11-05T11:13:24Z GPU-GRANT returned to owner
+OWNER-SEQ 2026-11-05T11:13:24Z chain5: D51 r4 window exited rc=0; grant owner
+OWNER-SEQ 2026-11-05T11:13:24Z chain5: GPU-GRANT=concbatch1104 for pilot3 ONLY (lane runs it and returns the grant to owner)
+2026-11-05T11:13:32Z CONCBATCH diagnostic window takeover
+2026-11-05T11:13:32Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T11:13:35Z CONCBATCH diagnostic boot original-single dumps=/path/to/out
+2026-11-05T11:16:23Z CONCBATCH diagnostic request original-single plain
+2026-11-05T11:16:44Z CONCBATCH diagnostic request original-single plain-clean
+2026-11-05T11:17:04Z CONCBATCH diagnostic request original-single top20
+2026-11-05T11:17:25Z CONCBATCH diagnostic request original-single plain-repeat
+2026-11-05T11:17:45Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T11:17:48Z CONCBATCH deploy hash-checked candidate to source and site
+2026-11-05T11:17:48Z CONCBATCH install hash-checked kit
+2026-11-05T11:17:49Z CONCBATCH diagnostic boot conc2-budget-off dumps=/path/to/out
+2026-11-05T11:20:37Z CONCBATCH diagnostic request conc2-budget-off plain
+2026-11-05T11:20:58Z CONCBATCH diagnostic request conc2-budget-off plain-clean
+2026-11-05T11:21:19Z CONCBATCH diagnostic request conc2-budget-off top20
+2026-11-05T11:21:40Z CONCBATCH diagnostic request conc2-budget-off plain-repeat
+2026-11-05T11:22:01Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T11:22:04Z CONCBATCH diagnostic boot conc2-budget-on dumps=/path/to/out
+2026-11-05T11:24:45Z CONCBATCH diagnostic request conc2-budget-on plain
+2026-11-05T11:25:05Z CONCBATCH diagnostic request conc2-budget-on plain-clean
+2026-11-05T11:25:25Z CONCBATCH diagnostic request conc2-budget-on top20
+2026-11-05T11:25:45Z CONCBATCH diagnostic request conc2-budget-on plain-repeat
+2026-11-05T11:26:06Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T11:26:09Z CONCBATCH diagnostic boot conc3-budget-on dumps=/path/to/out
+2026-11-05T11:28:54Z CONCBATCH diagnostic request conc3-budget-on plain
+2026-11-05T11:29:15Z CONCBATCH diagnostic request conc3-budget-on plain-clean
+2026-11-05T11:29:27Z CONCBATCH budget correction conc2: 64 IDs and all top20 probabilities plus captured target/draft tensors BITWISE vs original; cap3 controls running; fullpilot follows under same grant.
+2026-11-05T11:29:36Z CONCBATCH diagnostic request conc3-budget-on top20
+2026-11-05T11:29:56Z CONCBATCH diagnostic request conc3-budget-on plain-repeat
+2026-11-05T11:30:17Z CONCBATCH restore begin
+2026-11-05T11:30:17Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T11:30:20Z CONCBATCH restore rollback
+2026-11-05T11:30:20Z CONCBATCH rollback kit
+2026-11-05T11:30:20Z CONCBATCH boot capacity=1 throughput=False
+2026-11-05T11:33:14Z CONCBATCH restore single OK
+2026-11-05T11:33:34Z CONCBATCH independent restore verification: 70 exact byte checks; profile exact; ledger absent; single health200; retaining grant for full pilot3
+2026-11-05T11:33:43Z CONCBATCH begin granted window; bench server ownership transferred for window
+2026-11-05T11:33:43Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T11:33:46Z CONCBATCH boot capacity=1 throughput=False
+CONCBATCH 2026-11-05T11:36:33Z natural mode=single2 original single run start
+CONCBATCH 2026-11-05T11:36:33Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T11:36:33Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T11:36:34Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T11:36:37Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T11:36:39Z natural mode=single2 tokenize
+CONCBATCH 2026-11-05T11:36:40Z natural mode=single2 warmup
+CONCBATCH 2026-11-05T11:36:46Z natural mode=single2 arm start cohort=0 arm=0 kind=serial
+CONCBATCH 2026-11-05T11:37:44Z natural mode=single2 arm complete cohort=0 arm=0 wall_tok_s=35.635372
+CONCBATCH 2026-11-05T11:37:44Z natural mode=single2 arm start cohort=0 arm=1 kind=serial
+CONCBATCH 2026-11-05T11:38:42Z natural mode=single2 arm complete cohort=0 arm=1 wall_tok_s=35.510205
+CONCBATCH 2026-11-05T11:38:42Z natural mode=single2 warmup
+CONCBATCH 2026-11-05T11:38:48Z natural mode=single2 arm start cohort=1 arm=0 kind=serial
+CONCBATCH 2026-11-05T11:40:17Z natural mode=single2 arm complete cohort=1 arm=0 wall_tok_s=22.978475
+CONCBATCH 2026-11-05T11:40:17Z natural mode=single2 arm start cohort=1 arm=1 kind=serial
+CONCBATCH 2026-11-05T11:41:47Z natural mode=single2 arm complete cohort=1 arm=1 wall_tok_s=23.092419
+CONCBATCH 2026-11-05T11:41:47Z natural mode=single2 warmup
+CONCBATCH 2026-11-05T11:41:52Z natural mode=single2 arm start cohort=2 arm=0 kind=serial
+CONCBATCH 2026-11-05T11:44:29Z natural mode=single2 arm complete cohort=2 arm=0 wall_tok_s=13.042542
+CONCBATCH 2026-11-05T11:44:30Z natural mode=single2 arm start cohort=2 arm=1 kind=serial
+CONCBATCH 2026-11-05T11:47:07Z natural mode=single2 arm complete cohort=2 arm=1 wall_tok_s=13.014491
+CONCBATCH 2026-11-05T11:47:07Z natural mode=single2 original single run complete
+CONCBATCH 2026-11-05T11:47:08Z natural mode=single3 original single run start
+CONCBATCH 2026-11-05T11:47:08Z natural mode=single3 tokenize
+CONCBATCH 2026-11-05T11:47:08Z natural mode=single3 tokenize
+CONCBATCH 2026-11-05T11:47:09Z natural mode=single3 tokenize
+CONCBATCH 2026-11-05T11:47:11Z natural mode=single3 tokenize
+CONCBATCH 2026-11-05T11:47:13Z natural mode=single3 tokenize
+CONCBATCH 2026-11-05T11:47:14Z natural mode=single3 warmup
+CONCBATCH 2026-11-05T11:47:20Z natural mode=single3 arm start cohort=0 arm=0 kind=serial
+CONCBATCH 2026-11-05T11:49:52Z natural mode=single3 arm complete cohort=0 arm=0 wall_tok_s=20.322813
+CONCBATCH 2026-11-05T11:49:52Z natural mode=single3 arm start cohort=0 arm=1 kind=serial
+CONCBATCH 2026-11-05T11:52:23Z natural mode=single3 arm complete cohort=0 arm=1 wall_tok_s=20.382959
+CONCBATCH 2026-11-05T11:52:23Z natural mode=single3 warmup
+CONCBATCH 2026-11-05T11:52:29Z natural mode=single3 arm start cohort=1 arm=0 kind=serial
+CONCBATCH 2026-11-05T11:54:43Z natural mode=single3 arm complete cohort=1 arm=0 wall_tok_s=22.997306
+CONCBATCH 2026-11-05T11:54:43Z natural mode=single3 arm start cohort=1 arm=1 kind=serial
+CONCBATCH 2026-11-05T11:56:57Z natural mode=single3 arm complete cohort=1 arm=1 wall_tok_s=23.011898
+CONCBATCH 2026-11-05T11:56:57Z natural mode=single3 original single run complete
+2026-11-05T11:56:58Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T11:57:01Z CONCBATCH deploy hash-checked candidate to source and site
+2026-11-05T11:57:01Z CONCBATCH install hash-checked kit
+2026-11-05T11:57:01Z CONCBATCH boot capacity=2 throughput=False
+2026-11-05T11:59:52Z CONCBATCH admission refusal and recovery before natural conc2
+CONCBATCH 2026-11-05T11:59:53Z natural mode=conc2 run start
+CONCBATCH 2026-11-05T11:59:53Z natural mode=conc2 tokenize
+CONCBATCH 2026-11-05T11:59:53Z natural mode=conc2 tokenize
+CONCBATCH 2026-11-05T11:59:54Z natural mode=conc2 tokenize
+CONCBATCH 2026-11-05T11:59:56Z natural mode=conc2 tokenize
+CONCBATCH 2026-11-05T11:59:58Z natural mode=conc2 tokenize
+CONCBATCH 2026-11-05T11:59:59Z natural mode=conc2 warmup
+CONCBATCH 2026-11-05T12:00:05Z natural mode=conc2 arm start cohort=0 arm=0 kind=serial
+CONCBATCH 2026-11-05T12:01:03Z natural mode=conc2 arm complete cohort=0 arm=0 wall_tok_s=35.660392
+CONCBATCH 2026-11-05T12:01:03Z natural mode=conc2 arm start cohort=0 arm=1 kind=concurrent
+CONCBATCH 2026-11-05T12:01:52Z natural mode=conc2 arm complete cohort=0 arm=1 wall_tok_s=42.529109
+CONCBATCH 2026-11-05T12:01:52Z natural mode=conc2 arm start cohort=0 arm=2 kind=concurrent
+CONCBATCH 2026-11-05T12:02:40Z natural mode=conc2 arm complete cohort=0 arm=2 wall_tok_s=42.416131
+CONCBATCH 2026-11-05T12:02:40Z natural mode=conc2 arm start cohort=0 arm=3 kind=serial
+CONCBATCH 2026-11-05T12:03:38Z natural mode=conc2 arm complete cohort=0 arm=3 wall_tok_s=35.555540
+CONCBATCH 2026-11-05T12:03:38Z natural mode=conc2 warmup
+CONCBATCH 2026-11-05T12:03:44Z natural mode=conc2 arm start cohort=1 arm=0 kind=serial
+CONCBATCH 2026-11-05T12:05:13Z natural mode=conc2 arm complete cohort=1 arm=0 wall_tok_s=23.087910
+CONCBATCH 2026-11-05T12:05:13Z natural mode=conc2 arm start cohort=1 arm=1 kind=concurrent
+CONCBATCH 2026-11-05T12:06:34Z natural mode=conc2 arm complete cohort=1 arm=1 wall_tok_s=25.561214
+CONCBATCH 2026-11-05T12:06:34Z natural mode=conc2 arm start cohort=1 arm=2 kind=concurrent
+CONCBATCH 2026-11-05T12:07:55Z natural mode=conc2 arm complete cohort=1 arm=2 wall_tok_s=25.326597
+CONCBATCH 2026-11-05T12:07:55Z natural mode=conc2 arm start cohort=1 arm=3 kind=serial
+CONCBATCH 2026-11-05T12:09:24Z natural mode=conc2 arm complete cohort=1 arm=3 wall_tok_s=23.126712
+CONCBATCH 2026-11-05T12:09:24Z natural mode=conc2 warmup
+CONCBATCH 2026-11-05T12:09:29Z natural mode=conc2 arm start cohort=2 arm=0 kind=serial
+CONCBATCH 2026-11-05T12:12:07Z natural mode=conc2 arm complete cohort=2 arm=0 wall_tok_s=13.038687
+CONCBATCH 2026-11-05T12:12:07Z natural mode=conc2 arm start cohort=2 arm=1 kind=concurrent
+CONCBATCH 2026-11-05T12:14:36Z natural mode=conc2 arm complete cohort=2 arm=1 wall_tok_s=13.748819
+CONCBATCH 2026-11-05T12:14:36Z natural mode=conc2 arm start cohort=2 arm=2 kind=concurrent
+CONCBATCH 2026-11-05T12:17:07Z natural mode=conc2 arm complete cohort=2 arm=2 wall_tok_s=13.682337
+CONCBATCH 2026-11-05T12:17:07Z natural mode=conc2 arm start cohort=2 arm=3 kind=serial
+CONCBATCH 2026-11-05T12:19:43Z natural mode=conc2 arm complete cohort=2 arm=3 wall_tok_s=13.100340
+2026-11-05T12:19:48Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T12:19:51Z CONCBATCH boot capacity=2 throughput=True
+2026-11-05T12:25:35Z CONCBATCH PP14 capture assertion observed; stop exact owned failed server to fail startup promptly and let qualifier restore
+2026-11-05T12:25:35Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T12:26:38Z CONCBATCH restore begin
+2026-11-05T12:26:38Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T12:26:38Z CONCBATCH restore rollback
+2026-11-05T12:26:38Z CONCBATCH rollback kit
+2026-11-05T12:26:38Z CONCBATCH boot capacity=1 throughput=False
+2026-11-05T12:27:33Z CONCBATCH full conc2 all12arms bitwise original/KL0; PP14 startup capture path dropped required stage1 token IDs; owned failedserver stopped, collector restoring; guarded capture fix and explicit provenance-checked continuation being prepared.
+2026-11-05T12:29:39Z CONCBATCH restore single OK
+2026-11-05T12:30:03Z CONCBATCH independent restore verification: 70 exact byte checks; profile exact; ledger absent; single health200; retaining grant for full pilot3
+2026-11-05T12:47:10Z CONCBATCH begin granted window; bench server ownership transferred for window
+2026-11-05T12:47:12Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T12:47:15Z CONCBATCH deploy hash-checked candidate to source and site
+2026-11-05T12:47:15Z CONCBATCH install hash-checked kit
+2026-11-05T12:47:16Z CONCBATCH boot capacity=2 throughput=True
+2026-11-05T12:50:25Z CONCBATCH admission refusal and recovery before natural throughput2
+CONCBATCH 2026-11-05T12:50:26Z natural mode=throughput2 run start
+CONCBATCH 2026-11-05T12:50:26Z natural mode=throughput2 tokenize
+CONCBATCH 2026-11-05T12:50:26Z natural mode=throughput2 tokenize
+CONCBATCH 2026-11-05T12:50:27Z natural mode=throughput2 tokenize
+CONCBATCH 2026-11-05T12:50:30Z natural mode=throughput2 tokenize
+CONCBATCH 2026-11-05T12:50:32Z natural mode=throughput2 tokenize
+CONCBATCH 2026-11-05T12:50:33Z natural mode=throughput2 warmup
+CONCBATCH 2026-11-05T12:50:39Z natural mode=throughput2 arm start cohort=0 arm=0 kind=serial
+CONCBATCH 2026-11-05T12:51:30Z natural mode=throughput2 arm failed cohort=0 arm=0
+2026-11-05T12:51:30Z CONCBATCH restore begin
+2026-11-05T12:51:30Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T12:51:33Z CONCBATCH restore rollback
+2026-11-05T12:51:33Z CONCBATCH rollback kit
+2026-11-05T12:51:33Z CONCBATCH boot capacity=1 throughput=False
+2026-11-05T12:54:51Z CONCBATCH restore single OK
+2026-11-05T12:55:29Z CONCBATCH independent restore verification: 70 exact byte checks; profile exact; ledger absent; single health200; retaining grant for full pilot3
+2026-11-05T12:57:33Z CONCBATCH begin granted window; bench server ownership transferred for window
+2026-11-05T12:57:33Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T12:57:37Z CONCBATCH deploy hash-checked candidate to source and site
+2026-11-05T12:57:37Z CONCBATCH install hash-checked kit
+2026-11-05T12:57:37Z CONCBATCH boot capacity=3 throughput=False
+2026-11-05T13:00:42Z CONCBATCH admission refusal and recovery before natural conc3
+CONCBATCH 2026-11-05T13:00:43Z natural mode=conc3 run start
+CONCBATCH 2026-11-05T13:00:43Z natural mode=conc3 tokenize
+CONCBATCH 2026-11-05T13:00:43Z natural mode=conc3 tokenize
+CONCBATCH 2026-11-05T13:00:44Z natural mode=conc3 tokenize
+CONCBATCH 2026-11-05T13:00:47Z natural mode=conc3 tokenize
+CONCBATCH 2026-11-05T13:00:49Z natural mode=conc3 tokenize
+CONCBATCH 2026-11-05T13:00:50Z natural mode=conc3 warmup
+CONCBATCH 2026-11-05T13:00:56Z natural mode=conc3 arm start cohort=0 arm=0 kind=serial
+CONCBATCH 2026-11-05T13:03:32Z natural mode=conc3 arm complete cohort=0 arm=0 wall_tok_s=19.751135
+CONCBATCH 2026-11-05T13:03:32Z natural mode=conc3 arm start cohort=0 arm=1 kind=concurrent
+CONCBATCH 2026-11-05T13:06:01Z natural mode=conc3 arm complete cohort=0 arm=1 wall_tok_s=20.743930
+CONCBATCH 2026-11-05T13:06:01Z natural mode=conc3 arm start cohort=0 arm=2 kind=concurrent
+CONCBATCH 2026-11-05T13:08:30Z natural mode=conc3 arm complete cohort=0 arm=2 wall_tok_s=20.598782
+CONCBATCH 2026-11-05T13:08:30Z natural mode=conc3 arm start cohort=0 arm=3 kind=serial
+CONCBATCH 2026-11-05T13:11:05Z natural mode=conc3 arm complete cohort=0 arm=3 wall_tok_s=19.945367
+CONCBATCH 2026-11-05T13:11:05Z natural mode=conc3 warmup
+CONCBATCH 2026-11-05T13:11:11Z natural mode=conc3 arm start cohort=1 arm=0 kind=serial
+CONCBATCH 2026-11-05T13:13:28Z natural mode=conc3 arm complete cohort=1 arm=0 wall_tok_s=22.543564
+CONCBATCH 2026-11-05T13:13:28Z natural mode=conc3 arm start cohort=1 arm=1 kind=concurrent
+CONCBATCH 2026-11-05T13:15:30Z natural mode=conc3 arm complete cohort=1 arm=1 wall_tok_s=25.339136
+CONCBATCH 2026-11-05T13:15:30Z natural mode=conc3 arm start cohort=1 arm=2 kind=concurrent
+CONCBATCH 2026-11-05T13:17:33Z natural mode=conc3 arm complete cohort=1 arm=2 wall_tok_s=25.052040
+CONCBATCH 2026-11-05T13:17:33Z natural mode=conc3 arm start cohort=1 arm=3 kind=serial
+CONCBATCH 2026-11-05T13:19:49Z natural mode=conc3 arm complete cohort=1 arm=3 wall_tok_s=22.561259
+2026-11-05T13:19:52Z CONCBATCH restore begin
+2026-11-05T13:19:52Z CONCBATCH stop window-owned server using recorded process group
+2026-11-05T13:19:55Z CONCBATCH restore rollback
+2026-11-05T13:19:55Z CONCBATCH rollback kit
+2026-11-05T13:19:55Z CONCBATCH boot capacity=1 throughput=False
+2026-11-05T13:22:57Z CONCBATCH restore single OK
+2026-11-05T13:23:58Z CONCBATCH independent restore verification: 70 exact byte checks; profile exact; ledger absent; single health200; returning grant owner
+OWNER-SEQ 2026-11-05T13:24:25Z chain5: concbatch1104 returned grant after pilot3: owner
+OWNER-SEQ 2026-11-05T13:24:25Z chain5: chain5 done
+OWNER-SEQ 2026-11-05T13:24:28Z chain6: G install --dry rc=0
+CONCFIX restore begin 2026-11-05T13:24:29Z
+CONCFIX 2026-11-05T13:24:32Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-05T13:24:32Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+CONCFIX restore single OK
+CONCFIX restore begin 2026-11-05T13:30:13Z
+CONCFIX 2026-11-05T13:30:14Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-05T13:30:14Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+CONCFIX restore single OK
+CONCBATCHOP 2026-11-05T13:33:10Z restore single OK (install-g rolled back)
+OWNER-SEQ 2026-11-05T13:33:10Z chain6: G install --window rc=1; grant owner
+OWNER-SEQ 2026-11-05T13:33:10Z chain6: G install not done (rc=1); stopping for owner
+OWNER-SEQ 2026-11-05T13:51:51Z chain6b: G install --dry rc=0
+CONCFIX restore begin 2026-11-05T13:51:52Z
+OWNER-SEQ 2026-11-05T13:51:55Z chain6b: launched (tmux ownerchain6b) after fixing install-g/install-a/install-d51 shas() SyntaxError (backups *.bak-1105-fstr)
+CONCFIX 2026-11-05T13:51:56Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-05T13:51:56Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+CONCFIX restore single OK
+2026-11-05T14:01:12Z QUEUE-CBOPG server up: REC + NCCL_P2P_LEVEL=NVL (adopted) [install-g candidate identity 32768:cdf3cf45c3cf 131072:e70897e7b29e; activation lines 2; /path/to/out]
+CONCFIX restore begin 2026-11-05T14:01:12Z
+CONCFIX 2026-11-05T14:01:15Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-05T14:01:15Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+CONCFIX restore single OK
+CONCBATCHOP 2026-11-05T14:06:22Z restore single OK (install-g, REC with lever G)
+OWNER-SEQ 2026-11-05T14:06:22Z chain6b: G install --window rc=0; grant owner
+OWNER-SEQ 2026-11-05T14:06:28Z chain6b: D51 install --dry rc=2
+OWNER-SEQ 2026-11-05T14:06:28Z chain6b: D51 install rc=2; grant owner
+CONCBATCHOP 2026-11-05T14:06:29Z fa window start (REC 27 keys + kit fusedattn; so sha a834c99d571f)
+CONCBATCHOP 2026-11-05T14:06:29Z fa window bytes so=a834c99d571f payload=996e94a5a5b5 anchors=bf02a306bcfe
+CONCBATCHOP 2026-11-05T14:06:56Z fa micro PASS: packed r2 ctx64K prod 41.4 fused 22.8 ms; packed r2 ctx64K peaked prod 41.3 fused 22.8 ms; packed r4 ctx128K prod 41.5 fused 22.8 ms; packed r2 ctx0 prod 40.7 fused 20.7 ms; window-only ctx64K prod 15.1 fused 2.4 ms; packed r4 warmup T42 prod 0.3 fused 0.6 ms; window-only warmup T42 prod 0.1 fused 0.2 ms; packed r2 T17 ctx1K prod 0.2 fused 0.7 ms
+CONCBATCHOP 2026-11-05T14:06:59Z fa deploy OK
+2026-11-05T14:09:57Z AB CBOPFA-11051406-OFF PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=26e52982091a9bf3 harness=b36f867f4a418977
+2026-11-05T14:10:54Z AB CBOPFA-11051406-OFF GATE approved PASS rc=0
+2026-11-05T14:11:56Z AB CBOPFA-11051406-OFF ACT n=0 pat=9ac45955 expect=off
+CONCBATCHOP 2026-11-05T14:16:21Z fa arm CBOPFA-11051406-OFF: AB CBOPFA-11051406-OFF GATE approved PASS rc=0;AB CBOPFA-11051406-OFF ACT n=0 pat=9ac45955 expect=off | DEPTH CBOPFA-11051406-OFF L=32768 rep 0: prompt 32718 TTFT 16.685 s decode 146.45 tok/s rounds 125 tok/round 4.10 ms/round 27.91 sha cdf3cf45c3cf;DEPTH CBOPFA-11051406-OFF L=131072 rep 0: prompt 131419 TTFT 60.265 s decode 149.97 tok/s rounds 136 tok/round 3.76 ms/round 25.05 sha e70897e7b29e
+2026-11-05T14:19:33Z AB CBOPFA-11051406-ON PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=26e52982091a9bf3 harness=b36f867f4a418977
+2026-11-05T14:20:28Z AB CBOPFA-11051406-ON GATE approved FAIL rc=1
+2026-11-05T14:21:27Z AB CBOPFA-11051406-ON ACT n=8 pat=9ac45955 expect=on
+CONCBATCHOP 2026-11-05T14:25:30Z fa arm CBOPFA-11051406-ON: AB CBOPFA-11051406-ON GATE approved FAIL rc=1;AB CBOPFA-11051406-ON ACT n=8 pat=9ac45955 expect=on | DEPTH CBOPFA-11051406-ON L=32768 rep 0: prompt 32718 TTFT 14.775 s decode 144.51 tok/s rounds 127 tok/round 4.03 ms/round 27.84 sha d399f99dd07c;DEPTH CBOPFA-11051406-ON L=131072 rep 0: prompt 131419 TTFT 54.258 s decode 150.28 tok/s rounds 134 tok/round 3.82 ms/round 25.38 sha f2866f7971c5
+2026-11-05T14:28:42Z AB CBOPFA-11051406-ON2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=26e52982091a9bf3 harness=b36f867f4a418977
+2026-11-05T14:29:37Z AB CBOPFA-11051406-ON2 GATE approved FAIL rc=1
+2026-11-05T14:30:36Z AB CBOPFA-11051406-ON2 ACT n=8 pat=9ac45955 expect=on
+CONCBATCHOP 2026-11-05T14:34:37Z fa arm CBOPFA-11051406-ON2: AB CBOPFA-11051406-ON2 GATE approved FAIL rc=1;AB CBOPFA-11051406-ON2 ACT n=8 pat=9ac45955 expect=on | DEPTH CBOPFA-11051406-ON2 L=32768 rep 0: prompt 32718 TTFT 14.827 s decode 143.63 tok/s rounds 127 tok/round 4.03 ms/round 28.01 sha d399f99dd07c;DEPTH CBOPFA-11051406-ON2 L=131072 rep 0: prompt 131419 TTFT 54.113 s decode 149.87 tok/s rounds 134 tok/round 3.82 ms/round 25.44 sha f2866f7971c5
+2026-11-05T14:37:43Z AB CBOPFA-11051406-OFF2 PROV so=54c1a0e1cc6b5d4a sodir=${ENGINE_HOME}/src-pp2/benchmarks/deepseek_v41/v41k/build pyvllm=26e52982091a9bf3 harness=b36f867f4a418977
+2026-11-05T14:38:40Z AB CBOPFA-11051406-OFF2 GATE approved PASS rc=0
+2026-11-05T14:39:41Z AB CBOPFA-11051406-OFF2 ACT n=0 pat=9ac45955 expect=off
+CONCBATCHOP 2026-11-05T14:44:03Z fa arm CBOPFA-11051406-OFF2: AB CBOPFA-11051406-OFF2 GATE approved PASS rc=0;AB CBOPFA-11051406-OFF2 ACT n=0 pat=9ac45955 expect=off | DEPTH CBOPFA-11051406-OFF2 L=32768 rep 0: prompt 32718 TTFT 16.707 s decode 146.12 tok/s rounds 125 tok/round 4.10 ms/round 27.98 sha cdf3cf45c3cf;DEPTH CBOPFA-11051406-OFF2 L=131072 rep 0: prompt 131419 TTFT 60.673 s decode 150.53 tok/s rounds 135 tok/round 3.79 ms/round 25.15 sha e70897e7b29e
+CONCBATCHOP 2026-11-05T14:44:03Z fa decode scorer rc=0 2 (pairs_arms_v2 | win3)
+CONCBATCHOP 2026-11-05T14:44:03Z fa score: VERDICT GATE-FAIL | decode: A/A T1 CBOPFA-11051406-OFF2 - CBOPFA-11051406-OFF: mean -0.031 ms/round-dec, negative 5/11 texts same 11/11
+CONCBATCHOP 2026-11-05T14:44:03Z fa window done
+CONCBATCHOP 2026-11-05T14:44:03Z fa restore begin (rc=0)
+CONCFIX restore begin 2026-11-05T14:44:07Z
+CONCFIX 2026-11-05T14:44:07Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-05T14:44:07Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+OWNER-SEQ 2026-11-05T14:45:19Z owner: stopped chain6b (pid 765254) before its bench trigger; fa-window restore continues; D51 dry refused (CPU acceptance test) and must install before benches
+OWNER-SEQ 2026-11-05T14:45:54Z owner-restore: begin
+CONCFIX restore begin 2026-11-05T14:45:54Z
+CONCFIX 2026-11-05T14:45:55Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-05T14:45:55Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+CONCFIX restore single OK
+OWNER-SEQ 2026-11-05T14:48:00Z owner-restore: restore single OK (production REC, G included)
+OWNER-SEQ 2026-11-05T14:50:08Z chain7: D51 install --dry rc=0
+CONCFIX restore begin 2026-11-05T14:50:16Z
+CONCFIX 2026-11-05T14:50:19Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-05T14:50:19Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+CONCFIX restore single OK
+CONCFIX restore begin 2026-11-05T14:57:27Z
+CONCFIX 2026-11-05T14:57:31Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-05T14:57:31Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+CONCFIX restore single OK
+2026-11-05T15:07:15Z QUEUE-D51 server up: REC + VLLM_V41_PREFILL_IQ_GEMM=1 VLLM_V41_PREFILL_IQ_TILES=5,4,4,4,4,4 VLLM_V41_PREFILL_IQ_GRID=0 (adopted) [install-d51 candidate neartie PASS, identity 32768:cdf3cf45c3cf 131072:e70897e7b29e; window /path/to/out; /path/to/out]
+CONCFIX restore begin 2026-11-05T15:07:15Z
+CONCFIX 2026-11-05T15:07:18Z stop owned bench5 server; keep Engram lock
+CONCFIX 2026-11-05T15:07:18Z boot capacity=1; profile=serve-v41pkg-pp2.yaml
+CONCFIX restore single OK
+D51R5 2026-11-05T15:12:07Z restore single OK (install-d51, REC with D51)
+OWNER-SEQ 2026-11-05T15:12:07Z chain7: D51 install --window rc=0; grant owner
+OWNER-SEQ 2026-11-05T15:12:07Z chain7: installs done (G installed 14:06Z; D51 rc=0; A not installed: NUMERICS-GATE FAIL); starting bench queue
+2026-11-05T15:12:07Z QUEUE-OPT-DONE
+2026-11-05T15:12:21Z QUEUE-BENCH final REC: 30 keys -> ${BENCH_DIR}/REC-bench-final.env (final-rec: 30 keys = 17 base (${BENCH_DIR}/REC-postboot-20261103.env, T0 2026-11-03T22:36:51Z) + 13 adopted or companion keys [QUEUE-D48@2026-11-04T03:43:50Z: VLLM_V41_INDEX_TILED; QUEUE-D52R2@2026-11-04T10:43:47Z: VLLM_V41_INDEX_FUSE VLLM_V41_INDEX_FUSE_LIB; QUEUE-D53R2@2026-11-04T11:40:01Z: VLLM_V41_DRAFT_MP_SHARD; QUEUE-MRV2PROD@2026-11-04T16:38:05Z: VLLM_USE_V2_MODEL_RUNNER; QUEUE-D44R5@2026-11-04T19:52:50Z: VLLM_SM70_MOE_ADD_ALLREDUCE VLLM_V41_SUM2_PUSH_ANY VLLM_SM70_TP)
+2026-11-05T15:12:21Z QUEUE-BENCH boot: final REC 30 keys, runner MRV2 (serve-v41pkg-pp2.yaml); kit run_h2h.py d56360da2625 report.py da743892474e lbfix yes; last server line before boot: QUEUE-D51 server up: REC + VLLM_V41_PREFILL_IQ_GEMM=1 VLLM_V41_PREFILL_IQ_TILES=5,4,4,4,4,4 VLLM_V41_PREFILL_IQ_GRID=0 (adopted) [install-d51 candidate neartie PASS, identity 32768:cdf3cf45c3cf 131072:e70897e7b29e; window /path/to/out;
+2026-11-05T15:15:28Z QUEUE-BENCH server up: REC (serve-v41pkg-pp2.yaml)
+2026-11-05T15:15:28Z QUEUE-BENCH boot proof OK: runner MRV2, 30 keys; boot rc=0 warm OK mrv2-state 8 dummy-chain 1 v1-fallback 0 traceback 0 mrv2-fallback-lines 4 (expected at boot, not gated); log ${BENCH_DIR}/serve-pp2-BENCH-boot.log
+2026-11-05T15:15:28Z QUEUE-BENCH start h2h kit, client only, label the 8-GPU host, out /path/to/out, final REC 30 keys runner MRV2 
+2026-11-05T15:23:37Z QUEUE-BENCH h2h part speed rc=0 (all-OK) in 489 s: END the 8-GPU host DONE this session ok 42 error 0 contaminated 0 unverified 0; run total items 42 not-ok 0 missing 0
+2026-11-05T15:45:56Z QUEUE-BENCH h2h part quality rc=0 (all-OK) in 1339 s: END the 8-GPU host DONE this session ok 1300 error 0 contaminated 0 unverified 0; run total items 1300 not-ok 0 missing 0
+2026-11-05T15:45:56Z QUEUE-BENCH report /path/to/out
+2026-11-05T15:45:56Z QUEUE-BENCH start standard evals (full) from the build host via tunnel, out the build host:/path/to/work
+OWNER-SEQ 2026-11-05T15:46:25Z ctxsweep5: start /path/to/out (5 classes x off x2 + reasoning x1 x 1K..256K, 1024 out)

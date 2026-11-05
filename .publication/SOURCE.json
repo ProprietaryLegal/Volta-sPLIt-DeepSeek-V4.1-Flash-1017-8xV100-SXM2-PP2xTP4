@@ -8,7 +8,9 @@
   "harness": "the bench directory scripts, paths and host names replaced by our scrubber",
   "evidence": "the 2026-11-03 queue state log, paths and host names replaced by our scrubber",
   "previous_build": "the published record of our previous build (Volta sPLIce), files copied unchanged except a banner and relative links",
-  "docs": "written for publication from the build records"
+  "docs": "written for publication from the build records",
+  "production": "engine/production/0050-0057: each patch cut from the private production branch (checkpoint 2026-11-05) against the previous patch's result tree; 0056 = the all-reduce push (test D44R5), 0057 = the SM70 prefill expert GEMM (test D51); result trees recorded in the README's Reproduce section",
+  "measurements_20261105": "the 2026-11-05 context sweep (135 requests) and head-to-head kit results, reduced to tables; raw request records left out"
  },
  "left_out": [
   "model weights, wheels and compiled libraries",
@@ -21,5 +23,6 @@
   "tools/check_data_boundary.sh --tree HEAD",
   "a forbidden-term scan for host names, internal paths and personal addresses",
   "git apply --check of every patch on its stated base"
- ]
+ ],
+ "updated": "2026-11-05"
 }
