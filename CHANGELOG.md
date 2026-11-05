@@ -15,8 +15,9 @@
   32K, −4.3 % at 150K, −2.4 % at 300K, near-tie gate PASS.
 - `rec.env` now has 30 keys. This is the checkpoint build: it is frozen, and new work is built and tested on a separate
   4-GPU test machine.
-- Quality: LegalBench 0.716 balanced accuracy over 22 tasks (MEASURED). Fidelity to the original model, MMLU-Pro and
-  HumanEval+ are running.
+- Quality (MEASURED): LegalBench 0.716 balanced accuracy over 22 tasks; MMLU-Pro 79.9 % (700-item subset);
+  HumanEval+ pass@1 89.6 % plus, 94.5 % base; fidelity to the original model 89.0 % top-1 agreement on the general
+  panel and 92.5 % on the legal panel (KL lower bound 0.132 and 0.156). Thinking off, greedy.
 - Did not work: fused prefill attention in exact-softmax mode (lever A mode 2): first token −11 % but near-tie gate FAIL;
   a bitwise mode 3 is ready on the test machine.
 - Removed sections that no longer describe this build (the four-card table and the old long-prompt tables).

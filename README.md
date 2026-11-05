@@ -289,9 +289,15 @@ Queue order and status: [docs/roadmap.md](docs/roadmap.md).
 - **LegalBench (MEASURED 2026-11-05): 0.716 balanced accuracy over 22 tasks** (issue 0.614, rule 0.693, conclusion
   0.722, interpretation 0.777, rhetoric 0.690). Official base prompts and scoring, greedy, thinking off, 1,292 items,
   0 errors. Per-task scores and the answer-reading rule: [docs/quality.md](docs/quality.md#legalbench-measured-2026-11-05).
-- **Fidelity to the original model: PENDING** (running 2026-11-05). KL divergence, top-1 agreement and the negative
-  log-likelihood of the served build against the original DeepSeek-V4.1-Flash-1017's reference logits, on fixed panels.
-- **MMLU-Pro and HumanEval+: PENDING** (queued after the fidelity run).
+- **MMLU-Pro (MEASURED 2026-11-05): 79.9 %** ±1.5 (700 items: the first 50 of each of the 14 subjects; lm-eval 5-shot
+  chain of thought, thinking off, greedy, 0 errors). **HumanEval+ pass@1: 89.6 %** on the plus tests (147 of 164) and
+  94.5 % on the base tests (EvalPlus, thinking off, greedy, 0 errors). [Method](docs/quality.md#mmlu-pro-and-humaneval).
+- **Fidelity to the original model (MEASURED 2026-11-05).** Position by position against the original
+  DeepSeek-V4.1-Flash-1017's reference logits (sudoingX's `p4_kld.py` panels): the served build picks the original's
+  most likely next token **89.0 %** of the time on the general panel (254,846 positions, 8 domains) and **92.5 %** on our
+  legal panel (71,080 positions); KL divergence lower bound 0.132 and 0.156. Closest on code, math, tool calls and
+  extraction (89-99 %), furthest on chat, writing and multilingual text (81-86 %). This gap is the 2-bit quantization,
+  not the speed work. [Tables and method](docs/quality.md#kl-divergence-against-the-original-model-served-path).
 - **The quant.** ISTA-DASLab report the IQ2_XXS build scoring the same as the unquantized release on their three
   benchmarks: AIME25 100.00, GPQA-Diamond 90.91, LiveCodeBench v6 89.71 (100 % recovery, reasoning effort 50). UPSTREAM
   CLAIM from their [model card](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF); we have not
@@ -381,6 +387,7 @@ This build stands on other people's work:
 - **Phil Tompkins (philbert440)**: the V100 engine and EXL3 pack our previous build ran on, the replay-row design behind
   our prefill skip, and the SM70 sparse prefill attention kernel our fused prefill attention starts from.
 - **Dennis Vertzyas (dnv2003), v100-skinny**: Volta kernel and bandwidth findings.
+- **sudoingX**: the `p4_kld.py` fidelity method and general panel behind our KL divergence measure.
 - **TensorFold (Elevatormusic)**: coupled sampled drafts.
 Every source, with what we took from it, is in [CREDITS.md](CREDITS.md). If you build on this repository, please credit
 them as well.

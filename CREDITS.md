@@ -48,4 +48,7 @@ or misdescribed anyone's contribution, please open an issue and we will correct 
   findings (the ~879 GB/s read ceiling). Cited and linked; no code copied.
 - **Our Sparks research lane**: the code of the plan fusion, router floor and coupled-draft sharding levers (research
   code), and the long-context benchmark tools ([dsv41-longctx-bench-tools](https://github.com/ProprietaryLegal/dsv41-longctx-bench-tools)).
+- **sudoingX** ([sudoingX/dgx-spark-deepseek-v41](https://github.com/sudoingX/dgx-spark-deepseek-v41)): the
+  `scripts/quantize/p4_kld.py` fidelity method and its 199-conversation general panel, which our KL divergence
+  measure against the original model follows ([docs/quality.md](docs/quality.md#kl-divergence-against-the-original-model-served-path)).
 - **NVIDIA**: compute-sanitizer (memcheck, racecheck, synccheck), run on every kernel change before its A/B.

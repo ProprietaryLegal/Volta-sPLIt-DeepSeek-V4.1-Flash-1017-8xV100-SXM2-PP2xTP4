@@ -67,12 +67,67 @@ score change).
 
 ### KL divergence against the original model (served path)
 
-**PENDING.** KL divergence and top-1 agreement of the served build against the original DeepSeek-V4.1-Flash-1017,
-teacher-forced on fixed panels with the original model's reference logits.
+MEASURED 2026-11-05 on the checkpoint build: how closely the served model's next-token distribution follows the original
+DeepSeek-V4.1-Flash-1017, position by position, on fixed text.
+
+Method: sudoingX's `p4_kld.py` approach. The reference logits were computed once from the original release with
+DeepSeek's reference implementation: for every scored position, the original model's top-128 tokens with their
+log-probabilities and the log-likelihood of the true next token. Two panels: sudoingX's general panel (199
+conversations in 8 domains) and our legal panel (210 sequences). Each panel sequence was sent as token IDs to the
+running server (greedy, `prompt_logprobs` = 20, no prefix-cache hits), one request at a time.
+
+- **top-1 agreement**: the served model's most likely next token is the original's most likely next token. Exact.
+- **NLL**: mean negative log-likelihood of the true next token, original vs served. Exact.
+- **KL divergence, lower bound**: KL(original || served), computed over the tokens that appear in both the original's
+  top-128 and the served top-20, plus one bucket for the rest. Merging tokens into one bucket can only lower the KL, so
+  this is a lower bound; the true value is at least this.
+
+| panel | positions | top-1 agreement | KL, lower bound (mean) | KL p99 | NLL original | NLL served |
+|---|---:|---:|---:|---:|---:|---:|
+| general (8 domains) | 254,846 | **89.0 %** | **0.132** | 1.71 | 0.470 | 0.564 |
+| legal | 71,080 | **92.5 %** | **0.156** | 3.00 | 0.197 | 0.301 |
+
+| general panel domain | positions | top-1 | KL lower bound |
+|---|---:|---:|---:|
+| code | 165,450 | 90.6 % | 0.094 |
+| long | 16,457 | 90.9 % | 0.112 |
+| math | 10,625 | 89.4 % | 0.090 |
+| agentic | 16,686 | 87.5 % | 0.162 |
+| multilingual | 8,620 | 85.7 % | 0.300 |
+| knowledge | 14,093 | 84.2 % | 0.216 |
+| writing | 4,939 | 83.9 % | 0.283 |
+| chat | 17,976 | 80.8 % | 0.309 |
+
+| legal panel domain | positions | top-1 | KL lower bound |
+|---|---:|---:|---:|
+| tools | 3,608 | 99.2 % | 0.016 |
+| extraction | 2,674 | 97.1 % | 0.064 |
+| preservation | 15,065 | 96.1 % | 0.070 |
+| hallucination | 2,322 | 92.9 % | 0.126 |
+| drafting | 26,971 | 92.3 % | 0.159 |
+| authority | 16,261 | 91.2 % | 0.133 |
+| general | 4,179 | 77.3 % | 0.736 |
+
+What this measures is the quantization, not the speed work: the experts are served at IQ2_XXS (about 2 bits per weight),
+and every speed change is bitwise-identical or passes the near-tie gate. The gap is largest on open-ended text (chat,
+writing, multilingual) and smallest on code, tool calls and extraction.
 
 ### MMLU-Pro and HumanEval+
 
-**PENDING.**
+MEASURED 2026-11-05 on the checkpoint build, through the running server, thinking off, greedy, one request at a time.
+
+| benchmark | score | items | errors | replies cut at the token limit |
+|---|---:|---:|---:|---:|
+| MMLU-Pro (exact match) | **79.9 %** ±1.5 | 700 | 0 | 11 |
+| HumanEval+ pass@1, plus tests | **89.6 %** (147 of 164) | 164 | 0 | 2 |
+| HumanEval+ pass@1, base tests | 94.5 % (155 of 164) | 164 | 0 | 2 |
+
+- **MMLU-Pro**: lm-eval's `mmlu_pro` task, 5-shot chain of thought with its own answer extraction, temperature 0,
+  up to 2,048 output tokens. A subset: the first 50 test items of each of the 14 subjects in dataset order
+  (`--limit 50`), so 700 of the 12,032. ±1.5 is lm-eval's standard error.
+- **HumanEval+**: EvalPlus, all 164 problems, temperature 0, up to 768 output tokens, scored in EvalPlus's sandbox
+  against the base tests and the extended "plus" tests.
+- With thinking on the scores may be higher; we have not run that yet.
 
 ### Other checks
 - **Functional**: needle retrieval at ~450K and ~498K tokens found 6 of 6 needles in 4 of 4 runs; prefix-cache hits at
