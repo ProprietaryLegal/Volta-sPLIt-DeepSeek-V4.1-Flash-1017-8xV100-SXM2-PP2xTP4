@@ -161,12 +161,15 @@ round time, measured decode-only in paired ABBA arms ([method](docs/method.md)).
 
 **A 249 GB model on GPUs from 2018, every expert resident.** DeepSeek-V4.1-Flash-1017 is a 551.9B-parameter mixture of
 experts with DeepSeek's Engram n-gram memory. Its weights here are 248.8 GB (138.24 GB of IQ2_XXS experts and backbone,
-110.60 GB of IQ4_NL Engram tables), and all of it lives in the 256 GiB of HBM2 on eight V100-SXM2-32GB cards: sm_70
-silicon with no FP8 or BF16 tensor cores and no `cp.async`. No expert is paged from host memory during decode.
+110.60 GB of IQ4_NL Engram tables). The experts and backbone live in the 256 GiB of HBM2 on eight V100-SXM2-32GB cards:
+sm_70 silicon with no FP8 or BF16 tensor cores and no `cp.async`. No expert is paged from host memory during decode. The
+Engram tables stay in host RAM and each round gathers only the rows it needs: about 0.12 ms per decode round, measured
+over 52 profiled rounds ([docs/levers.md](docs/levers.md#did-not-work), "hot Engram in HBM"). Correction 2026-11-06:
+this paragraph used to say all 248.8 GB lived in HBM2.
 
 **Split across two NVLink boards.** 1CatAI's [1Cat-vLLM](https://github.com/1CatAI/1Cat-vLLM) DeepSeek-V4.1 package
 ([#1277](https://github.com/1CatAI/1Cat-vLLM/pull/1277)) runs this model on one 4-GPU board with experts offloaded. We
-ported it to pipeline parallel 2 x tensor parallel 4: layers 0-19 and the Engram tables on one NVLink quad; layers 20-39,
+ported it to pipeline parallel 2 x tensor parallel 4: layers 0-19 and the Engram lookup on one NVLink quad; layers 20-39,
 the head and the DSpark drafter on the other; PCIe between them. Then we made it fast, one switch at a time, each
 admitted only by a paired A/B on this machine.
 
@@ -208,7 +211,7 @@ and environment, the A/B harness, and the log of the test queue.
 | Power and clocks | 150 W per card, graphics clock capped at 1522 MHz |
 | Model | DeepSeek-V4.1-Flash-1017: [ISTA-DASLab GSQ-RCO GGUF](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF) @ `ad1e8991` (IQ2_XXS experts, 138.24 GB; IQ4_NL Engram, 110.60 GB); config, tokenizer and DSpark drafter (FP8, 7.93 GB) from [deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017) @ `1bae0e10` |
 | Engine | 1Cat-vLLM #1277 (merge `899e9ed33`) + 1Cat main `6db9c81` and 25 open 1Cat PRs + our PP2 port and lever stack: the [49-patch series](forks/1cat-4xv100-tp4/) and our production patches in [engine/production/](engine/production/); the `v41k`, `v41idx`, `v41pidx` and `v41prefmoe` SM70 CUDA libraries built from that source |
-| Layout | PP2 x TP4. Stage 1 (board B): layers 0-19, Engram tables, hash state. Stage 2 (board C): layers 20-39, the head, the drafter. TP all-reduce over NVLink; the stage hand-off over host shared memory (`NCCL_P2P_LEVEL=NVL`) |
+| Layout | PP2 x TP4. Stage 1 (board B): layers 0-19, Engram lookup and hash state (Engram tables in host RAM). Stage 2 (board C): layers 20-39, the head, the drafter. TP all-reduce over NVLink; the stage hand-off over host shared memory (`NCCL_P2P_LEVEL=NVL`) |
 | Engine settings | vLLM Model Runner V2, synchronous scheduling, FULL CUDA graphs for 1-6 tokens per step, chunked prefill 8,192, prefix caching, every expert resident |
 | Drafter | DSpark, 5 drafts per round, coupled (keyed) sampled drafts at T>0 |
 | Context | 524,288 tokens per request, one request at a time (`max-num-seqs 1`), KV pool 2,076,870 tokens (packed KV: a 524,288-position GPU hot ring + host arena) |

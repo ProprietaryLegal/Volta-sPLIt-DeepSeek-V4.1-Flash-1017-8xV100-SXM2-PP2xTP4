@@ -13,7 +13,7 @@ installs' own checks): 32,768 tokens → output sha `cdf3cf45c3cf`, 131,072 toke
 
 | part | what it is | role |
 |---|---|---|
-| GPUs | 8x NVIDIA V100-SXM2-32GB on two 4-GPU SXM2 boards; NVLink inside each board | board B: pipeline stage 1 (layers 0-19, Engram tables and hash state), TP4. Board C: stage 2 (layers 20-39, the head and the drafter), TP4 |
+| GPUs | 8x NVIDIA V100-SXM2-32GB on two 4-GPU SXM2 boards; NVLink inside each board | board B: pipeline stage 1 (layers 0-19, Engram lookup and hash state; the Engram tables are in host RAM), TP4. Board C: stage 2 (layers 20-39, the head and the drafter), TP4 |
 | PCIe | four PLX switches, two GPUs each, Gen3 x8 per GPU; since 2026-11-03 each switch on its own CPU root complex at Gen3 x16 (before: one switch on an x8 link sharing a root complex with board B) | the stage hand-off and host traffic. MEASURED 2026-11-02, before the move (512 MiB pinned host-to-device): board B 25.5 GB/s for all four cards together; board C 13.1 GB/s. Not re-measured since |
 | host | AMD Threadripper PRO 3945WX (12 cores), one NUMA node, 251 GB RAM, Linux, Python 3.12, NVIDIA driver 580 | scheduler, tokenizer, the packed-KV host arena |
 | power | 150 W cap per GPU, graphics clock capped at 1522 MHz | MEASURED: 200 W neutral (−0.06 ms per round) |
