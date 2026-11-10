@@ -10,9 +10,14 @@ The scripts use four placeholders. Export them before running anything:
 ```bash
 export ENGINE_HOME=/path/to/engine      # venv, source tree (src-pp2), run directory (run-pp2), models/, engram/
 export BENCH_DIR=$ENGINE_HOME/bench5    # this directory: scripts, arm outputs, the state log pp2-go.state
-export MODEL_HOME=/path/to/models       # HF config/tokenizer (base/), DSpark drafter (dspark-v41/), gguf/
+export MODEL_HOME=/path/to/models       # HF config/tokenizer (base/), generated DSpark drafter folder (dspark-v41/), gguf/
 export QUALITY_TOOLS=/path/to/quality   # greedy reference compare; not published (see below)
 ```
+
+`dspark-v41/` must be generated once with `prepare_dspark` ([docs/production.md](../docs/production.md#prepare-the-drafter-folder-required)).
+The scripts boot `$ENGINE_HOME/run-pp2/$PROFILE`; the default is `serve-pp2.yaml`, the published profile
+([engine/configs/serve-pp2.yaml](../engine/configs/serve-pp2.yaml)) with its placeholders substituted. The logs under
+`evidence/` show our host's name for the same file, `serve-v41pkg-pp2.yaml`.
 
 The prompt sets are not published (we publish no prompt corpora). Supply your own: T=0 throughput uses the built-in
 prompts of `ab_tput.py`; T=1 needs a JSONL of `{"id", "prompt", "seed", "temperature", "top_p", "max_tokens"}`

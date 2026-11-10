@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-10: install guide fixes (issue #1)
+
+- **The drafter folder must be generated.** `docs/production.md` listed `dspark-v41/` as three downloaded shards. It
+  also needs its own `config.json` and index, written by #1277's `benchmarks.deepseek_v41.prepare_dspark`; the guide
+  now gives the layout and the command. A folder with only the shards fails at boot with
+  `'DeepseekV41Config' object has no attribute 'hidden_size'` or
+  `num_speculative_tokens:5 must be divisible by n_predict=3`. MEASURED: the script's output is byte-identical to the
+  config and index production serves from. The four-card fork's README points to the same step.
+- **Harness default profile.** The harness scripts defaulted to `serve-v41pkg-pp2.yaml`, our host's name for the
+  profile published as `engine/configs/serve-pp2.yaml`. They now default to `serve-pp2.yaml`.
+- No engine or measurement change.
+
 ## 2026-11-05: the checkpoint build (30 keys), speed by kind of text at 1K-256K
 
 - **New headline, MEASURED** (context sweep, 135 requests, thinking off, greedy): decode depends on the kind of text.

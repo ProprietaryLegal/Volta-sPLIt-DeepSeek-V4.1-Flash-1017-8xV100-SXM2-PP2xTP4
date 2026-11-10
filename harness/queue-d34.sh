@@ -14,7 +14,7 @@ DT="VLLM_V41_EXPERT_DIET=3"
 NEWLIB=$D/v41k-diet1103/build/v41k.so; LIB=$D/v41k/build/v41k.so; PY=$B/.venv-pp2/bin/python; CS=/usr/local/cuda-12.8/bin/compute-sanitizer
 until /usr/bin/grep -q "QUEUE-D33 done" $O/pp2-go.state; do sleep 30; done
 /usr/bin/grep -q "QUEUE-D33 server up: REC + VLLM_V41_MIX_STREAM=1" $O/pp2-go.state && FULL="$FULL VLLM_V41_MIX_STREAM=1"
-back() { KEEP_LOCK=1 bash $O/stop-pp2.sh >> $O/warm-d34.log 2>&1; sleep 10; env $FULL $1 PROFILE=serve-v41pkg-pp2.yaml bash $O/serve-pp2.sh >> $O/warm-d34.log 2>&1 && st "server up: REC${1:+ + $1} ($(sha256sum $LIB | cut -c1-16))" || st "boot FAILED"; }
+back() { KEEP_LOCK=1 bash $O/stop-pp2.sh >> $O/warm-d34.log 2>&1; sleep 10; env $FULL $1 PROFILE=serve-pp2.yaml bash $O/serve-pp2.sh >> $O/warm-d34.log 2>&1 && st "server up: REC${1:+ + $1} ($(sha256sum $LIB | cut -c1-16))" || st "boot FAILED"; }
 st "start: stop server, build diet1103 v41k.so, expert_diet_check + sanitizers (base env: $(echo $FULL | /usr/bin/grep -o 'MIX_STREAM=1' || echo 'no MIX_STREAM'))"
 KEEP_LOCK=1 bash $O/stop-pp2.sh > $O/d34-stop.log 2>&1; sleep 15
 CUDA_VISIBLE_DEVICES= TORCH_CUDA_ARCH_LIST=7.0 MAX_JOBS=4 nice -n 19 $PY -I $D/v41k-diet1103/build.py > $O/v41k-diet1103-build.log 2>&1; echo "EXIT $?" >> $O/v41k-diet1103-build.log

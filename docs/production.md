@@ -29,6 +29,39 @@ installs' own checks): 32,768 tokens → output sha `cdf3cf45c3cf`, 131,072 toke
 
 The files we serve are byte-identical to those revisions. 1Cat #1277's README lists the same downloads.
 
+### Prepare the drafter folder (required)
+
+`dspark-v41/` is not a plain download. It is a small generated folder: the drafter's own `config.json`, its own
+`model.safetensors.index.json`, and links to the three shards. Without that `config.json` the engine describes the
+drafter with the parent model's nested config, and the boot fails in one of two ways:
+
+- `AttributeError: 'DeepseekV41Config' object has no attribute 'hidden_size'`;
+- `num_speculative_tokens:5 must be divisible by n_predict=3` (the parent config has `num_nextn_predict_layers: 3`;
+  the drafter's own config has `0` and `dspark_block_size: 5`).
+
+Lay the downloads out like this, then run #1277's own script once from the engine source tree, with the Python of
+the venv the engine is installed in (the script imports `gguf` and `regex`):
+
+```
+$MODEL_HOME/base/                      config.json, model.safetensors.index.json, tokenizer.json,
+                                       tokenizer_config.json, encoding/     (deepseek-ai @ 1bae0e10)
+$MODEL_HOME/base/dspark/               model-00044-of-00048.safetensors, model-00045-..., model-00046-...
+                                       (the same repository; they sit at its top level, move or link them here)
+```
+
+```bash
+cd $ENGINE_HOME/src-pp2
+python -m benchmarks.deepseek_v41.prepare_dspark --model-root $MODEL_HOME --destination $MODEL_HOME/dspark-v41
+# prints {"tensors": 2401, "payload_bytes": 7932874632, "weight_conversion": false}
+```
+
+It writes `dspark-v41/config.json` (flat, `model_type: deepseek_v41_text`, 3 layers, `architectures:
+["DSparkDeepseekV41ForCausalLM"]`), `dspark-v41/model.safetensors.index.json` (the 2,401 `mtp.*` tensors) and three
+symlinks into `base/dspark/`. No weight is converted. It refuses to overwrite: remove a hand-made `dspark-v41/` first.
+MEASURED 2026-11-10: the script as it is in the #1277 merge, run on the revisions above, gives a `config.json` and
+an index byte-identical to the ones production serves from. `num_speculative_tokens: 5` in the profile is then
+accepted as it stands.
+
 ## Engine
 
 1. [forks/1cat-4xv100-tp4/](../forks/1cat-4xv100-tp4/): `tools/apply_series.sh` applies 49 patches to 1Cat-vLLM #1277
@@ -130,6 +163,10 @@ export ENGINE_HOME=... MODEL_HOME=... CUDA_VISIBLE_DEVICES=<board B x4>,<board C
 source engine/configs/rec.env
 bash $ENGINE_HOME/run-pp2/run_serve.sh serve-pp2      # copy env.sh, run_serve.sh and serve-pp2.yaml into run-pp2/
 ```
+
+The profile file is `serve-pp2.yaml`. On our host the same file is named `serve-v41pkg-pp2.yaml`, which is the name
+the logs under `evidence/` show; the two differ only in the header comment and the path placeholders. The harness
+scripts default to `PROFILE=serve-pp2.yaml`.
 
 A boot takes about 2.5-4 minutes to ready, plus untimed warm-up requests (the first request of a boot JIT-compiles about
 ten Triton kernels; there is no compile cache).

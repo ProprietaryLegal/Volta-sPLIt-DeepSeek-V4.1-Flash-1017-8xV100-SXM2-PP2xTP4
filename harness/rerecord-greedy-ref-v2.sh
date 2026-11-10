@@ -49,7 +49,7 @@ if [ -z "${REC_ENV:-}" ]; then
   echo "$D37" | /usr/bin/grep -q "VLLM_V41_HC_TOKEN_BLOCKED=1" && REC_ENV="$REC_ENV VLLM_V41_HC_TOKEN_BLOCKED=1"
   PROFILE=${PROFILE:-$(echo "$D37" | /usr/bin/grep -o -E 'profile [^ ]+' | tail -n 1 | cut -d' ' -f2)}
 fi
-export PROFILE=${PROFILE:-serve-v41pkg-pp2.yaml}
+export PROFILE=${PROFILE:-serve-pp2.yaml}
 st "start $LABEL: stack $REC_ENV profile $PROFILE"
 
 # 2. boot + warm + provenance

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ab-arm-t1.sh LABEL [VAR=VAL ...]: ab-arm.sh plus a seeded T=1 run of the lever-1 prompt set (main, 11-03).
-# Boots PROFILE (default serve-v41pkg-pp2.yaml) with the env, runs ab_tput.py (T=0, 3 x 1024), the greedy check
+# Boots PROFILE (default serve-pp2.yaml) with the env, runs ab_tput.py (T=0, 3 x 1024), the greedy check
 # unless SKIP_GREEDY=1, then ab_t1.py -> bench5/t1-<LABEL>.jsonl. Log: bench5/ab-<LABEL>-<ts>.log. Leaves the server up.
 set -uo pipefail
 B=${ENGINE_HOME} O=$B/bench5 Q=${QUALITY_TOOLS}
@@ -8,9 +8,9 @@ REF=$B/run-pp2/quality-runs/20261103T002941Z-greedy-B5PP2-g1/references.jsonl
 LABEL=$1; shift
 LOG=$O/ab-$LABEL-$(date -u +%Y%m%dT%H%M%SZ).log
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
-log "AB $LABEL start env: $* PROFILE=${PROFILE:-serve-v41pkg-pp2.yaml}"
+log "AB $LABEL start env: $* PROFILE=${PROFILE:-serve-pp2.yaml}"
 KEEP_LOCK=1 bash $O/stop-pp2.sh >> "$LOG" 2>&1; sleep 10
-if ! env "$@" PROFILE=${PROFILE:-serve-v41pkg-pp2.yaml} bash $O/serve-pp2.sh >> "$LOG" 2>&1; then log "AB $LABEL BOOT FAILED: $(cat $O/serve-pp2.failed)"; exit 1; fi
+if ! env "$@" PROFILE=${PROFILE:-serve-pp2.yaml} bash $O/serve-pp2.sh >> "$LOG" 2>&1; then log "AB $LABEL BOOT FAILED: $(cat $O/serve-pp2.failed)"; exit 1; fi
 log "AB $LABEL up"
 source $O/arm-checks.sh
 warm

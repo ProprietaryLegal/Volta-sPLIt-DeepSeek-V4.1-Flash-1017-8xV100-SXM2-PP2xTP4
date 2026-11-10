@@ -117,7 +117,7 @@ split_args() {  # split_args "$@": harness vars given as arm args are exported h
 }
 boot() {   # boot "$@": stop (Engram kept), then boot PROFILE with the env; INVALID-free failure exit like v1
   KEEP_LOCK=1 $STOP_CMD >> "$LOG" 2>&1; sleep "$PAUSE"
-  if ! env "$@" PROFILE=${PROFILE:-serve-v41pkg-pp2.yaml} $SERVE_CMD >> "$LOG" 2>&1; then
+  if ! env "$@" PROFILE=${PROFILE:-serve-pp2.yaml} $SERVE_CMD >> "$LOG" 2>&1; then
     log "AB $LABEL BOOT FAILED: $(cat $O/serve-pp2.failed 2> /dev/null)"; exit 1
   fi
 }

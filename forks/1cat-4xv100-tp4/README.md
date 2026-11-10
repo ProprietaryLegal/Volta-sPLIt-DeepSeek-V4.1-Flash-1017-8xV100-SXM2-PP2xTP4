@@ -57,7 +57,9 @@ The 8-GPU production engine adds [our expert-kernel diet](../../engine/productio
 - **Model files.** Use the same downloads #1277 uses (UPSTREAM sizes, `benchmarks/deepseek_v41/README.md`):
   - backbone, four GGUF shards: 138.24 GB;
   - Engram GGUF: 110.60 GB;
-  - DSpark, three HF shards: 7.93 GB;
+  - DSpark, three HF shards: 7.93 GB. `DS41_DSPARK` is not those three files alone: generate the folder once with
+    `python -m benchmarks.deepseek_v41.prepare_dspark` (steps and the two errors a bare folder gives:
+    [docs/production.md](../../docs/production.md#prepare-the-drafter-folder-required));
   - the HF config and tokenizer directory (`DS41_BASE`).
 - **Never commit model files.** None of them goes in this repository.
 

@@ -11,7 +11,7 @@ split_args "$@"
 mkdir -p "$OUT"
 LOG=$OUT/ab-$LABEL-$(date -u +%Y%m%dT%H%M%SZ).log
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
-log "AB $LABEL start env: ${ARM_ENV[*]} PROFILE=${PROFILE:-serve-v41pkg-pp2.yaml} harness=v2-depth"
+log "AB $LABEL start env: ${ARM_ENV[*]} PROFILE=${PROFILE:-serve-pp2.yaml} harness=v2-depth"
 boot "${ARM_ENV[@]}"
 log "AB $LABEL up; async: $(/usr/bin/grep -m1 -o "Asynchronous scheduling is [a-z]*" "$SERVE_LOG")"
 prov

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ab-arm-t1-v2.sh LABEL [VAR=VAL ...]: v2 of ab-arm-t1.sh (harness1103, 11-03; advrev H1/H2/H3/H5). Same arm flow:
-# stop (Engram kept), boot PROFILE (default serve-v41pkg-pp2.yaml) with the env, warm-up, T=0 3 x 1024, gate, seeded
+# stop (Engram kept), boot PROFILE (default serve-pp2.yaml) with the env, warm-up, T=0 3 x 1024, gate, seeded
 # T=1 run of the lever-1 prompt set. Leaves the server up. Differences from v1:
 #   - T0 and T1 run through ab_t1_v2.py (streamed): every line also carries ttft, dec_s, dec-ms/round (decode-only) and
 #     toksha (sha of the generated token ids); score with pairs_arms_v2.py --metric dec, then win3.py.
@@ -23,7 +23,7 @@ log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 if [ -s "$OUT/ab-$LABEL-tput.out" ] && ! /usr/bin/grep -q " dec_s " "$OUT/ab-$LABEL-tput.out"; then
   log "AB $LABEL REFUSED: label already used by a v1 arm (ab-$LABEL-tput.out); pick a new label"; exit 1
 fi
-log "AB $LABEL start env: ${ARM_ENV[*]} PROFILE=${PROFILE:-serve-v41pkg-pp2.yaml} harness=v2 gate=$(gate_mode) act=${ACT_EXPECT:-any}${ACT_GREP:+ (grep set)}"
+log "AB $LABEL start env: ${ARM_ENV[*]} PROFILE=${PROFILE:-serve-pp2.yaml} harness=v2 gate=$(gate_mode) act=${ACT_EXPECT:-any}${ACT_GREP:+ (grep set)}"
 boot "${ARM_ENV[@]}"
 log "AB $LABEL up"
 prov

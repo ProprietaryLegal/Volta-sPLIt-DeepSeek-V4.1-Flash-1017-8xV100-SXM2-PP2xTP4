@@ -8,12 +8,12 @@
 #   - Engram: dd prewarm, then engram_lock.py (root mlock) pins it in RAM until stop-pp2.sh releases it.
 #   - Model GGUF from the NVMe copy when models/gguf/COPY.done exists, else the HDD original.
 # Writes bench5/$NAME.ready or $NAME.failed. Never stops the server on success (stop-pp2.sh does).
-# Run on the 8-GPU host in tmux serve-pp2-d1:  PROFILE=serve-v41pkg-pp2.yaml bash bench5/serve-pp2.sh
+# Run on the 8-GPU host in tmux serve-pp2-d1:  PROFILE=serve-pp2.yaml bash bench5/serve-pp2.sh
 set -uo pipefail
 B=${ENGINE_HOME} R=$B/run-pp2 O=$B/bench5
 ENGRAM=$B/engram/DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf
 NV=$B/models/gguf HDD=${MODEL_HOME}/gguf
-PORT=18042 NAME=${NAME:-serve-pp2} PROFILE=${PROFILE:-serve-v41pkg-pp2.yaml} WAIT_MIN=${WAIT_MIN:-60}
+PORT=18042 NAME=${NAME:-serve-pp2} PROFILE=${PROFILE:-serve-pp2.yaml} WAIT_MIN=${WAIT_MIN:-60}
 mkdir -p "$O"; LOG=$O/$NAME-$(date -u +%Y%m%dT%H%M%SZ).log
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 memgib() { awk '/MemAvailable/{print int($2/1048576)}' /proc/meminfo; }

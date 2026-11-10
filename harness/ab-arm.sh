@@ -1,6 +1,6 @@
 #!/bin/bash
 # ab-arm.sh LABEL [VAR=VAL ...]: A/B arm on the the 8-GPU host PP2 server (main, 11-03). Stops the server (Engram kept), boots
-# serve-v41pkg-pp2.yaml with the given env, runs ab_tput.py (3 x 1024 tokens) and the greedy check against the boot-7
+# serve-pp2.yaml with the given env, runs ab_tput.py (3 x 1024 tokens) and the greedy check against the boot-7
 # reference (--runs 1, near-tie 0.9 nats). Log: bench5/ab-<LABEL>-<ts>.log. Leaves the server up.
 set -uo pipefail
 B=${ENGINE_HOME} O=$B/bench5 Q=${QUALITY_TOOLS}
@@ -10,7 +10,7 @@ LOG=$O/ab-$LABEL-$(date -u +%Y%m%dT%H%M%SZ).log
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 log "AB $LABEL start env: $*"
 KEEP_LOCK=1 bash $O/stop-pp2.sh >> "$LOG" 2>&1; sleep 10
-if ! env "$@" PROFILE=${PROFILE:-serve-v41pkg-pp2.yaml} bash $O/serve-pp2.sh >> "$LOG" 2>&1; then log "AB $LABEL BOOT FAILED: $(cat $O/serve-pp2.failed)"; exit 1; fi
+if ! env "$@" PROFILE=${PROFILE:-serve-pp2.yaml} bash $O/serve-pp2.sh >> "$LOG" 2>&1; then log "AB $LABEL BOOT FAILED: $(cat $O/serve-pp2.failed)"; exit 1; fi
 log "AB $LABEL up"
 source $O/arm-checks.sh
 warm
