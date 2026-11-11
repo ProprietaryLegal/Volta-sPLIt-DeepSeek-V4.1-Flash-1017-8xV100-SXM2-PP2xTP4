@@ -16,6 +16,8 @@ case "$mode" in
 esac
 
 problems=0
+body=$(mktemp)
+trap 'rm -f "$body"' EXIT
 flag() { echo "REFUSED: $1: $2" >&2; problems=$((problems + 1)); }
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
@@ -26,7 +28,10 @@ while IFS= read -r f; do
   esac
   size=$(size_of "$f")
   (( size > max )) && flag "$f" "size $size > $max"
-  if body_of "$f" | grep -I -q -E '(hf_[A-Za-z0-9]{30,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat[_][A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{32,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16})'; then
+  # The body goes to a file first: piping `git show` into `grep -q` under pipefail loses a match in a large file,
+  # because grep exits at the first match and git then dies of SIGPIPE, which the `if` reads as "no match".
+  body_of "$f" > "$body"
+  if grep -I -q -E '(hf_[A-Za-z0-9]{30,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat[_][A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{32,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16})' "$body"; then
     flag "$f" "credential pattern"
   fi
 done <<< "$files"

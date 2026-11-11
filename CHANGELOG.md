@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-11: data-boundary scan fix
+
+`tools/check_data_boundary.sh` could miss a credential-shaped string in a file larger than about 64 KB. It piped each
+file into `grep -q` under `pipefail`; grep exits at its first match, the sender dies of SIGPIPE, and the script read
+that as "no match". MEASURED with a fake token at the top of a 240 KB file: missed 10 of 10 before, refused 10 of 10
+after, in `--tree` and `--staged` mode; a clean 240 KB file is still accepted. The file body now goes to a temporary
+file first. The tree published before this fix was rescanned with a plain recursive grep: no credential pattern in its
+176 files. If you reuse this script, take the fixed version.
+
 ## 2026-11-11: three chat slots, system notes in place, top-k segments of 1,024
 
 Four items were tested on the production host (2026-11-10 22:54Z to 2026-11-11 01:23Z, clock ceiling 1,477 MHz), each
