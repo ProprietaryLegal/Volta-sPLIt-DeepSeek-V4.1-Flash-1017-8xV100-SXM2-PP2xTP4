@@ -183,6 +183,13 @@ listed below with the reason.
 **The 2026-11-05 checkpoint.** This is the build we now use day to day. It is frozen: new work is built and tested on a
 separate 4-GPU test machine and comes here only through a paired window. It serves one request at a time.
 
+**Since 2026-11-11** our host runs it with three later changes, each tested here against a rule written before its
+data: three chat slots (three long chats taking turns keep their caches: 6 of 6 hits against 0 of 6, first token
+0.57-0.88 s against 20.6-49.2 s), system notes kept in place on the Messages endpoint, and top-k segments of 1,024
+(decode round −0.17 to −0.40 ms, outputs identical). Detail:
+[docs/levers.md](docs/levers.md#after-the-checkpoint-adopted-2026-11-11). The speed tables on this page are the
+checkpoint's and were not re-measured.
+
 **Exact outputs.** The target verifies every draft with the speculative-sampling acceptance rule, so the text keeps the
 target model's distribution whatever the drafter proposes. The speed changes do not change what the model computes
 (bitwise-identical, or within the near-tie gate). One difference under Model Runner V2: a sampled (T>0) request that
@@ -191,7 +198,8 @@ distribution, but it is not the same sample the V1 runner would have drawn. Requ
 streams.
 
 **Where the previous build is still ahead.** It read short and medium prompts faster (about 2,900-3,300 tok/s, its own
-method) and served three requests at once. This build takes one request at a time; concurrency is next (below).
+method) and served three requests at once. The checkpoint took one request at a time. Since 2026-11-11 our host keeps
+three chats' caches (three slots) and still runs one request at a time; more combined throughput is not established.
 
 **Everything is published:** the measurements, the 49-patch engine series, our production patches, the serving profile
 and environment, the A/B harness, and the log of the test queue.
@@ -214,9 +222,9 @@ and environment, the A/B harness, and the log of the test queue.
 | Layout | PP2 x TP4. Stage 1 (board B): layers 0-19, Engram lookup and hash state (Engram tables in host RAM). Stage 2 (board C): layers 20-39, the head, the drafter. TP all-reduce over NVLink; the stage hand-off over host shared memory (`NCCL_P2P_LEVEL=NVL`) |
 | Engine settings | vLLM Model Runner V2, synchronous scheduling, FULL CUDA graphs for 1-6 tokens per step, chunked prefill 8,192, prefix caching, every expert resident |
 | Drafter | DSpark, 5 drafts per round, coupled (keyed) sampled drafts at T>0 |
-| Context | 524,288 tokens per request, one request at a time (`max-num-seqs 1`), KV pool 2,076,870 tokens (packed KV: a 524,288-position GPU hot ring + host arena) |
+| Context | 524,288 tokens per request, one request at a time (`max-num-seqs 1`; three chat slots on our host since 2026-11-11), KV pool 2,076,870 tokens (packed KV: a 524,288-position GPU hot ring + host arena) |
 | Thinking | on by default; `chat_template_kwargs: {"thinking": false}` turns it off |
-| Switch set | 30 keys: [engine/configs/rec.env](engine/configs/rec.env) |
+| Switch set | 32 keys (the checkpoint's 30 and two adopted 2026-11-11): [engine/configs/rec.env](engine/configs/rec.env) |
 
 Serving profile, environment and the production switch set: [engine/](engine/) and [docs/production.md](docs/production.md).
 
@@ -246,6 +254,9 @@ Each lever is a switch that defaults off; with the switch off the code path is t
 | All-reduce push for V4.1's message size (`SM70_MOE_ADD_ALLREDUCE`, `SUM2_PUSH_ANY`, `SM70_TP4_PUSH_ALLREDUCE_SMALL_MESSAGES`; test D44R5) | ours, on 1Cat's SM70 custom all-reduce | −0.180 ms per round (ABBAABBA, 95 % −0.278..−0.081) | T=1 texts identical |
 | **NCCL host hand-off between the boards (`NCCL_P2P_LEVEL=NVL`, 2026-11-05)** | NCCL setting; found by our stage-split profile | **first token −13.4 % at 32K, −14.2 % at 128K**; decode unchanged | bitwise |
 | **SM70 prefill expert GEMM (`PREFILL_IQ_GEMM`, tiles `5,4,4,4,4,4`, `v41prefmoe`; test D51, 2026-11-05)** | ours | **first token −4.1 % at 32K, −4.3 % at 150K, −2.4 % at 300K** (before the NCCL change) | near-tie gate PASS; identity hashes unchanged |
+| **Three chat slots (`max-num-seqs 3`, 2026-11-11)** | ours, on our multi-request engine work (not published yet) | **cache hits when three long chats take turns: 0 of 6 → 6 of 6; first token 20.6-49.2 s → 0.57-0.88 s**; lone request unchanged | near-tie gate PASS, every row identical |
+| System notes keep their place (`SYSTEM_IN_PLACE=1`, 2026-11-11) | ours | a system message added mid-chat keeps the cache: 0 → 31,248 of 31,300 tokens cached, next first token 11.2 → 0.51 s | replies without such a note identical |
+| Top-k segments of 1,024 (`TOPK_SEG=1024`, 2026-11-11) | ours | decode round −0.17 ms at 8K, −0.31 at 32K, −0.33 at 64K, −0.40 at 128K | byte-identical output |
 
 Two lessons: two of the winners were predicted near zero by isolated kernel benchmarks, so only the full A/B decides;
 and the biggest prompt-reading gain of 2026-11-05 was a one-line transport setting found by profiling where time went
@@ -257,6 +268,7 @@ between the stages, not a kernel. Detail: [docs/levers.md](docs/levers.md#adopte
 |---|---|---|
 | Expert top-p pruning (0rand / TensorFold) | 78 tok/s, greedy output changed | the divergence is built into the method |
 | V1 async scheduling with the request-end guard | +1.678 ms per round slower | rejected; Model Runner V2 replaced it |
+| Router with 8 warps instead of 4 (2026-11-11) | −0.027 ms per round (95 % −0.125..+0.071), texts identical | neutral on this host |
 | TP8 across both boards | no-go at the probe | the 8-way all-reduce across the boards took 30.8 µs against 5.28 µs inside a board |
 | Prefill chunks of 4,096 or 16,384 | near-tie gate FAIL / slower | chunk size changes long-prompt numerics |
 | **Fused prefill attention, exact-softmax mode (lever A mode 2, 2026-11-05)** | first token 32K 16.70 → 14.80 s, 128K 60.47 → 54.19 s; **near-tie gate FAIL**: 1 of 8 identical, KL mean 0.0109 | 99.4 % of attention elements bit-equal, but the rest moved confident tokens; a bitwise version is in testing (below) |
@@ -282,7 +294,7 @@ Built and tested on the separate 4-GPU test machine; each comes to the checkpoin
 | Decode kernels for two to four requests at once, each request's output identical to running it alone | started 2026-11-05 on the test machine | forecast 2-3x aggregate decode at four requests (ESTIMATED) |
 | Single-request decode: fewer, fused small kernels; one launch per layer for the experts | started 2026-11-05 on the test machine | forecast +3 to +8 % decode (ESTIMATED) |
 | Memory for four requests: row-block Engram gather (1Cat issue [#1342](https://github.com/1CatAI/1Cat-vLLM/issues/1342)), prefill scratch reuse | started 2026-11-05 on the test machine | PENDING |
-| Concurrency on Model Runner V2 (two or three requests) | built; window pending | PENDING |
+| Three chat slots on Model Runner V2 | **in production since 2026-11-11**: three long chats taking turns hit the cache 6 of 6 times (0 of 6 with one slot); one request runs at a time; the multi-request engine work it runs on is not published yet | MEASURED |
 | The 32K decode case under MRV2 (about 1.4 ms per round slower than V1 at that one length) | cause unknown | INCONCLUSIVE |
 
 Queue order and status: [docs/roadmap.md](docs/roadmap.md).
@@ -338,17 +350,19 @@ they are limited by instruction issue and latency, which is why the instruction 
 
 1. Rebuild the engine source: in [forks/1cat-4xv100-tp4/](forks/1cat-4xv100-tp4/), `tools/apply_series.sh` applies the
    49 patches to 1Cat-vLLM #1277 (`899e9ed33`) and checks the result against the recorded tree (`b0d692425297`).
-2. Apply the eight production patches in order, checking each result tree:
+2. Apply the ten production patches in order, checking each result tree:
    [0050](engine/production/0050-expert-diet.patch) (`4447483248bb`), [0051](engine/production/0051-prefill-skip.patch)
    (`32d4a9d9b0c1`), [0052](engine/production/0052-index-tiled.patch) (`4760febd4fe7`),
    [0053](engine/production/0053-index-fuse.patch) (`421c427444a4`), [0054](engine/production/0054-draft-mp-shard.patch)
    (`09cf8cc28b7b`), [0055](engine/production/0055-mrv2.patch) (`e85291152ae9`),
-   [0056](engine/production/0056-allreduce-sum2-push.patch) (`007852b33339`) and
-   [0057](engine/production/0057-prefill-iq-gemm.patch) (`42947e400952`). Then build vLLM, the `v41k` extension and the
+   [0056](engine/production/0056-allreduce-sum2-push.patch) (`007852b33339`),
+   [0057](engine/production/0057-prefill-iq-gemm.patch) (`42947e400952`),
+   [0058](engine/production/0058-system-notes-in-place.patch) (`1ee8ad2755b4`) and
+   [0059](engine/production/0059-topk-segment-width.patch) (`e082b9540245`). Then build vLLM, the `v41k` extension and the
    `v41idx`, `v41pidx` and `v41prefmoe` libraries ([engine/README.md](engine/README.md)). Library builds are not
    byte-reproducible: the claim is the same source and the same flags.
 3. Download the weights (links above; none are distributed here), set `ENGINE_HOME`, `MODEL_HOME` and
-   `CUDA_VISIBLE_DEVICES`, source [engine/configs/rec.env](engine/configs/rec.env) (30 keys) and start with
+   `CUDA_VISIBLE_DEVICES`, source [engine/configs/rec.env](engine/configs/rec.env) (32 keys) and start with
    [engine/configs/run_serve.sh](engine/configs/run_serve.sh).
 4. Measure with the [A/B harness](harness/) ([method](docs/method.md)).
 

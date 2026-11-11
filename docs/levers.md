@@ -194,6 +194,65 @@ accepted drafts per round).
     `e70897e7b29e`).
 - **Checkpoint benchmark** (2026-11-05, all 30 keys): [measurements.md](measurements.md#checkpoint-benchmark-2026-11-05).
 
+### After the checkpoint (adopted 2026-11-11)
+
+Three changes, tested on the production host from 2026-11-10 22:54Z to 2026-11-11 01:23Z and adopted in one step at
+01:28Z. Each acceptance rule was written down before its data. The GPU clock ceiling was 1,477 MHz (150 W per card)
+during these windows, lower than on 2026-11-05, so compare inside a window and not with the tables above. Every prompt
+is generated filler text.
+
+- **Three chat slots (`max-num-seqs: 3`).** With one slot the server kept one chat's prompt cache, so when long chats
+  took turns every return read its whole prompt again. MEASURED, three chats of 60K, 100K and 150K tokens taking turns
+  for three rounds: one slot, 6 returns, 0 cache hits, first token 20.6 / 32.9 / 49.2 s; three slots, **6 of 6 hits,
+  first token 0.57-0.88 s**. A lone request is not slower: 132.1 → 132.0 tok/s, 21.80 → 21.78 ms per decode round.
+  Chats of 150K, 150K and 480K tokens held together: 3 of 3 hits (0.91 / 0.86 / 2.24 s against 49.3 / 49.3 / 170.1 s
+  cold); least free memory on a card 7,228 MiB. A fourth chat takes the slot used longest ago (four chats over three
+  slots: 0 of 4 hits, as forecast); a chat that was pushed out pays one cold read and is cached again on its next turn
+  (MEASURED on the adopted server). Near-tie gate on the rotation's turns (cached follow-ups against cold reads of the
+  same prompt in one boot, 6 rows with one slot and 6 with three): every row identical, PASS.
+  - What it is not: a throughput claim. Requests still run one at a time on our host; the slots keep caches.
+  - The slots run on our multi-request engine work of 2026-11-06/07. That work is later than the checkpoint and is
+    **not in this repository's patches**: the published tree serves one slot.
+  - Limit of the gate: its rows are filler text through the completion endpoint. On chat-template turns a cached reply
+    can differ from a cold read of the same turn: 2 of 4 turns differed in one check on the one-slot server as it was
+    before this change. So the slots did not introduce it; they raise how often a turn is served from cache. A second
+    check that recorded token probabilities found every compared row identical, but only 1 of its 4 returns was served
+    from cache. The size of those differences and their cause are not measured yet.
+- **System notes keep their place, `VLLM_V41_SYSTEM_IN_PLACE=1`** (ours;
+  [engine/production/0058-system-notes-in-place.patch](../engine/production/0058-system-notes-in-place.patch)). On the
+  Messages endpoint, a system message that arrives after the first turn (an agent harness adds such notes in the middle
+  of a chat) was moved to the front of the prompt. Every token after the front then shifted and the chat read its whole
+  prompt again. With the switch the note stays where the client sent it, which the DeepSeek-V4.1 encoding renders
+  natively. MEASURED on a 31,267-token chat with a note added before turn 2: cached tokens 0 → **31,248 of 31,300**;
+  first token of turn 2 **11.2 s → 0.51 s**; the note was obeyed 10 of 10 times with the switch on and 10 of 10 off;
+  chats without such a note returned the same replies with the patched file and the switch unset (3 of 3). Unset or 0
+  is the old behaviour; any other value stops the server at start.
+- **Top-k segments of 1,024, `VLLM_V41_TOPK_SEG=1024`** (ours;
+  [engine/production/0059-topk-segment-width.patch](../engine/production/0059-topk-segment-width.patch)). Each decode
+  round selects the top entries of the index score row. The row was cut into segments of 8,192 scores; segments of
+  1,024 run more of that work in parallel. The selection is the same for every width. MEASURED in two windows of four
+  arms, two prompts per length, decode ms per round, ON minus OFF per pair (A/A in brackets):
+
+  | prompt | window 1 (OFF ON ON2 OFF2) | window 2 (ON OFF OFF2 ON2) |
+  |---|---|---|
+  | 8,192 | −0.38, −0.32 (+0.03, +0.08) | −0.34, −0.34 (−0.15, −0.16) |
+  | 32,768 | −0.32, −0.32 (+0.05, +0.05) | −0.57, −0.34 (+0.03, +0.26) |
+  | 65,536 | −0.33, −0.48 (+0.11, −0.05) | −0.32, −0.08 (−0.13, +0.11) |
+  | 131,072 | −0.20, −0.46 (+0.21, −0.04) | −0.16, −0.19 (−0.03, −0.05) |
+
+  All 16 pairs are faster; every output is byte-identical in every arm and to the baseline taken before the windows;
+  first token unchanged. Our rule for adoption looked at 131,072 only and asked for both pairs at or below −0.15 and
+  larger than the A/A drift. Window 1 missed it by 0.01 ms (−0.20 against a drift of +0.21). We then fixed one repeat
+  window in writing, with the arm order reversed, and it passed by 0.01 ms on its smaller pair. Both windows are shown
+  for that reason. After adoption, one arm on the installed set against the baseline before the windows (same prompts,
+  outputs identical 8 of 8): **−0.17 ms per round at 8K, −0.31 at 32K, −0.33 at 64K, −0.40 at 128K** (22.37 → 22.20,
+  27.46 → 27.16, 23.13 → 22.80, 24.70 → 24.31; differences taken before rounding). That is 0.8 to 1.6 % of a round; a short prompt shows no change
+  (21.81 ms per decode round against 21.78-21.80 before).
+- Not adopted in the same session: the router with 8 warps instead of 4 ([Did not work](#did-not-work)).
+- 0058 and 0059 were measured on our production tree, which holds the later multi-request work. The published patches
+  are the same changes cut against the published tree: they apply and compile there (trees `1ee8ad2755b4` and
+  `e082b9540245`), and the changed lines are the same except one comment. They were not run on the published tree.
+
 ## Did not work
 
 | change | result | why |
@@ -232,6 +291,7 @@ accepted drafts per round).
 | Lookup-free IQ1_M expert repack | no-go before a build: 360 → 344 instructions per 256 weights (−4.4 % against a 20 % gate), +35.7 % bytes | not worth the memory; dropped |
 | Fused prefill attention, lever A mode 2 (2026-11-05 window, on the production set with lever G; a port of philbert440's SM70 sparse prefill attention) | first token 32,768 tokens 16.68 / 16.71 → 14.78 / 14.83 s (−11.4 %), 131,072 tokens 60.27 / 60.67 → 54.26 / 54.11 s (−10.4 %); two-to-three-request serial cohorts +5 to +13 % aggregate; NUMERICS-GATE FAIL: identical 1 of 8, a confident token moved (first at a top-2 gap of 0.406 nats), KL mean 0.0109 over 366 positions | not installed: it changes output. Its kernel matches production's attention on 99.4 % of elements (at most 1 ulp); the difference is the order of the score sums. A summation-order-exact version (mode 3) is being prepared on our test machine |
 | Asynchronous scheduling on Model Runner V2 (D54R, D54A) | against V1: −2.872 / −2.860 ms per round; against synchronous MRV2: −0.085..−0.117 (D54A), no verdict run; bitwise | about 0.4 %; it needs its own serving profile; off for now |
+| Router with 8 warps instead of 4 (`ROUTE_WARPS=8`, 2026-11-11) | ABBAABBA, 8 pairs, decode ms per round: +0.037, −0.027, −0.061, −0.002, −0.083, −0.068, +0.036, −0.050, average **−0.027** (95 % interval −0.125..+0.071); texts identical 11 of 11 in every pair | neutral on this host; the setting stays 4 |
 
 Prefill chunk: 8,192 kept. 4,096 saved 5.6 % of first-token time at 32K, 1.8 % at 64K and nothing at 128K (greedy 6 of 8
 plus 2 near-ties), then failed the approved near-tie gate on its re-test (above); 2,048 and 16,384 were slower; above

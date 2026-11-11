@@ -1,0 +1,89 @@
+diff --git a/vllm/models/deepseek_v41/index_topk.py b/vllm/models/deepseek_v41/index_topk.py
+index af2ac70f9..f409ab697 100644
+--- a/vllm/models/deepseek_v41/index_topk.py
++++ b/vllm/models/deepseek_v41/index_topk.py
+@@ -2,6 +2,8 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ """Dynamic-length top-k for the V4.1 indexer (fp16 scores, ascending output)."""
+ 
++import os
++
+ import torch
+ 
+ from vllm.triton_utils import tl, triton
+@@ -96,7 +98,20 @@ def index_topk(out, scores, positions, valid, ratio, k=512):
+     return out
+ 
+ 
+-SEG = 8192
++def _segment_width():
++    # VLLM_V41_TOPK_SEG sets the decode top-k segment width
++    # (default 8192 = the deployed width). The selection is the same for every
++    # width: thresholds come from whole-row histograms and _seg_write places
++    # each index by the counts of all lower segments, so only the grid
++    # (rows x live / SEG programs) changes.
++    raw = os.environ.get("VLLM_V41_TOPK_SEG", "8192")
++    seg = int(raw)
++    if seg not in (1024, 2048, 4096, 8192):
++        raise ValueError(f"VLLM_V41_TOPK_SEG={raw}: expected 1024, 2048, 4096 or 8192")
++    return seg
++
++
++SEG = _segment_width()
+ 
+ 
+ @triton.jit
+@@ -263,11 +278,14 @@ def _seg_write(
+ _SEG_WORK = {}
+ 
+ 
+-def index_topk_parallel(out, scores, positions, valid, ratio, k=512):
+-    """Same output as index_topk; segments of SEG scores run in parallel (few rows)."""
++def index_topk_parallel(out, scores, positions, valid, ratio, k=512, seg=None):
++    """Same output as index_topk; segments of SEG scores run in parallel (few rows).
++
++    seg overrides the module width (tests compare widths in one process)."""
+     assert scores.dtype == torch.float16 and scores.stride(1) == 1 and out.shape[1] == k
++    seg = SEG if seg is None else seg
+     rows, width = scores.shape
+-    nseg = triton.cdiv(width, SEG)
++    nseg = triton.cdiv(width, seg)
+     key = (scores.device, rows, nseg)
+     if key not in _SEG_WORK:
+         _SEG_WORK[key] = (
+@@ -288,7 +306,7 @@ def index_topk_parallel(out, scores, positions, valid, ratio, k=512):
+         hist[0],
+         meta,
+         PASS=1,
+-        SEGMENT=SEG,
++        SEGMENT=seg,
+         BLOCK=1024,
+         **common,
+     )
+@@ -304,7 +322,7 @@ def index_topk_parallel(out, scores, positions, valid, ratio, k=512):
+         hist[1],
+         meta,
+         PASS=2,
+-        SEGMENT=SEG,
++        SEGMENT=seg,
+         BLOCK=1024,
+         **common,
+     )
+@@ -320,7 +338,7 @@ def index_topk_parallel(out, scores, positions, valid, ratio, k=512):
+         meta,
+         counts,
+         nseg,
+-        SEGMENT=SEG,
++        SEGMENT=seg,
+         BLOCK=1024,
+         **common,
+     )
+@@ -335,7 +353,7 @@ def index_topk_parallel(out, scores, positions, valid, ratio, k=512):
+         meta,
+         counts,
+         nseg,
+-        SEGMENT=SEG,
++        SEGMENT=seg,
+         BLOCK=1024,
+         SEGS=triton.next_power_of_2(nseg),
+         **common,

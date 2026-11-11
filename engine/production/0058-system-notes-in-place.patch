@@ -1,0 +1,91 @@
+diff --git a/vllm/entrypoints/anthropic/serving.py b/vllm/entrypoints/anthropic/serving.py
+index f5f8766bf..a1f84e08d 100644
+--- a/vllm/entrypoints/anthropic/serving.py
++++ b/vllm/entrypoints/anthropic/serving.py
+@@ -7,6 +7,7 @@
+ 
+ import json
+ import logging
++import os
+ import time
+ import uuid
+ from collections.abc import AsyncGenerator
+@@ -53,6 +54,45 @@ if TYPE_CHECKING:
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _system_in_place_switch() -> bool:
++    """VLLM_V41_SYSTEM_IN_PLACE: where a system-role message that arrives after
++    the first user or assistant message goes.
++
++    0 (default, also unset): it is moved into the system block at the front of
++    the prompt, as before. Every token after the front then shifts, and a chat
++    that adds such a message reads its whole prompt again.
++    1: it stays where the client sent it (the DeepSeek-V4.1 encoding renders a
++    mid-conversation system message natively). The front of the prompt does not
++    change, so the cached prefix still matches.
++    Anything else refuses at import (the server does not start).
++    """
++    value = os.getenv("VLLM_V41_SYSTEM_IN_PLACE", "0") or "0"
++    if value not in ("0", "1"):
++        raise ValueError(f"VLLM_V41_SYSTEM_IN_PLACE must be 0 or 1, got {value!r}")
++    return value == "1"
++
++
++_SYSTEM_IN_PLACE = _system_in_place_switch()
++if _SYSTEM_IN_PLACE:
++    logger.info(
++        "VLLM_V41_SYSTEM_IN_PLACE=1 active: mid-chat system messages keep their place"
++    )
++
++
++def _system_text(content) -> str:
++    """Text of a system-role message, without Claude Code's per-request
++    attribution header (it defeats prefix caching)."""
++    if isinstance(content, str):
++        return content
++    return "".join(
++        block.text
++        for block in content
++        if block.type == "text"
++        and block.text
++        and not block.text.startswith("x-anthropic-billing-header")
++    )
++
++
+ def wrap_data_with_event(data: str, event: str):
+     return f"event: {event}\ndata: {data}\n\n"
+ 
+@@ -167,9 +207,14 @@ class AnthropicServingMessages(OpenAIServingChat):
+                             continue
+                         system_parts.append(block.text)
+ 
+-        # System messages embedded inside the messages array
++        # System messages embedded inside the messages array. With
++        # VLLM_V41_SYSTEM_IN_PLACE=1 only those before the first user or
++        # assistant message belong to the front; _convert_messages keeps the
++        # later ones where they are.
+         for msg in anthropic_request.messages:
+             if msg.role != "system":
++                if _SYSTEM_IN_PLACE:
++                    break
+                 continue
+             if isinstance(msg.content, str):
+                 system_parts.append(msg.content)
+@@ -188,9 +233,16 @@ class AnthropicServingMessages(OpenAIServingChat):
+         cls, messages: list, openai_messages: list[dict[str, Any]]
+     ) -> None:
+         """Convert Anthropic messages to OpenAI format"""
++        seen_turn = False
+         for msg in messages:
+             if msg.role == "system":
++                # Leading system messages are already in the front block.
++                if _SYSTEM_IN_PLACE and seen_turn:
++                    text = _system_text(msg.content)
++                    if text:
++                        openai_messages.append({"role": "system", "content": text})
+                 continue
++            seen_turn = True
+ 
+             openai_msg: dict[str, Any] = {"role": msg.role}  # type: ignore
+ 

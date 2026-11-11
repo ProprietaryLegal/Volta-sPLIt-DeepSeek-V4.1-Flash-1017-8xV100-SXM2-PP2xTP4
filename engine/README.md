@@ -10,6 +10,8 @@
 | [production/0055-mrv2.patch](production/0055-mrv2.patch) | our DeepSeek-V4.1 port of Model Runner V2 (`VLLM_USE_V2_MODEL_RUNNER`), on top of 0054; adopted 2026-11-04 |
 | [production/0056-allreduce-sum2-push.patch](production/0056-allreduce-sum2-push.patch) | admits V4.1's 61,440-byte MoE-sum message to the custom all-reduce push path (`VLLM_V41_SUM2_PUSH_ANY`), on top of 0055; adopted 2026-11-04 (test D44R5); formerly `in-testing/T03` |
 | [production/0057-prefill-iq-gemm.patch](production/0057-prefill-iq-gemm.patch) | our SM70 prefill IQ GEMM for the routed experts (`VLLM_V41_PREFILL_IQ_GEMM`) and the source of its `v41prefmoe` library, on top of 0056; adopted 2026-11-05 (test D51) |
+| [production/0058-system-notes-in-place.patch](production/0058-system-notes-in-place.patch) | Messages endpoint: a system message sent in the middle of a chat stays in place (`VLLM_V41_SYSTEM_IN_PLACE`), on top of 0057; adopted 2026-11-11 |
+| [production/0059-topk-segment-width.patch](production/0059-topk-segment-width.patch) | decode index top-k segment width (`VLLM_V41_TOPK_SEG`, 1024 in production), on top of 0058; adopted 2026-11-11 |
 | [in-testing/](in-testing/) | patches for the changes in the test queue; not production |
 | [configs/](configs/) | serving profile, engine environment, start script, production lever set (`rec.env`) |
 
@@ -27,6 +29,8 @@ git apply ../engine/production/0054-draft-mp-shard.patch  # tree 09cf8cc28b7b
 git apply ../engine/production/0055-mrv2.patch            # tree e85291152ae9
 git apply ../engine/production/0056-allreduce-sum2-push.patch   # tree 007852b33339 (changes csrc/: the vLLM build compiles it into _C)
 git apply ../engine/production/0057-prefill-iq-gemm.patch       # tree 42947e400952
+git apply ../engine/production/0058-system-notes-in-place.patch # tree 1ee8ad2755b4
+git apply ../engine/production/0059-topk-segment-width.patch    # tree e082b9540245
 (cd benchmarks/deepseek_v41/v41idx && TORCH_CUDA_ARCH_LIST=7.0 python build.py)   # v41idx.so
 (cd benchmarks/deepseek_v41/v41pidx && TORCH_CUDA_ARCH_LIST=7.0 python build.py)  # v41pidx.so
 # v41prefmoe.so: after the vLLM build, in the venv it serves from; build.py copies it next to gguf_prefill_iq.py
@@ -73,6 +77,16 @@ files production runs.
 - Known difference, not part of these patches: the deployed `vllm/envs.py` also registers `VLLM_V41_ASYNC_EOR_GUARD`
   (the V1 async request-end guard, off; see [docs/levers.md](../docs/levers.md#did-not-work)) and does not register `VLLM_V41_EXPERT_DIET`, which the
   `v41k` library reads by itself. Neither changes what production runs.
+
+## Where the 2026-11-11 patches 0058 and 0059 come from
+
+- **0058** is the change to `vllm/entrypoints/anthropic/serving.py` that production runs, cut as a diff inside the
+  published tree after 0057. The patched file is byte-identical to the deployed file.
+- **0059** is the change to `vllm/models/deepseek_v41/index_topk.py` that production runs, applied to the published
+  tree's version of that file. Production's file also holds later multi-request code that is not published, so the two
+  files are not byte-identical; the changed lines are the same except one comment.
+- Both were measured on the production tree. On the published tree they apply (`git apply --check`) and compile; they
+  were not run there.
 
 ## The diet patch
 

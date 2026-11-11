@@ -10,6 +10,7 @@
   "previous_build": "the published record of our previous build (Volta sPLIce), files copied unchanged except a banner and relative links",
   "docs": "written for publication from the build records",
   "production": "engine/production/0050-0057: each patch cut from the private production branch (checkpoint 2026-11-05) against the previous patch's result tree; 0056 = the all-reduce push (test D44R5), 0057 = the SM70 prefill expert GEMM (test D51); result trees recorded in the README's Reproduce section",
+  "production_20261111": "engine/production/0058-0059: the two engine changes adopted 2026-11-11, cut against the published tree after 0057 (trees 1ee8ad2755b4, e082b9540245); measured on the private production tree, which also holds later multi-request work that is not published; applied and compiled on the published tree, not run there",
   "measurements_20261105": "the 2026-11-05 context sweep (135 requests) and head-to-head kit results, reduced to tables; raw request records left out"
  },
  "left_out": [
@@ -24,5 +25,5 @@
   "a forbidden-term scan for host names, internal paths and personal addresses",
   "git apply --check of every patch on its stated base"
  ],
- "updated": "2026-11-05"
+ "updated": "2026-11-11"
 }

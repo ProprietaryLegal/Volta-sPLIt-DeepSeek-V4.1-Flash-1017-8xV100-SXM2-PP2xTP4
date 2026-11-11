@@ -1,6 +1,12 @@
 # Production
 
-What serves on our host as of 2026-11-05, and how to reproduce it.
+What serves on our host, and how to reproduce it.
+
+**Since 2026-11-11** the host runs the checkpoint below with three later changes: three chat slots
+(`max-num-seqs: 3`), `VLLM_V41_SYSTEM_IN_PLACE=1` (patch 0058) and `VLLM_V41_TOPK_SEG=1024` (patch 0059); results in
+[levers.md](levers.md#after-the-checkpoint-adopted-2026-11-11). The two keys and their patches are published here. The
+three slots run on multi-request engine work later than the checkpoint that is not published: the tree and profile on
+this page serve one slot.
 
 **The 2026-11-05 checkpoint.** This build is our checkpoint: we measure it and use it as it stands, and further build and
 test work happens on a separate test machine, not on this host. It is the 2026-11-04 production set plus three
@@ -109,7 +115,8 @@ accepted as it stands.
 placeholders (substitute them, e.g. with `envsubst`, before use):
 
 - `tensor-parallel-size: 4`, `pipeline-parallel-size: 2`; split at layer 20, the only admissible split;
-- `max-model-len: 524288`, `max-num-seqs: 1`, `max-num-batched-tokens: 8192` (4,096 and 16,384 failed the near-tie
+- `max-model-len: 524288`, `max-num-seqs: 1` (our host: 3 since 2026-11-11, see the top of this page),
+  `max-num-batched-tokens: 8192` (4,096 and 16,384 failed the near-tie
   gate);
 - `kv-cache-memory-bytes: 268435456` (0.25 GiB per GPU) gives a KV pool of 2,076,870 tokens (MEASURED, engine log):
   3.96 full-length requests; the target is 2M tokens in total, so spare memory goes to speed, not more KV;
@@ -143,10 +150,12 @@ VLLM_SM70_TP4_PUSH_ALLREDUCE_SMALL_MESSAGES=1                                 ad
 NCCL_P2P_LEVEL=NVL                                                            adopted 2026-11-05 (lever G)
 VLLM_V41_PREFILL_IQ_GEMM=1 VLLM_V41_PREFILL_IQ_TILES=5,4,4,4,4,4
 VLLM_V41_PREFILL_IQ_GRID=0                                                    adopted 2026-11-05 (D51)
+VLLM_V41_SYSTEM_IN_PLACE=1                                                    adopted 2026-11-11 (patch 0058)
+VLLM_V41_TOPK_SEG=1024                                                        adopted 2026-11-11 (patch 0059)
 HOT_REFILL on by default
 ```
 
-30 keys. The first 17 are the production boot's recorded set of 2026-11-03. `INDEX_TILED` and `INDEX_FUSE` joined on
+32 keys: the checkpoint's 30 and the two of 2026-11-11. The first 17 are the production boot's recorded set of 2026-11-03. `INDEX_TILED` and `INDEX_FUSE` joined on
 2026-11-04 (long context only; short context unchanged), then `DRAFT_MP_SHARD` and Model Runner V2. MEASURED on the
 17-key set after the PCIe-switch move: T=0 119.0 tok/s, T=1 120.8 tok/s, decode-only 25.30 / 25.20 ms per round. On the
 22-key set with Model Runner V2, which is the production set (test D54A ON arms, 2026-11-04): T=0 134.2 / 135.0 tok/s,

@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-11-11: three chat slots, system notes in place, top-k segments of 1,024
+
+Four items were tested on the production host (2026-11-10 22:54Z to 2026-11-11 01:23Z, clock ceiling 1,477 MHz), each
+against a rule written before its data. Three were adopted at 01:28Z; detail and tables in
+[docs/levers.md](docs/levers.md#after-the-checkpoint-adopted-2026-11-11).
+
+- **Three chat slots** (`max-num-seqs: 3`). MEASURED, three chats of 60K, 100K and 150K tokens taking turns: cache hits
+  on return 0 of 6 → 6 of 6, first token 20.6-49.2 s → 0.57-0.88 s; a lone request is not slower (132.1 → 132.0 tok/s);
+  near-tie gate PASS, every row identical. Requests still run one at a time. The slots run on multi-request engine work
+  later than the checkpoint, which is not published here: the published tree serves one slot.
+- **System notes keep their place** (`VLLM_V41_SYSTEM_IN_PLACE=1`, new
+  `engine/production/0058-system-notes-in-place.patch`). A system message added in the middle of a chat on the Messages
+  endpoint no longer moves to the front of the prompt and throws the cache away: cached tokens 0 → 31,248 of 31,300,
+  first token of the next turn 11.2 s → 0.51 s, the note obeyed 10 of 10 either way.
+- **Top-k segments of 1,024** (`VLLM_V41_TOPK_SEG=1024`, new `engine/production/0059-topk-segment-width.patch`). Decode
+  round −0.17 ms at 8K, −0.31 at 32K, −0.33 at 64K, −0.40 at 128K against the baseline before the windows; outputs
+  byte-identical. The first window missed our depth rule by 0.01 ms and a repeat window, fixed in writing first, passed
+  by 0.01 ms; both are published.
+- **Not adopted:** the router with 8 warps instead of 4. Average −0.027 ms per round (95 % −0.125..+0.071): neutral.
+- `rec.env` has 32 keys (the checkpoint's 30 and these two). The speed tables on the front page are still the
+  checkpoint's of 2026-11-05; they were not re-measured.
+- 0058 and 0059 were measured on our production tree and cut here against the published tree, where they apply and
+  compile (trees `1ee8ad2755b4`, `e082b9540245`); they were not run on the published tree.
+- `evidence/queue-log.txt` is unchanged: these windows were not queue items.
+
 ## 2026-11-10: install guide fixes (issue #1)
 
 - **The drafter folder must be generated.** `docs/production.md` listed `dspark-v41/` as three downloaded shards. It

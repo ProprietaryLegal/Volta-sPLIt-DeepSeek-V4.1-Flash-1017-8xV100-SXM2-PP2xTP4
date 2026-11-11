@@ -1,6 +1,8 @@
 # Roadmap and test queue
 
-Status on 2026-11-05. The production server runs the **2026-11-05 checkpoint** (30 keys, one request at a time;
+Status on 2026-11-11. Since 2026-11-11 the production server keeps three chats' caches (three slots) and carries two
+more keys; see [Done (2026-11-10/11)](#done-2026-11-1011). The rest of this page is the status of 2026-11-05, when the
+production server ran the **2026-11-05 checkpoint** (30 keys, one request at a time;
 [production.md](production.md)). We measure and use the checkpoint as it stands. Build and test work for the next
 changes runs on a separate 4x V100-SXM2-32GB test machine (two NVLink pairs) that cannot hold the whole model; a change
 returns to the production host only for its final serving window. Nothing here is a result until its row says so.
@@ -42,6 +44,18 @@ round) and the router floor (D34R, inconclusive, kept as upstream-backed). Then:
 | BENCH | Benchmark of the checkpoint (2026-11-05) | speed and LegalBench done ([measurements.md](measurements.md#checkpoint-benchmark-2026-11-05), [quality.md](quality.md)); context sweep and the remaining quality tests in progress |
 Details: [levers.md](levers.md), [measurements.md](measurements.md).
 
+## Done (2026-11-10/11)
+
+Tested on the production host, each against a rule written before its data
+([levers.md](levers.md#after-the-checkpoint-adopted-2026-11-11)).
+
+| item | result |
+|---|---|
+| Three chat slots (`max-num-seqs: 3`) | **ADOPTED** 2026-11-11: cache hits when three long chats take turns 0 of 6 → 6 of 6, first token 20.6-49.2 s → 0.57-0.88 s; lone request 132.1 → 132.0 tok/s; near-tie gate PASS. Runs on multi-request engine work that is not published here |
+| System notes keep their place, `SYSTEM_IN_PLACE=1` | **ADOPTED** 2026-11-11: a mid-chat system message keeps the cache (0 → 31,248 of 31,300 tokens cached; next first token 11.2 → 0.51 s); patch 0058 |
+| Top-k segments of 1,024, `TOPK_SEG=1024` | **ADOPTED** 2026-11-11: decode round −0.17 / −0.31 / −0.33 / −0.40 ms at 8K / 32K / 64K / 128K, outputs identical; first window missed the depth rule by 0.01 ms, the repeat passed; patch 0059 |
+| Router with 8 warps, `ROUTE_WARPS=8` | not adopted: −0.027 ms per round (95 % −0.125..+0.071), neutral |
+
 ## Next (on the test machine first)
 
 None of these is a result. Each returns to the production host only for its final serving window.
@@ -50,7 +64,7 @@ None of these is a result. Each returns to the production host only for its fina
 |---|---|---|
 | Lever A, mode 3 | the fused prefill attention with production's summation order, so its output is bitwise production's | built; bitwise-identical to production's attention on every synthetic case tried (40 shapes across both stages, 17 to 8,192 tokens, context 0 to 300K, and all 256 final-chunk shapes), sanitizers clean; ESTIMATED from mode 2's window: first token −11 to −14 % at 32K and −10 to −13 % at 128K. Needs a serving window on real weights |
 | Prefill expert GEMM follow-ups | measuring the D51 kernel on the real production shapes (ordinary 8,188-token chunks and the tail), mixed tile sizes, padding | in progress |
-| Concurrency | conc2/conc3 on Model Runner V2 with the budget correction; the aim is more combined tok/s for 2-3 long-context requests | in progress |
+| Concurrency | conc2/conc3 on Model Runner V2 with the budget correction; the aim is more combined tok/s for 2-3 long-context requests | three chat slots are in production since 2026-11-11 (caches kept, one request running at a time); a combined-throughput gain is not established |
 | MRV2 at 32K | the decode round at the 32K prompt is slower than on V1 (D55); cause open (INCONCLUSIVE) | open |
 | Decode kernels that failed the near-tie gate | `ATTN_HMMA` (D47R2), `SHARED_DOWN` (D49R): find the element-level difference and whether a bitwise form keeps the speed | open |
 
