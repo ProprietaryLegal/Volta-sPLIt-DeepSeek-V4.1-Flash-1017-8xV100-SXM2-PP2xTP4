@@ -144,7 +144,7 @@ indicative. Host-to-device bandwidth has not been re-measured since the move.
 
 | prompt length | first token | prompt reading | decode tok/s | round p50 | accepted per round | runs |
 |---|---:|---:|---:|---:|---:|---:|
-| 124 tokens | 0.4 s | – | 84.6-84.7 | 25.97-26.02 ms | 1.21 | 3 |
+| 124 tokens | 0.4 s |  | 84.6-84.7 | 25.97-26.02 ms | 1.21 | 3 |
 | 32,000 | 22.3-22.5 s | ~1,430 tok/s | 86.8-87.3 | 27.56-27.66 ms | 1.42 | 2 |
 | 150,000 | 111.1-111.7 s | ~1,350 tok/s | 79.8-80.3 | 32.23-32.29 ms | 1.58 | 2 |
 | 256,000 | 215.5 s | ~1,190 tok/s | 65.5 | 35.17 ms | 1.31 | 1 |
@@ -158,7 +158,7 @@ MEASURED 2026-11-03 after the PCIe-switch move, all 17 switches (prefill skip an
 |---|---:|---:|---:|
 | 2,061 / 2,062 tokens | 2.408 / 2.395 s | 25.73 / 25.92 | 2.402 / 2.421 s |
 | 32,718 / 32,716 | 20.11 / 20.375 s | 26.96 / 26.96 | 20.681 / 20.71 / 20.648 s |
-| 65,589 / 65,595 | 37.739 / 37.583 s | 27.50 / 27.56 | – |
+| 65,589 / 65,595 | 37.739 / 37.583 s | 27.50 / 27.56 |  |
 | 150,038 / 150,045 | 86.934 / 87.001 s | 30.02 / 29.58 | 88.775 / 88.321 / 88.438 s |
 | 299,227 | 177.977 s | 34.45 | 182.034 / 181.258 / 181.472 s |
 
@@ -172,7 +172,7 @@ move, ESTIMATED arithmetic: 32K 20.24 vs 20.68 s (−2.1 %), 150K 86.97 vs 88.51
 |---|---:|---:|---:|---:|---:|---|
 | 150,000 tokens | 29.98 | **27.88** | **−7.0 %** | −2.10 / −1.73 | +0.08 | identical, 139 rounds every arm |
 | 300,000 tokens | 34.33 | **29.62** | **−13.7 %** | −4.71 / −4.57 | +0.10 | identical, 89 rounds every arm |
-| short (A/B harness T=0 and T=1) | – | – | +0.032 ms average | +0.067, +0.069, −0.006, −0.001 | – | texts identical; not detectable |
+| short (A/B harness T=0 and T=1) |  |  | +0.032 ms average | +0.067, +0.069, −0.006, −0.001 |  | texts identical; not detectable |
 
 The "ms per round" column of the table above was measured before it.
 
@@ -277,3 +277,212 @@ is measured yet.
   per round, limited by cold-expert misses. Our own 4-card run of #1277 without levers (2026-11-02): 27.8 ms warm, 30.8
   ms and 97.1 tok/s on warm real text, 116.7 ms and 25.0 tok/s on fresh text over our slower host link.
 - 1Cat #344: DeepSeek V4 Flash with native MXFP4 and FP8 kernels, PP2 x TP4, no drafting: 73.6-75.6 tok/s.
+
+## Moved from the README (2026-11-19)
+
+These sections stood on the front page until the README was rewritten on 2026-11-19. They are kept here as they were,
+with three changes: empty table cells no longer hold a dash, links point from this folder, and the rows and sentences
+that compared this build with our previous build were taken out (the previous build is described on its own in
+[previous-build/](../previous-build/)). Figures and labels are unchanged.
+
+#### The progression, in tok/s
+
+| build (8x V100-SXM2-32GB, same host) | date | decode, thinking off | thinking on | label |
+|---|---|---:|---:|---|
+| **Volta sPLIt**: PP2 x TP4 port of 1Cat #1277, no speed levers | 2026-11-03 | 99.2 | 88.0 | MEASURED |
+| + six token-path and draft levers | 2026-11-03 | ~105.8 | ~108.4 | MEASURED (ABBA) |
+| + fused quantize plan, keep-batch, fast expert kernels, attention fusions, instruction diet | 2026-11-03 | ~118 | ~121 | MEASURED / ESTIMATED |
+| + prefill skip, larger GPU hot ring, PCIe-switch move (17 switches) | 2026-11-03 | 119.0 | 120.8 | MEASURED, one boot |
+| + tiled and fused index scorers, drafter projection sharding (V1 runner) | 2026-11-04 | 120.2-120.5 | 121.8-122.0 | MEASURED, 2 arms |
+| + Model Runner V2 | 2026-11-04 | 134.2-135.0 | 136.4-136.6 | MEASURED, 2 arms |
+| **+ all-reduce push, NCCL host hand-off, SM70 prefill expert GEMM: the 2026-11-05 checkpoint (30 keys)** | 2026-11-05 | **~135.2** | **~137.6** | ESTIMATED: the row above with the all-reduce push's −0.180 ms per round; the other two change prompt reading only |
+
+<sub>This table uses one fixed set throughout (A/B harness: 3 x 1,024 greedy tokens; a seeded T=1 thinking-on set of 12
+prompts) so the rows compare. The by-kind tables use other prompts.</sub>
+
+**First token, same prompts across serving sets** (A/B harness depth prompts and the head-to-head kit's 128K prompt, cold,
+MEASURED):
+
+| prompt | 2026-11-03 port | + prefill skip | + fused index scorer, MRV2 | **2026-11-05 checkpoint** |
+|---|---:|---:|---:|---:|
+| 32K | 22.6 s | 20.1 s | 19.4 s | **16.4 s** |
+| 128K |  |  | 69.0-71.5 s (before the NCCL hand-off) | **58.3 s** |
+| 150K | 111.1 s | 87.0 s | 81.3-82.8 s |  |
+| 300K | 263.9 s | 178.0 s | 158.4-159.0 s |  |
+
+<sub>32K and 128K on the checkpoint: head-to-head kit, 32,744 and 130,448 tokens, 2 runs, median. The other cells are the
+A/B harness depth runs of their dates (32,718 / 150,038 / 299,227 tokens). The context sweep above gives the checkpoint
+at 256K.</sub>
+
+#### Time per round: the engineering metric behind the tok/s
+
+| stage | T=0 ms/round | T=1 ms/round | label |
+|---|---:|---:|---|
+| PP2 x TP4 port, no levers (2026-11-03) | 31.1 | 31.7 | MEASURED |
+| all 17 switches, after the PCIe-switch move (2026-11-03) | 26.3 | 26.9 | MEASURED; decode-only 25.30 / 25.20 |
+| + index scorers, drafter sharding, V1 runner (2026-11-04) | 26.0 | 26.6-26.7 | MEASURED, 2 arms; decode-only 24.98 / 24.92-24.98 |
+| + Model Runner V2 (2026-11-04) | 23.2-23.4 | 23.8 | MEASURED, 2 arms; decode-only 22.22-22.26 / 22.17-22.19 |
+| **+ all-reduce push: checkpoint (2026-11-05)** | **~23.1** | **~23.6** | ESTIMATED: −0.180 ms (ABBAABBA, 95 % −0.278..−0.081); decode-only ~22.05 |
+
+A round is one target verification step: the target checks the drafted tokens and emits one token plus every accepted
+draft. Per-request throughput is (1 + accepted drafts per round) / round time. Every change on this page was decided on
+round time, measured decode-only in paired ABBA arms ([method](method.md)).
+
+### What this is
+
+**A 249 GB model on GPUs from 2018, every expert resident.** DeepSeek-V4.1-Flash-1017 is a 551.9B-parameter mixture of
+experts with DeepSeek's Engram n-gram memory. Its weights here are 248.8 GB (138.24 GB of IQ2_XXS experts and backbone,
+110.60 GB of IQ4_NL Engram tables). The experts and backbone live in the 256 GiB of HBM2 on eight V100-SXM2-32GB cards:
+sm_70 silicon with no FP8 or BF16 tensor cores and no `cp.async`. No expert is paged from host memory during decode. The
+Engram tables stay in host RAM and each round gathers only the rows it needs: about 0.12 ms per decode round, measured
+over 52 profiled rounds ([docs/levers.md](levers.md#did-not-work), "hot Engram in HBM"). Correction 2026-11-06:
+this paragraph used to say all 248.8 GB lived in HBM2.
+
+**Split across two NVLink boards.** 1CatAI's [1Cat-vLLM](https://github.com/1CatAI/1Cat-vLLM) DeepSeek-V4.1 package
+([#1277](https://github.com/1CatAI/1Cat-vLLM/pull/1277)) runs this model on one 4-GPU board with experts offloaded. We
+ported it to pipeline parallel 2 x tensor parallel 4: layers 0-19 and the Engram lookup on one NVLink quad; layers 20-39,
+the head and the DSpark drafter on the other; PCIe between them. Then we made it fast, one switch at a time, each
+admitted only by a paired A/B on this machine.
+
+**From 99 to about 135 tok/s in three days, and prompts read twice as fast.** Decode went from 31.1 to about 23.1 ms per
+round (2026-11-03 to 11-05) through our own CUDA and host-path work and the move to Model Runner V2, every change
+bitwise-identical or through the near-tie gate. Prompt reading went from about 1,350 tok/s at 150K (2026-11-03) to
+about 2,200 tok/s at 128K today: the prefill skip, the fused prefill index scorer, the NCCL host hand-off between the
+two boards and our SM70 prefill expert GEMM. About thirty more ideas lost their A/B or failed a numerics gate; they are
+listed below with the reason.
+
+**The 2026-11-05 checkpoint.** This is the build we now use day to day. It is frozen: new work is built and tested on a
+separate 4-GPU test machine and comes here only through a paired window. It serves one request at a time.
+
+**Since 2026-11-11** our host runs it with three later changes, each tested here against a rule written before its
+data: three chat slots (three long chats taking turns keep their caches: 6 of 6 hits against 0 of 6, first token
+0.57-0.88 s against 20.6-49.2 s), system notes kept in place on the Messages endpoint, and top-k segments of 1,024
+(decode round −0.17 to −0.40 ms, outputs identical). Detail:
+[docs/levers.md](levers.md#after-the-checkpoint-adopted-2026-11-11). The speed tables on this page are the
+checkpoint's and were not re-measured.
+
+**Exact outputs.** The target verifies every draft with the speculative-sampling acceptance rule, so the text keeps the
+target model's distribution whatever the drafter proposes. The speed changes do not change what the model computes
+(bitwise-identical, or within the near-tie gate). One difference under Model Runner V2: a sampled (T>0) request that
+asks for logprobs uses MRV2's rejection sampler instead of our keyed draw streams. Its text still follows the target
+distribution, but it is not the same sample the V1 runner would have drawn. Requests without logprobs keep the keyed
+streams.
+
+**One request at a time.** The checkpoint took one request at a time. Since 2026-11-11 our host keeps three chats'
+caches (three slots) and still runs one request at a time; more combined throughput is not established. The previous
+build on these cards, described in [previous-build/](../previous-build/), read short and medium prompts at about 2,900 to
+3,300 tok/s by its own method and served three requests at once.
+
+**Everything is published:** the measurements, the 49-patch engine series, our production patches, the serving profile
+and environment, the A/B harness, and the log of the test queue.
+
+
+### What runs
+
+| | |
+|---|---|
+| GPUs | 8x V100-SXM2-32GB on two 4-GPU SXM2 boards, NVLink inside each board; four PLX switches, each on its own CPU root complex at PCIe Gen3 x16, Gen3 x8 per GPU |
+| Host | AMD Threadripper PRO 3945WX (12 cores), one NUMA node, 251 GB RAM |
+| Power and clocks | 150 W per card, graphics clock capped at 1522 MHz |
+| Model | DeepSeek-V4.1-Flash-1017: [ISTA-DASLab GSQ-RCO GGUF](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF) @ `ad1e8991` (IQ2_XXS experts, 138.24 GB; IQ4_NL Engram, 110.60 GB); config, tokenizer and DSpark drafter (FP8, 7.93 GB) from [deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017) @ `1bae0e10` |
+| Engine | 1Cat-vLLM #1277 (merge `899e9ed33`) + 1Cat main `6db9c81` and 25 open 1Cat PRs + our PP2 port and lever stack: the [49-patch series](../forks/1cat-4xv100-tp4/) and our production patches in [engine/production/](../engine/production/); the `v41k`, `v41idx`, `v41pidx` and `v41prefmoe` SM70 CUDA libraries built from that source |
+| Layout | PP2 x TP4. Stage 1 (board B): layers 0-19, Engram lookup and hash state (Engram tables in host RAM). Stage 2 (board C): layers 20-39, the head, the drafter. TP all-reduce over NVLink; the stage hand-off over host shared memory (`NCCL_P2P_LEVEL=NVL`) |
+| Engine settings | vLLM Model Runner V2, synchronous scheduling, FULL CUDA graphs for 1-6 tokens per step, chunked prefill 8,192, prefix caching, every expert resident |
+| Drafter | DSpark, 5 drafts per round, coupled (keyed) sampled drafts at T>0 |
+| Context | 524,288 tokens per request, one request at a time (`max-num-seqs 1`; three chat slots on our host since 2026-11-11), KV pool 2,076,870 tokens (packed KV: a 524,288-position GPU hot ring + host arena) |
+| Thinking | on by default; `chat_template_kwargs: {"thinking": false}` turns it off |
+| Switch set | 32 keys (the checkpoint's 30 and two adopted 2026-11-11): [engine/configs/rec.env](../engine/configs/rec.env) |
+
+Serving profile, environment and the production switch set: [engine/](../engine/) and [docs/production.md](production.md).
+
+### What worked
+
+Each lever is a switch that defaults off; with the switch off the code path is the old one. ms per round, ABBA averages.
+
+| change | where it came from | effect | numerics |
+|---|---|---|---|
+| Indexer top-k reduce on the device (`INDEX_REDUCE`) | ours | −0.85 ms; also makes T=1 output identical across restarts | exact |
+| Double-buffered Volta dense mat-vec (`DMV_X`) | ours, on #1277's `dmv13` | −0.42 ms (6/6 pairs) | bitwise |
+| Coupled sampled drafts (`COUPLED_DRAFTS`) | [TensorFold #25](https://github.com/Elevatormusic/TensorFold/pull/25) (merged); our port | T=1 acceptance 1.85 → 2.25 per round, +14 % tok/s | exact (keyed draws) |
+| Draft-head and sampler sharding (`MARKOV_SHARD`, `COUPLED_SHARD`, `COUPLED_LOCAL`) | ours | −0.2 ms (T=0); −0.23 and −0.12..−0.24 ms (T=1) | exact |
+| Expert plan fused into the q8 quantize launch (`PLAN_FUSE`) | ours | −0.36 (T=0), −0.27 (T=1) | bitwise |
+| Keep the request in the batch across empty pipeline steps (`PP_KEEP_BATCH`) | our V1-runner port of 1Cat [#1263](https://github.com/1CatAI/1Cat-vLLM/pull/1263) | 128K −24.8 % (84 → 111 tok/s), 64K −17.4 %, 32K −9.7 % | texts identical |
+| Fast routed-expert kernels, down and gate/up (`EXPERT_FAST`) | ours | down −0.68..−0.84; gate/up a further −0.53..−0.82 (T=0) | bitwise, sanitizers clean |
+| Fused attention prologue and epilogue (`FUSE_ATTN_PREP`, `_POST`) | ours | −0.19 ms | bitwise |
+| Hot-ring refill after a prefix-cache hit (`HOT_REFILL`) | our port of 1Cat issue [#1341](https://github.com/1CatAI/1Cat-vLLM/issues/1341) | correctness fix |  |
+| Expert-kernel instruction diet (`EXPERT_DIET=3`) | ours | **−0.871 ms** | near-tie gate; sanitizers 0 errors |
+| Router floor (`ROUTE_FAST`, 4 warps) | ours | −0.165 ms, inside the session's drift | greedy bitwise |
+| **Prefill skip (`PREFILL_SKIP_ROWS=3072`)** | ours; design reference: [philbert440/deepseek-v4.1-v100](https://github.com/philbert440/deepseek-v4.1-v100)'s replay rows | **first token −8.8 % at 32K, −20.6 % at 150K, −31.5 % at 300K** | identical output at every length |
+| **Tiled decode index scorer (`INDEX_TILED`, `v41idx`)** | ours | **decode round −7.0 % at 150K, −13.7 % at 300K**; short context not detectable | bitwise |
+| Larger GPU hot ring (`KV_HOT_POSITIONS=524288`) | our setting of #1277's packed KV | 300K −1.09 ms per round, 150K −0.25 | identical output |
+| **Fused prefill index scorer (`INDEX_FUSE=ilp4`, `v41pidx`)** | ours; ideas from 1Cat [#1280](https://github.com/1CatAI/1Cat-vLLM/pull/1280), [#1282](https://github.com/1CatAI/1Cat-vLLM/pull/1282) and philbert440's fused SM70 indexer | **first token −4.9 % at 150K, −9.5 % at 300K** | near-tie gate PASS; output identical |
+| Drafter projection sharding (`DRAFT_MP_SHARD`) | ours | −0.130 ms per round, 8 of 8 pairs faster | bitwise |
+| **Model Runner V2 (`VLLM_USE_V2_MODEL_RUNNER=1`)** | vLLM's newer runner as carried by 1Cat, with 1Cat [#1221](https://github.com/1CatAI/1Cat-vLLM/pull/1221)'s DSpark path; our DeepSeek-V4.1 port | **−2.759 ms per round** (120.5 → 134.2 tok/s at T=0) | bitwise |
+| All-reduce push for V4.1's message size (`SM70_MOE_ADD_ALLREDUCE`, `SUM2_PUSH_ANY`, `SM70_TP4_PUSH_ALLREDUCE_SMALL_MESSAGES`; test D44R5) | ours, on 1Cat's SM70 custom all-reduce | −0.180 ms per round (ABBAABBA, 95 % −0.278..−0.081) | T=1 texts identical |
+| **NCCL host hand-off between the boards (`NCCL_P2P_LEVEL=NVL`, 2026-11-05)** | NCCL setting; found by our stage-split profile | **first token −13.4 % at 32K, −14.2 % at 128K**; decode unchanged | bitwise |
+| **SM70 prefill expert GEMM (`PREFILL_IQ_GEMM`, tiles `5,4,4,4,4,4`, `v41prefmoe`; test D51, 2026-11-05)** | ours | **first token −4.1 % at 32K, −4.3 % at 150K, −2.4 % at 300K** (before the NCCL change) | near-tie gate PASS; identity hashes unchanged |
+| **Three chat slots (`max-num-seqs 3`, 2026-11-11)** | ours, on our multi-request engine work (not published yet) | **cache hits when three long chats take turns: 0 of 6 → 6 of 6; first token 20.6-49.2 s → 0.57-0.88 s**; lone request unchanged | near-tie gate PASS, every row identical |
+| System notes keep their place (`SYSTEM_IN_PLACE=1`, 2026-11-11) | ours | a system message added mid-chat keeps the cache: 0 → 31,248 of 31,300 tokens cached, next first token 11.2 → 0.51 s | replies without such a note identical |
+| Top-k segments of 1,024 (`TOPK_SEG=1024`, 2026-11-11) | ours | decode round −0.17 ms at 8K, −0.31 at 32K, −0.33 at 64K, −0.40 at 128K | byte-identical output |
+
+Two lessons: two of the winners were predicted near zero by isolated kernel benchmarks, so only the full A/B decides;
+and the biggest prompt-reading gain of 2026-11-05 was a one-line transport setting found by profiling where time went
+between the stages, not a kernel. Detail: [docs/levers.md](levers.md#adopted).
+
+### What did not work
+
+| change | result | why |
+|---|---|---|
+| Expert top-p pruning (0rand / TensorFold) | 78 tok/s, greedy output changed | the divergence is built into the method |
+| V1 async scheduling with the request-end guard | +1.678 ms per round slower | rejected; Model Runner V2 replaced it |
+| Router with 8 warps instead of 4 (2026-11-11) | −0.027 ms per round (95 % −0.125..+0.071), texts identical | neutral on this host |
+| TP8 across both boards | no-go at the probe | the 8-way all-reduce across the boards took 30.8 µs against 5.28 µs inside a board |
+| Prefill chunks of 4,096 or 16,384 | near-tie gate FAIL / slower | chunk size changes long-prompt numerics |
+| **Fused prefill attention, exact-softmax mode (lever A mode 2, 2026-11-05)** | first token 32K 16.70 → 14.80 s, 128K 60.47 → 54.19 s; **near-tie gate FAIL**: 1 of 8 identical, KL mean 0.0109 | 99.4 % of attention elements bit-equal, but the rest moved confident tokens; a bitwise version is in testing (below) |
+| Split-K tensor-core decode attention (`ATTN_HMMA=2`) | −0.143 ms, not detectable; near-tie gate FAIL | rejected on quality |
+| FP16-packed shared-expert down kernel (`SHARED_DOWN`) | near-tie gate FAIL (KL max 0.17) | rejected on quality |
+| Expert "wave" down kernel | +0.216 ms per round slower |  |
+| Fused layer transition (three variants) | slower or neutral | the mixing step dominates |
+| Probabilistic sharded drafts, draft temperatures | no variant faster beyond noise | the extra drafter work eats the acceptance gain |
+| Bitwise FP8 drafter mat-vec | slower than the sharding alone | off |
+| Asynchronous scheduling on Model Runner V2 | −0.085..−0.117 ms against synchronous MRV2 | about 0.4 %; off for now |
+| CPU pinning, spin-wait broadcast, 200 W, deeper prefetch, L2 warm-up, Engram GPU cache, IQ1_M repack | neutral, slower or no-go | details in [docs/levers.md](levers.md#did-not-work) |
+
+Full table with numbers: [docs/levers.md](levers.md#did-not-work).
+
+### Next
+
+Built and tested on the separate 4-GPU test machine; each comes to the checkpoint only through a paired window here.
+
+| item | status | label |
+|---|---|---|
+| **Fused prefill attention, bitwise mode 3** | bit-identical to production's attention on all 40 test cases and all 256 tail shapes; 42.7 → 20-22 ms per packed layer; sanitizers clean | MEASURED on the test machine (synthetic tensors); real-weight window pending; forecast first token −11 to −14 % at 32K (ESTIMATED) |
+| Faster prefill expert tiles (mixed M64/M32) | 3,396 real-shape cases bit-identical to production; best variant −10 % expert-kernel time, being separated from plain retuning | MEASURED on the test machine (kernel only); PENDING |
+| Decode kernels for two to four requests at once, each request's output identical to running it alone | started 2026-11-05 on the test machine | forecast 2-3x aggregate decode at four requests (ESTIMATED) |
+| Single-request decode: fewer, fused small kernels; one launch per layer for the experts | started 2026-11-05 on the test machine | forecast +3 to +8 % decode (ESTIMATED) |
+| Memory for four requests: row-block Engram gather (1Cat issue [#1342](https://github.com/1CatAI/1Cat-vLLM/issues/1342)), prefill scratch reuse | started 2026-11-05 on the test machine | PENDING |
+| Three chat slots on Model Runner V2 | **in production since 2026-11-11**: three long chats taking turns hit the cache 6 of 6 times (0 of 6 with one slot); one request runs at a time; the multi-request engine work it runs on is not published yet | MEASURED |
+| The 32K decode case under MRV2 (about 1.4 ms per round slower than V1 at that one length) | cause unknown | INCONCLUSIVE |
+
+Queue order and status: [docs/roadmap.md](roadmap.md).
+
+### Our upstream contributions
+
+Work we sent upstream, with authorship checked on GitHub. Third-party credits are at the end.
+
+| PR | author | state | what it does | what it means for this build |
+|---|---|---|---|---|
+| [1Cat-vLLM #651](https://github.com/1CatAI/1Cat-vLLM/pull/651) | ProprietaryLegal | **merged** 2026-09-26 | SM70: accept the DFlash embedding replica across split `load_weights` calls | an SM70 drafter-loading fix in the engine this build runs on |
+| [1Cat-vLLM #1031](https://github.com/1CatAI/1Cat-vLLM/pull/1031) | PLI Labs (founder) | open (2026-10-07) | DeepSeek-V4.1-Flash on V100: PP3 x TP4 (12 GPUs, 256K) and PP2 x TP4 (8 GPUs) | the multi-board pipeline layout this build's PP2 x TP4 port follows |
+| [1Cat-vLLM #1030](https://github.com/1CatAI/1Cat-vLLM/pull/1030) | PLI Labs (founder) | open (2026-10-07) | SM70: generalise the MXFP4 MoE geometry; skinny split-K 4/6/9/12/18 | native-FP4 expert route; not served here (this build serves GGUF) |
+| [1Cat-vLLM #1021](https://github.com/1CatAI/1Cat-vLLM/pull/1021) | PLI Labs (founder) | open (2026-10-07) | SM70: keep 32x32 UE8M0 block-FP8 dense weights in FP8 on Volta | native-FP8 dense route; not served here |
+
+Details and two earlier closed PRs: [docs/upstream-contributions.md](upstream-contributions.md).
+
+### Hardware
+
+Eight V100-SXM2-32GB on two NVLink quad boards; Threadripper PRO 3945WX; 251 GB RAM, one NUMA node. Each of the four PCIe
+switches has its own CPU root complex at Gen3 x16, and each GPU links to its switch at Gen3 x8. Volta has FP16
+`mma.sync.m8n8k4` only: no `cp.async`, no `ldmatrix`, no FP8 tensor-core math, and a read ceiling of about 879 GB/s
+(measured by [v100-skinny](https://github.com/dnv2003/v100-skinny)). Our fast expert kernels reach about 290-415 GB/s:
+they are limited by instruction issue and latency, which is why the instruction diet won.
